@@ -46,3 +46,4 @@ VITE_SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhY
 VITE_SUPABASE_URL = "https://lrrgtrhnkziwmpufnset.supabase.co"
 SUPABASE_URL = "https://lrrgtrhnkziwmpufnset.supabase.co"
 SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imxycmd0cmhua3ppd21wdWZuc2V0Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjcwODYzMjcsImV4cCI6MjA4MjY2MjMyN30.R6bf2h8y0Pi7MjD79OOdM5byGG1lLKK9n7epp0nB0_w"
+SUPABASE_DATABASE_URL = "postgresql://postgres:Tassos%402024@db.lrrgtrhnkziwmpufnset.supabase.co:5432/postgres"
