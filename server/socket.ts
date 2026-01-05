@@ -1,20 +1,24 @@
 import { Server as HttpServer } from "http";
 import { Server } from "socket.io";
-import pg from "pg";
+import { createClient } from "@supabase/supabase-js";
 import { getUserFromAccessToken } from "./supabase";
 
-const { Pool } = pg;
+const SUPABASE_URL =
+  process.env.SUPABASE_URL ||
+  process.env.VITE_SUPABASE_URL ||
+  "https://lrrgtrhnkziwmpufnset.supabase.co";
 
-// Use Supabase database connection for chat
-const supabaseDbUrl = process.env.SUPABASE_DATABASE_URL || process.env.DATABASE_URL;
+const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
 
-if (!supabaseDbUrl) {
-  throw new Error("SUPABASE_DATABASE_URL or DATABASE_URL must be set for chat functionality");
+if (!SUPABASE_SERVICE_ROLE_KEY) {
+  throw new Error("SUPABASE_SERVICE_ROLE_KEY is required for chat functionality");
 }
 
-const chatPool = new Pool({ 
-  connectionString: supabaseDbUrl,
-  ssl: { rejectUnauthorized: false }
+const supabaseAdmin = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, {
+  auth: {
+    autoRefreshToken: false,
+    persistSession: false,
+  },
 });
 
 type AuthedSocket = Parameters<NonNullable<Parameters<Server["use"]>[0]>>[0] & {
@@ -53,11 +57,15 @@ function setUserOffline(userId: string, socketId: string) {
 }
 
 async function assertMember(roomId: string, userId: string) {
-  const { rowCount } = await chatPool.query(
-    "select 1 from public.chat_members where room_id = $1 and user_id = $2 limit 1",
-    [roomId, userId]
-  );
-  if (!rowCount) {
+  const { data, error } = await supabaseAdmin
+    .from("chat_members")
+    .select("room_id")
+    .eq("room_id", roomId)
+    .eq("user_id", userId)
+    .limit(1)
+    .single();
+
+  if (error || !data) {
     const err = new Error("Not a member of this room");
     (err as any).status = 403;
     throw err;
@@ -65,33 +73,66 @@ async function assertMember(roomId: string, userId: string) {
 }
 
 async function ensureDirectRoom(userA: string, userB: string) {
-  const { rows: existingRows } = await chatPool.query(
-    `
-    select r.id
-    from public.chat_rooms r
-    join public.chat_members m on m.room_id = r.id
-    where r.type = 'private'
-    group by r.id
-    having count(distinct m.user_id) = 2
-       and sum(case when m.user_id = $1 then 1 else 0 end) = 1
-       and sum(case when m.user_id = $2 then 1 else 0 end) = 1
-    limit 1
-    `,
-    [userA, userB]
-  );
+  // First, try to find an existing private room between these two users
+  const { data: userARooms } = await supabaseAdmin
+    .from("chat_members")
+    .select("room_id")
+    .eq("user_id", userA);
 
-  if (existingRows.length) return existingRows[0].id as string;
+  const { data: userBRooms } = await supabaseAdmin
+    .from("chat_members")
+    .select("room_id")
+    .eq("user_id", userB);
 
-  const created = await chatPool.query(
-    "insert into public.chat_rooms (type, created_by) values ('private', $1) returning id",
-    [userA]
-  );
-  const roomId = created.rows[0].id as string;
+  if (userARooms && userBRooms) {
+    const userARoomIds = new Set(userARooms.map((r) => r.room_id));
+    const commonRoomIds = userBRooms
+      .filter((r) => userARoomIds.has(r.room_id))
+      .map((r) => r.room_id);
 
-  await chatPool.query(
-    "insert into public.chat_members (room_id, user_id) values ($1, $2), ($1, $3) on conflict do nothing",
-    [roomId, userA, userB]
-  );
+    for (const roomId of commonRoomIds) {
+      const { data: room } = await supabaseAdmin
+        .from("chat_rooms")
+        .select("id, type")
+        .eq("id", roomId)
+        .eq("type", "private")
+        .single();
+
+      if (room) {
+        const { count } = await supabaseAdmin
+          .from("chat_members")
+          .select("*", { count: "exact", head: true })
+          .eq("room_id", roomId);
+
+        if (count === 2) {
+          return room.id as string;
+        }
+      }
+    }
+  }
+
+  // No existing room found, create a new one
+  const { data: newRoom, error: roomError } = await supabaseAdmin
+    .from("chat_rooms")
+    .insert({ type: "private", created_by: userA })
+    .select("id")
+    .single();
+
+  if (roomError || !newRoom) {
+    throw new Error("Failed to create chat room: " + (roomError?.message || "Unknown error"));
+  }
+
+  const roomId = newRoom.id as string;
+
+  // Add both users as members
+  const { error: memberError } = await supabaseAdmin.from("chat_members").insert([
+    { room_id: roomId, user_id: userA },
+    { room_id: roomId, user_id: userB },
+  ]);
+
+  if (memberError) {
+    console.error("Failed to add members:", memberError);
+  }
 
   return roomId;
 }
@@ -220,12 +261,21 @@ export function setupSocketServer(httpServer: HttpServer) {
 
           await assertMember(roomId, userId);
 
-          const result = await chatPool.query(
-            "insert into public.messages (room_id, sender_id, content, file_url) values ($1, $2, $3, $4) returning id, room_id, sender_id, content, file_url, created_at, seen",
-            [roomId, userId, payload.content || null, payload.fileUrl || null]
-          );
+          const { data: msg, error } = await supabaseAdmin
+            .from("messages")
+            .insert({
+              room_id: roomId,
+              sender_id: userId,
+              content: payload.content || null,
+              file_url: payload.fileUrl || null,
+            })
+            .select("id, room_id, sender_id, content, file_url, created_at, seen")
+            .single();
 
-          const msg = result.rows[0];
+          if (error) {
+            throw new Error("Failed to send message: " + error.message);
+          }
+
           io.to(roomId).emit("messages:new", {
             ...msg,
             clientId: payload.clientId,
@@ -246,15 +296,16 @@ export function setupSocketServer(httpServer: HttpServer) {
 
           await assertMember(roomId, userId);
 
-          await chatPool.query(
-            "insert into public.message_reads (message_id, user_id) values ($1, $2) on conflict (message_id, user_id) do nothing",
-            [messageId, userId]
+          await supabaseAdmin.from("message_reads").upsert(
+            { message_id: messageId, user_id: userId },
+            { onConflict: "message_id,user_id" }
           );
 
-          await chatPool.query(
-            "update public.chat_members set last_seen_at = now() where room_id = $1 and user_id = $2",
-            [roomId, userId]
-          );
+          await supabaseAdmin
+            .from("chat_members")
+            .update({ last_seen_at: new Date().toISOString() })
+            .eq("room_id", roomId)
+            .eq("user_id", userId);
 
           io.to(roomId).emit("messages:seen", {
             roomId,
