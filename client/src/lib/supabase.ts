@@ -4,7 +4,7 @@ import { createClient } from "@supabase/supabase-js";
 // Get it from: https://app.supabase.co/project/zpecwgqgsjwjrfrfrzzq/settings/api
 // Under "anon public" section - copy the FULL key
 
-const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL || "https://zpecwgqgsjwjrfrfrzzq.supabase.co";
+const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL || "https://lrrgtrhnkziwmpufnset.supabase.co";
 const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY;
 
 if (!SUPABASE_ANON_KEY) {
