@@ -1,7 +1,6 @@
 import { Server as HttpServer } from "http";
 import { Server } from "socket.io";
-import { pool } from "./db";
-import { getUserFromAccessToken } from "./supabase";
+import { supabase, getUserFromAccessToken } from "./supabase";
 
 type AuthedSocket = Parameters<NonNullable<Parameters<Server["use"]>[0]>>[0] & {
   data: {
@@ -39,11 +38,15 @@ function setUserOffline(userId: string, socketId: string) {
 }
 
 async function assertMember(roomId: string, userId: string) {
-  const { rowCount } = await pool.query(
-    "select 1 from public.chat_members where room_id = $1 and user_id = $2 limit 1",
-    [roomId, userId]
-  );
-  if (!rowCount) {
+  const { data, error } = await supabase
+    .from("chat_members")
+    .select("room_id")
+    .eq("room_id", roomId)
+    .eq("user_id", userId)
+    .limit(1)
+    .single();
+
+  if (error || !data) {
     const err = new Error("Not a member of this room");
     (err as any).status = 403;
     throw err;
@@ -51,33 +54,67 @@ async function assertMember(roomId: string, userId: string) {
 }
 
 async function ensureDirectRoom(userA: string, userB: string) {
-  const { rows: existingRows } = await pool.query(
-    `
-    select r.id
-    from public.chat_rooms r
-    join public.chat_members m on m.room_id = r.id
-    where r.type = 'private'
-    group by r.id
-    having count(distinct m.user_id) = 2
-       and sum(case when m.user_id = $1 then 1 else 0 end) = 1
-       and sum(case when m.user_id = $2 then 1 else 0 end) = 1
-    limit 1
-    `,
-    [userA, userB]
-  );
+  // First, try to find an existing private room between these two users
+  const { data: userARooms } = await supabase
+    .from("chat_members")
+    .select("room_id")
+    .eq("user_id", userA);
 
-  if (existingRows.length) return existingRows[0].id as string;
+  const { data: userBRooms } = await supabase
+    .from("chat_members")
+    .select("room_id")
+    .eq("user_id", userB);
 
-  const created = await pool.query(
-    "insert into public.chat_rooms (type, created_by) values ('private', $1) returning id",
-    [userA]
-  );
-  const roomId = created.rows[0].id as string;
+  if (userARooms && userBRooms) {
+    const userARoomIds = new Set(userARooms.map((r) => r.room_id));
+    const commonRoomIds = userBRooms
+      .filter((r) => userARoomIds.has(r.room_id))
+      .map((r) => r.room_id);
 
-  await pool.query(
-    "insert into public.chat_members (room_id, user_id) values ($1, $2), ($1, $3) on conflict do nothing",
-    [roomId, userA, userB]
-  );
+    for (const roomId of commonRoomIds) {
+      const { data: room } = await supabase
+        .from("chat_rooms")
+        .select("id, type")
+        .eq("id", roomId)
+        .eq("type", "private")
+        .single();
+
+      if (room) {
+        // Verify it's a 2-person private room
+        const { count } = await supabase
+          .from("chat_members")
+          .select("*", { count: "exact", head: true })
+          .eq("room_id", roomId);
+
+        if (count === 2) {
+          return room.id as string;
+        }
+      }
+    }
+  }
+
+  // No existing room found, create a new one
+  const { data: newRoom, error: roomError } = await supabase
+    .from("chat_rooms")
+    .insert({ type: "private", created_by: userA })
+    .select("id")
+    .single();
+
+  if (roomError || !newRoom) {
+    throw new Error("Failed to create chat room: " + (roomError?.message || "Unknown error"));
+  }
+
+  const roomId = newRoom.id as string;
+
+  // Add both users as members
+  const { error: memberError } = await supabase.from("chat_members").insert([
+    { room_id: roomId, user_id: userA },
+    { room_id: roomId, user_id: userB },
+  ]);
+
+  if (memberError) {
+    console.error("Failed to add members:", memberError);
+  }
 
   return roomId;
 }
@@ -128,11 +165,15 @@ export function setupSocketServer(httpServer: HttpServer) {
     });
 
     socket.on("rooms:join", async (payload: { roomId: string }) => {
-      const roomId = payload?.roomId;
-      if (!roomId) throw new Error("roomId required");
-      await assertMember(roomId, userId);
-      await socket.join(roomId);
-      socket.emit("rooms:joined", { roomId });
+      try {
+        const roomId = payload?.roomId;
+        if (!roomId) throw new Error("roomId required");
+        await assertMember(roomId, userId);
+        await socket.join(roomId);
+        socket.emit("rooms:joined", { roomId });
+      } catch (e: any) {
+        console.error("rooms:join failed", e?.message);
+      }
     });
 
     socket.on(
@@ -150,29 +191,38 @@ export function setupSocketServer(httpServer: HttpServer) {
           await socket.join(roomId);
           ack?.({ roomId });
         } catch (e: any) {
+          console.error("rooms:dm:ensure failed", e?.message);
           ack?.({ error: e?.message || "Failed to ensure DM room" });
         }
       }
     );
 
     socket.on("rooms:leave", async (payload: { roomId: string }) => {
-      const roomId = payload?.roomId;
-      if (!roomId) throw new Error("roomId required");
-      await socket.leave(roomId);
-      socket.emit("rooms:left", { roomId });
+      try {
+        const roomId = payload?.roomId;
+        if (!roomId) throw new Error("roomId required");
+        await socket.leave(roomId);
+        socket.emit("rooms:left", { roomId });
+      } catch (e: any) {
+        console.error("rooms:leave failed", e?.message);
+      }
     });
 
     socket.on(
       "typing",
       async (payload: { roomId: string; isTyping: boolean }) => {
-        const roomId = payload?.roomId;
-        if (!roomId) throw new Error("roomId required");
-        await assertMember(roomId, userId);
-        socket.to(roomId).emit("typing", {
-          roomId,
-          userId,
-          isTyping: !!payload?.isTyping,
-        });
+        try {
+          const roomId = payload?.roomId;
+          if (!roomId) throw new Error("roomId required");
+          await assertMember(roomId, userId);
+          socket.to(roomId).emit("typing", {
+            roomId,
+            userId,
+            isTyping: !!payload?.isTyping,
+          });
+        } catch (e: any) {
+          console.error("typing failed", e?.message);
+        }
       }
     );
 
@@ -184,52 +234,70 @@ export function setupSocketServer(httpServer: HttpServer) {
         fileUrl?: string;
         clientId?: string;
       }) => {
-        const roomId = payload?.roomId;
-        if (!roomId) throw new Error("roomId required");
-        if (!payload?.content && !payload?.fileUrl) {
-          throw new Error("content or fileUrl required");
+        try {
+          const roomId = payload?.roomId;
+          if (!roomId) throw new Error("roomId required");
+          if (!payload?.content && !payload?.fileUrl) {
+            throw new Error("content or fileUrl required");
+          }
+
+          await assertMember(roomId, userId);
+
+          const { data: msg, error } = await supabase
+            .from("messages")
+            .insert({
+              room_id: roomId,
+              sender_id: userId,
+              content: payload.content || null,
+              file_url: payload.fileUrl || null,
+            })
+            .select("id, room_id, sender_id, content, file_url, created_at, seen")
+            .single();
+
+          if (error) {
+            throw new Error("Failed to send message: " + error.message);
+          }
+
+          io.to(roomId).emit("messages:new", {
+            ...msg,
+            clientId: payload.clientId,
+          });
+        } catch (e: any) {
+          console.error("messages:send failed", e?.message);
         }
-
-        await assertMember(roomId, userId);
-
-        const result = await pool.query(
-          "insert into public.messages (room_id, sender_id, content, file_url) values ($1, $2, $3, $4) returning id, room_id, sender_id, content, file_url, created_at, seen",
-          [roomId, userId, payload.content || null, payload.fileUrl || null]
-        );
-
-        const msg = result.rows[0];
-        io.to(roomId).emit("messages:new", {
-          ...msg,
-          clientId: payload.clientId,
-        });
       }
     );
 
     socket.on(
       "messages:seen",
       async (payload: { roomId: string; messageId: string }) => {
-        const roomId = payload?.roomId;
-        const messageId = payload?.messageId;
-        if (!roomId || !messageId) throw new Error("roomId and messageId required");
+        try {
+          const roomId = payload?.roomId;
+          const messageId = payload?.messageId;
+          if (!roomId || !messageId) throw new Error("roomId and messageId required");
 
-        await assertMember(roomId, userId);
+          await assertMember(roomId, userId);
 
-        await pool.query(
-          "insert into public.message_reads (message_id, user_id) values ($1, $2) on conflict (message_id, user_id) do nothing",
-          [messageId, userId]
-        );
+          await supabase.from("message_reads").upsert(
+            { message_id: messageId, user_id: userId },
+            { onConflict: "message_id,user_id" }
+          );
 
-        await pool.query(
-          "update public.chat_members set last_seen_at = now() where room_id = $1 and user_id = $2",
-          [roomId, userId]
-        );
+          await supabase
+            .from("chat_members")
+            .update({ last_seen_at: new Date().toISOString() })
+            .eq("room_id", roomId)
+            .eq("user_id", userId);
 
-        io.to(roomId).emit("messages:seen", {
-          roomId,
-          messageId,
-          userId,
-          readAt: new Date().toISOString(),
-        });
+          io.to(roomId).emit("messages:seen", {
+            roomId,
+            messageId,
+            userId,
+            readAt: new Date().toISOString(),
+          });
+        } catch (e: any) {
+          console.error("messages:seen failed", e?.message);
+        }
       }
     );
 
