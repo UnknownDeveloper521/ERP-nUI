@@ -4,6 +4,7 @@ hidden = [".config", ".git", "generated-icon.png", "node_modules", "dist"]
 
 [nix]
 channel = "stable-24_05"
+packages = ["unzip"]
 
 [[ports]]
 localPort = 5000
@@ -37,3 +38,9 @@ author = "agent"
 task = "shell.exec"
 args = "npm run dev"
 waitForPort = 5000
+
+[userenv]
+
+[userenv.shared]
+VITE_SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InpwZWN3Z3Fnc2p3anJmcmZyenpxIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjQ1NzI4MjgsImV4cCI6MjA4MDE0ODgyOH0.78C6wFG2rWwifSimKXZemzyf76iiol1ZrgVURDBn-Q"
+VITE_SUPABASE_URL = "https://zpecwgqgsjwjrfrfrzzq.supabase.co"
