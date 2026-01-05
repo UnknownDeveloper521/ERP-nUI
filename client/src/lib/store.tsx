@@ -239,13 +239,22 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const login = async (email: string, password: string): Promise<boolean> => {
     const { data, error } = await signInWithEmail(email, password);
-    if (error) return false;
+    if (error) {
+      console.error("Supabase login error:", error.message, error);
+      return false;
+    }
 
     const supaUser = data.user;
-    if (!supaUser?.email) return false;
+    if (!supaUser?.email) {
+      console.error("Supabase login: no user email returned");
+      return false;
+    }
 
     const localUser = upsertLocalUserFromEmail(supaUser.email, supaUser.id);
-    if (localUser.status === "Inactive") return false;
+    if (localUser.status === "Inactive") {
+      console.error("Local user is inactive");
+      return false;
+    }
     setUser(localUser);
     return true;
   };
