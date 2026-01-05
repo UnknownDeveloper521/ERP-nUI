@@ -1,8 +1,11 @@
 import { execSync } from 'child_process';
-console.log('🏗️  Building ERP Frontend...');
+
+console.log('🏗️  Building ERP Application...');
+
 try {
-  execSync('npx vite build', { stdio: 'inherit' });
-  console.log('✅ Frontend build complete! Ready to deploy.');
+  // Run the complete build script that outputs to dist/index.cjs
+  execSync('npx tsx script/build.ts', { stdio: 'inherit' });
+  console.log('✅ Build complete! Ready to deploy.');
 } catch (e) {
   console.error('Build failed:', e.message);
   process.exit(1);
