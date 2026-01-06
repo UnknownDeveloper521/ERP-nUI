@@ -49,7 +49,7 @@ export default function RMLedger() {
                     <td className="py-2 px-2">{row.material}</td>
                     <td className="py-2 px-2">
                       <span className={`px-2 py-1 rounded-full text-xs ${
-                        row.type === 'Receipt' ? 'bg-green-100 text-green-700' : 'bg-blue-100 text-blue-700'
+                        row.type === 'Receipt' ? 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400' : 'bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400'
                       }`}>
                         {row.type}
                       </span>

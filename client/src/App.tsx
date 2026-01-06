@@ -36,6 +36,29 @@ import ESS from "@/pages/hrms/ESS";
 import HRDashboard from "@/pages/hrms/HRDashboard";
 import Payroll from "@/pages/hrms/Payroll";
 
+import InventoryDashboard from "@/pages/inventory/InventoryDashboard";
+import RawMaterialReceipt from "@/pages/inventory/RawMaterialReceipt";
+import RMIssue from "@/pages/inventory/RMIssue";
+import RMLedger from "@/pages/inventory/RMLedger";
+import FGStock from "@/pages/inventory/FGStock";
+import StockAdjustment from "@/pages/inventory/StockAdjustment";
+import AlertsThresholds from "@/pages/inventory/AlertsThresholds";
+
+import ProductionDashboard from "@/pages/production/ProductionDashboard";
+import ProductionEntry from "@/pages/production/ProductionEntry";
+import ProductionHistory from "@/pages/production/ProductionHistory";
+import QualityCheck from "@/pages/production/QualityCheck";
+import WasteTracking from "@/pages/production/WasteTracking";
+import MachinePerformance from "@/pages/production/MachinePerformance";
+import ShiftSummary from "@/pages/production/ShiftSummary";
+
+import SalesDashboard from "@/pages/sales-invoicing/SalesDashboard";
+import SalesOrder from "@/pages/sales-invoicing/SalesOrder";
+import DispatchNote from "@/pages/sales-invoicing/DispatchNote";
+import Invoice from "@/pages/sales-invoicing/Invoice";
+import PurchaseOrders from "@/pages/sales-invoicing/PurchaseOrders";
+import SalesReports from "@/pages/sales-invoicing/SalesReports";
+
 // Placeholder pages for other modules
 const PlaceholderPage = ({ title }: { title: string }) => (
   <div className="flex flex-col items-center justify-center h-[60vh] text-center">
@@ -173,7 +196,180 @@ function Router() {
         {() => (
           <ProtectedRoute>
             <MainLayout>
-              <Inventory />
+              <InventoryDashboard />
+            </MainLayout>
+          </ProtectedRoute>
+        )}
+      </Route>
+      <Route path="/inventory/rm-receipt">
+        {() => (
+          <ProtectedRoute>
+            <MainLayout>
+              <RawMaterialReceipt />
+            </MainLayout>
+          </ProtectedRoute>
+        )}
+      </Route>
+      <Route path="/inventory/rm-issue">
+        {() => (
+          <ProtectedRoute>
+            <MainLayout>
+              <RMIssue />
+            </MainLayout>
+          </ProtectedRoute>
+        )}
+      </Route>
+      <Route path="/inventory/rm-ledger">
+        {() => (
+          <ProtectedRoute>
+            <MainLayout>
+              <RMLedger />
+            </MainLayout>
+          </ProtectedRoute>
+        )}
+      </Route>
+      <Route path="/inventory/fg-stock">
+        {() => (
+          <ProtectedRoute>
+            <MainLayout>
+              <FGStock />
+            </MainLayout>
+          </ProtectedRoute>
+        )}
+      </Route>
+      <Route path="/inventory/stock-adjustment">
+        {() => (
+          <ProtectedRoute>
+            <MainLayout>
+              <StockAdjustment />
+            </MainLayout>
+          </ProtectedRoute>
+        )}
+      </Route>
+      <Route path="/inventory/alerts">
+        {() => (
+          <ProtectedRoute>
+            <MainLayout>
+              <AlertsThresholds />
+            </MainLayout>
+          </ProtectedRoute>
+        )}
+      </Route>
+
+      <Route path="/production">
+        {() => (
+          <ProtectedRoute>
+            <MainLayout>
+              <ProductionDashboard />
+            </MainLayout>
+          </ProtectedRoute>
+        )}
+      </Route>
+      <Route path="/production/entry">
+        {() => (
+          <ProtectedRoute>
+            <MainLayout>
+              <ProductionEntry />
+            </MainLayout>
+          </ProtectedRoute>
+        )}
+      </Route>
+      <Route path="/production/history">
+        {() => (
+          <ProtectedRoute>
+            <MainLayout>
+              <ProductionHistory />
+            </MainLayout>
+          </ProtectedRoute>
+        )}
+      </Route>
+      <Route path="/production/quality">
+        {() => (
+          <ProtectedRoute>
+            <MainLayout>
+              <QualityCheck />
+            </MainLayout>
+          </ProtectedRoute>
+        )}
+      </Route>
+      <Route path="/production/waste">
+        {() => (
+          <ProtectedRoute>
+            <MainLayout>
+              <WasteTracking />
+            </MainLayout>
+          </ProtectedRoute>
+        )}
+      </Route>
+      <Route path="/production/machines">
+        {() => (
+          <ProtectedRoute>
+            <MainLayout>
+              <MachinePerformance />
+            </MainLayout>
+          </ProtectedRoute>
+        )}
+      </Route>
+      <Route path="/production/shifts">
+        {() => (
+          <ProtectedRoute>
+            <MainLayout>
+              <ShiftSummary />
+            </MainLayout>
+          </ProtectedRoute>
+        )}
+      </Route>
+
+      <Route path="/sales-invoicing">
+        {() => (
+          <ProtectedRoute>
+            <MainLayout>
+              <SalesDashboard />
+            </MainLayout>
+          </ProtectedRoute>
+        )}
+      </Route>
+      <Route path="/sales-invoicing/orders">
+        {() => (
+          <ProtectedRoute>
+            <MainLayout>
+              <SalesOrder />
+            </MainLayout>
+          </ProtectedRoute>
+        )}
+      </Route>
+      <Route path="/sales-invoicing/dispatch">
+        {() => (
+          <ProtectedRoute>
+            <MainLayout>
+              <DispatchNote />
+            </MainLayout>
+          </ProtectedRoute>
+        )}
+      </Route>
+      <Route path="/sales-invoicing/invoices">
+        {() => (
+          <ProtectedRoute>
+            <MainLayout>
+              <Invoice />
+            </MainLayout>
+          </ProtectedRoute>
+        )}
+      </Route>
+      <Route path="/sales-invoicing/purchases">
+        {() => (
+          <ProtectedRoute>
+            <MainLayout>
+              <PurchaseOrders />
+            </MainLayout>
+          </ProtectedRoute>
+        )}
+      </Route>
+      <Route path="/sales-invoicing/reports">
+        {() => (
+          <ProtectedRoute>
+            <MainLayout>
+              <SalesReports />
             </MainLayout>
           </ProtectedRoute>
         )}

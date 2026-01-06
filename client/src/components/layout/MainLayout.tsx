@@ -81,8 +81,47 @@ const Sidebar = ({ className }: SidebarProps) => {
       ]
     },
     "Products": { name: "Products & Items", icon: Box, path: "/products" },
-    "Inventory": { name: "Inventory", icon: Package, path: "/inventory" },
-    "Sales": { name: "Sales & Invoices", icon: ShoppingCart, path: "/sales" },
+    "Inventory": { 
+      name: "Inventory", 
+      icon: Package, 
+      path: "/inventory",
+      subItems: [
+        { name: "Dashboard", path: "/inventory" },
+        { name: "RM Receipt", path: "/inventory/rm-receipt" },
+        { name: "RM Issue", path: "/inventory/rm-issue" },
+        { name: "RM Ledger", path: "/inventory/rm-ledger" },
+        { name: "FG Stock", path: "/inventory/fg-stock" },
+        { name: "Stock Adjustment", path: "/inventory/stock-adjustment" },
+        { name: "Alerts & Thresholds", path: "/inventory/alerts" },
+      ]
+    },
+    "Production": {
+      name: "Production",
+      icon: Briefcase,
+      path: "/production",
+      subItems: [
+        { name: "Dashboard", path: "/production" },
+        { name: "Production Entry", path: "/production/entry" },
+        { name: "History", path: "/production/history" },
+        { name: "Quality Check", path: "/production/quality" },
+        { name: "Waste Tracking", path: "/production/waste" },
+        { name: "Machine Performance", path: "/production/machines" },
+        { name: "Shift Summary", path: "/production/shifts" },
+      ]
+    },
+    "Sales": { 
+      name: "Sales & Invoicing", 
+      icon: ShoppingCart, 
+      path: "/sales-invoicing",
+      subItems: [
+        { name: "Dashboard", path: "/sales-invoicing" },
+        { name: "Sales Order", path: "/sales-invoicing/orders" },
+        { name: "Dispatch Note", path: "/sales-invoicing/dispatch" },
+        { name: "Invoice", path: "/sales-invoicing/invoices" },
+        { name: "Purchase Orders", path: "/sales-invoicing/purchases" },
+        { name: "Reports", path: "/sales-invoicing/reports" },
+      ]
+    },
     "Purchases": { name: "Purchases & Vendors", icon: CreditCard, path: "/purchases" },
     "Customers": { name: "Customers (CRM)", icon: UserPlus, path: "/customers" },
     "Accounting": { name: "Accounting", icon: FileText, path: "/accounting" },
@@ -90,7 +129,7 @@ const Sidebar = ({ className }: SidebarProps) => {
     "System": { name: "Users & Roles", icon: Settings, path: "/settings" },
   };
 
-  const coreModules = ["Dashboard", "Chat", "HRMS", "Products", "Inventory", "Sales", "Purchases", "Customers"];
+  const coreModules = ["Dashboard", "Chat", "HRMS", "Products", "Inventory", "Production", "Sales", "Purchases", "Customers"];
   const optionalModules = ["Accounting", "Logistics"];
   const systemModules = ["System"];
 

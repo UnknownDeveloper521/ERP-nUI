@@ -52,7 +52,7 @@ export default function QualityCheck() {
                     <td className="py-2 px-2 text-right text-red-600">{row.failed}</td>
                     <td className="py-2 px-2">
                       <span className={`inline-flex items-center gap-1 px-2 py-1 rounded-full text-xs ${
-                        row.result === 'Pass' ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'
+                        row.result === 'Pass' ? 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400' : 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400'
                       }`}>
                         {row.result === 'Pass' ? <CheckCircle className="h-3 w-3" /> : <XCircle className="h-3 w-3" />}
                         {row.result}
