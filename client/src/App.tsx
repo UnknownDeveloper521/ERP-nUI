@@ -78,17 +78,7 @@ function Router() {
       <Route path="/login" component={Login} />
       <Route path="/register" component={Register} />
       
-      {/* Protected Routes wrapped in MainLayout */}
-      <Route path="/">
-        {() => (
-          <ProtectedRoute>
-            <MainLayout>
-              <Dashboard />
-            </MainLayout>
-          </ProtectedRoute>
-        )}
-      </Route>
-      
+      {/* HRMS Routes */}
       <Route path="/hrms">
         {() => (
           <ProtectedRoute>
@@ -501,6 +491,17 @@ function Router() {
           <ProtectedRoute>
             <MainLayout>
               <InternalChat />
+            </MainLayout>
+          </ProtectedRoute>
+        )}
+      </Route>
+
+      {/* Home route - must be after all other routes */}
+      <Route path="/">
+        {() => (
+          <ProtectedRoute>
+            <MainLayout>
+              <Dashboard />
             </MainLayout>
           </ProtectedRoute>
         )}
