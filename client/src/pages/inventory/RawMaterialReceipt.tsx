@@ -1,66 +1,776 @@
+import { useState, useEffect } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogFooter,
+} from "@/components/ui/dialog";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import ModuleTabs from "@/components/shared/ModuleTabs";
 import { inventoryTabs } from "./InventoryDashboard";
-import { Plus } from "lucide-react";
+import { Plus, Search, Pencil, Trash2, ArrowUpDown, Loader2 } from "lucide-react";
+import { supabase } from "@/lib/supabase";
+import { useToast } from "@/hooks/use-toast";
+
+interface RawMaterial {
+  id: string;
+  material_code: string;
+  name: string;
+  uom: string;
+  material_type?: string;
+  gsm?: number;
+  ply?: number;
+  width_mm?: number;
+  grade?: string;
+}
+
+interface Receipt {
+  id: string;
+  receipt_no: string;
+  material_id: string;
+  vendor_id?: string;
+  purchase_order_no?: string;
+  supplier_invoice_no?: string;
+  lot_no?: string;
+  container_no?: string;
+  received_date: string;
+  gross_qty: number;
+  qc_passed_qty: number;
+  rejected_qty: number;
+  unit_cost: number;
+  total_cost?: number;
+  warehouse_location: string;
+  qc_status: string;
+  remarks?: string;
+  created_at: string;
+  raw_material_master?: RawMaterial;
+}
+
+interface ReceiptFormData {
+  material_id: string;
+  vendor_id: string;
+  receipt_no: string;
+  purchase_order_no: string;
+  supplier_invoice_no: string;
+  lot_no: string;
+  container_no: string;
+  received_date: string;
+  gross_qty: string;
+  qc_passed_qty: string;
+  rejected_qty: string;
+  unit_cost: string;
+  warehouse_location: string;
+  qc_status: string;
+  remarks: string;
+}
+
+const initialFormData: ReceiptFormData = {
+  material_id: "",
+  vendor_id: "",
+  receipt_no: "",
+  purchase_order_no: "",
+  supplier_invoice_no: "",
+  lot_no: "",
+  container_no: "",
+  received_date: new Date().toISOString().split("T")[0],
+  gross_qty: "",
+  qc_passed_qty: "",
+  rejected_qty: "0",
+  unit_cost: "",
+  warehouse_location: "MAIN",
+  qc_status: "Pending",
+  remarks: "",
+};
 
 export default function RawMaterialReceipt() {
+  const { toast } = useToast();
+  const [receipts, setReceipts] = useState<Receipt[]>([]);
+  const [materials, setMaterials] = useState<RawMaterial[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [dialogOpen, setDialogOpen] = useState(false);
+  const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
+  const [editingReceipt, setEditingReceipt] = useState<Receipt | null>(null);
+  const [deletingReceipt, setDeletingReceipt] = useState<Receipt | null>(null);
+  const [formData, setFormData] = useState<ReceiptFormData>(initialFormData);
+  const [searchTerm, setSearchTerm] = useState("");
+  const [materialFilter, setMaterialFilter] = useState<string>("all");
+  const [sortOrder, setSortOrder] = useState<"asc" | "desc">("desc");
+  const [selectedMaterialUom, setSelectedMaterialUom] = useState("");
+
+  useEffect(() => {
+    fetchReceipts();
+    fetchMaterials();
+  }, []);
+
+  const fetchReceipts = async () => {
+    setLoading(true);
+    try {
+      const { data, error } = await supabase
+        .from("raw_material_receipts")
+        .select(`
+          *,
+          raw_material_master (
+            id,
+            material_code,
+            name,
+            uom,
+            material_type,
+            gsm,
+            ply,
+            width_mm,
+            grade
+          )
+        `)
+        .order("created_at", { ascending: false });
+
+      if (error) throw error;
+      setReceipts(data || []);
+    } catch (error: any) {
+      toast({
+        title: "Error loading receipts",
+        description: error.message,
+        variant: "destructive",
+      });
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const fetchMaterials = async () => {
+    try {
+      const { data, error } = await supabase
+        .from("raw_material_master")
+        .select("*")
+        .order("name");
+
+      if (error) throw error;
+      setMaterials(data || []);
+    } catch (error: any) {
+      toast({
+        title: "Error loading materials",
+        description: error.message,
+        variant: "destructive",
+      });
+    }
+  };
+
+  const generateReceiptNo = () => {
+    const date = new Date();
+    const year = date.getFullYear();
+    const month = String(date.getMonth() + 1).padStart(2, "0");
+    const day = String(date.getDate()).padStart(2, "0");
+    const random = Math.floor(Math.random() * 1000).toString().padStart(3, "0");
+    return `RMR-${year}${month}${day}-${random}`;
+  };
+
+  const openNewReceiptDialog = () => {
+    setEditingReceipt(null);
+    setFormData({
+      ...initialFormData,
+      receipt_no: generateReceiptNo(),
+      received_date: new Date().toISOString().split("T")[0],
+    });
+    setSelectedMaterialUom("");
+    setDialogOpen(true);
+  };
+
+  const openEditDialog = (receipt: Receipt) => {
+    setEditingReceipt(receipt);
+    setFormData({
+      material_id: receipt.material_id,
+      vendor_id: receipt.vendor_id || "",
+      receipt_no: receipt.receipt_no,
+      purchase_order_no: receipt.purchase_order_no || "",
+      supplier_invoice_no: receipt.supplier_invoice_no || "",
+      lot_no: receipt.lot_no || "",
+      container_no: receipt.container_no || "",
+      received_date: receipt.received_date,
+      gross_qty: String(receipt.gross_qty),
+      qc_passed_qty: String(receipt.qc_passed_qty),
+      rejected_qty: String(receipt.rejected_qty || 0),
+      unit_cost: String(receipt.unit_cost),
+      warehouse_location: receipt.warehouse_location || "MAIN",
+      qc_status: receipt.qc_status || "Pending",
+      remarks: receipt.remarks || "",
+    });
+    const material = materials.find((m) => m.id === receipt.material_id);
+    setSelectedMaterialUom(material?.uom || "");
+    setDialogOpen(true);
+  };
+
+  const handleMaterialChange = (materialId: string) => {
+    setFormData((prev) => ({ ...prev, material_id: materialId }));
+    const material = materials.find((m) => m.id === materialId);
+    setSelectedMaterialUom(material?.uom || "");
+  };
+
+  const handleInputChange = (
+    e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>
+  ) => {
+    const { name, value } = e.target;
+    setFormData((prev) => ({ ...prev, [name]: value }));
+  };
+
+  const validateForm = (): boolean => {
+    if (!formData.material_id) {
+      toast({ title: "Please select a material", variant: "destructive" });
+      return false;
+    }
+    if (!formData.receipt_no) {
+      toast({ title: "Receipt number is required", variant: "destructive" });
+      return false;
+    }
+    if (!formData.received_date) {
+      toast({ title: "Received date is required", variant: "destructive" });
+      return false;
+    }
+    const grossQty = parseFloat(formData.gross_qty);
+    if (isNaN(grossQty) || grossQty <= 0) {
+      toast({ title: "Gross quantity must be greater than zero", variant: "destructive" });
+      return false;
+    }
+    const qcPassedQty = parseFloat(formData.qc_passed_qty);
+    if (isNaN(qcPassedQty) || qcPassedQty < 0) {
+      toast({ title: "QC passed quantity must be zero or greater", variant: "destructive" });
+      return false;
+    }
+    const unitCost = parseFloat(formData.unit_cost);
+    if (isNaN(unitCost) || unitCost < 0) {
+      toast({ title: "Unit cost must be zero or greater", variant: "destructive" });
+      return false;
+    }
+    return true;
+  };
+
+  const handleSubmit = async () => {
+    if (!validateForm()) return;
+
+    setSaving(true);
+    try {
+      const receiptData = {
+        material_id: formData.material_id,
+        vendor_id: formData.vendor_id || null,
+        receipt_no: formData.receipt_no,
+        purchase_order_no: formData.purchase_order_no || null,
+        supplier_invoice_no: formData.supplier_invoice_no || null,
+        lot_no: formData.lot_no || null,
+        container_no: formData.container_no || null,
+        received_date: formData.received_date,
+        gross_qty: parseFloat(formData.gross_qty),
+        qc_passed_qty: parseFloat(formData.qc_passed_qty),
+        rejected_qty: parseFloat(formData.rejected_qty) || 0,
+        unit_cost: parseFloat(formData.unit_cost),
+        warehouse_location: formData.warehouse_location,
+        qc_status: formData.qc_status,
+        remarks: formData.remarks || null,
+      };
+
+      if (editingReceipt) {
+        const { error } = await supabase
+          .from("raw_material_receipts")
+          .update(receiptData)
+          .eq("id", editingReceipt.id);
+
+        if (error) throw error;
+        toast({ title: "Receipt updated successfully" });
+      } else {
+        const { error } = await supabase
+          .from("raw_material_receipts")
+          .insert([receiptData]);
+
+        if (error) throw error;
+        toast({ title: "Receipt created successfully" });
+      }
+
+      setDialogOpen(false);
+      fetchReceipts();
+    } catch (error: any) {
+      toast({
+        title: editingReceipt ? "Error updating receipt" : "Error creating receipt",
+        description: error.message,
+        variant: "destructive",
+      });
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleDelete = async () => {
+    if (!deletingReceipt) return;
+
+    setSaving(true);
+    try {
+      const { error } = await supabase
+        .from("raw_material_receipts")
+        .delete()
+        .eq("id", deletingReceipt.id);
+
+      if (error) throw error;
+      toast({ title: "Receipt deleted successfully" });
+      setDeleteDialogOpen(false);
+      setDeletingReceipt(null);
+      fetchReceipts();
+    } catch (error: any) {
+      toast({
+        title: "Error deleting receipt",
+        description: error.message,
+        variant: "destructive",
+      });
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const filteredReceipts = receipts
+    .filter((receipt) => {
+      const searchLower = searchTerm.toLowerCase();
+      const matchesSearch =
+        (receipt.receipt_no || "").toLowerCase().includes(searchLower) ||
+        (receipt.raw_material_master?.name || "").toLowerCase().includes(searchLower) ||
+        (receipt.supplier_invoice_no || "").toLowerCase().includes(searchLower);
+      const matchesMaterial =
+        materialFilter === "all" || receipt.material_id === materialFilter;
+      return matchesSearch && matchesMaterial;
+    })
+    .sort((a, b) => {
+      const dateA = new Date(a.received_date).getTime();
+      const dateB = new Date(b.received_date).getTime();
+      return sortOrder === "desc" ? dateB - dateA : dateA - dateB;
+    });
+
+  const getQcStatusStyle = (status: string) => {
+    switch (status) {
+      case "Passed":
+        return "bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400";
+      case "Failed":
+        return "bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400";
+      default:
+        return "bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400";
+    }
+  };
+
   return (
     <div className="space-y-4">
       <h1 className="text-xl font-semibold" data-testid="text-page-title">Inventory</h1>
       <ModuleTabs tabs={inventoryTabs} />
-      
-      <div className="flex justify-between items-center mt-4">
+
+      <div className="flex flex-wrap justify-between items-center gap-4 mt-4">
         <h2 className="text-lg font-medium">Raw Material Receipt</h2>
-        <Button data-testid="button-add-receipt">
+        <Button onClick={openNewReceiptDialog} data-testid="button-add-receipt">
           <Plus className="h-4 w-4 mr-2" />
           New Receipt
         </Button>
       </div>
-      
+
       <Card>
         <CardHeader>
-          <CardTitle className="text-base">Recent Receipts</CardTitle>
+          <div className="flex flex-wrap items-center justify-between gap-4">
+            <CardTitle className="text-base">Receipts</CardTitle>
+            <div className="flex flex-wrap items-center gap-2">
+              <div className="relative">
+                <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
+                <Input
+                  placeholder="Search receipts..."
+                  value={searchTerm}
+                  onChange={(e) => setSearchTerm(e.target.value)}
+                  className="pl-8 w-[200px]"
+                  data-testid="input-search"
+                />
+              </div>
+              <Select value={materialFilter} onValueChange={setMaterialFilter}>
+                <SelectTrigger className="w-[180px]" data-testid="select-material-filter">
+                  <SelectValue placeholder="Filter by material" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All Materials</SelectItem>
+                  {materials.map((material) => (
+                    <SelectItem key={material.id} value={material.id}>
+                      {material.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <Button
+                variant="outline"
+                size="icon"
+                onClick={() => setSortOrder(sortOrder === "desc" ? "asc" : "desc")}
+                data-testid="button-sort"
+              >
+                <ArrowUpDown className="h-4 w-4" />
+              </Button>
+            </div>
+          </div>
         </CardHeader>
         <CardContent>
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="border-b">
-                  <th className="text-left py-2 px-2">Receipt No</th>
-                  <th className="text-left py-2 px-2">Date</th>
-                  <th className="text-left py-2 px-2">Supplier</th>
-                  <th className="text-left py-2 px-2">Material</th>
-                  <th className="text-left py-2 px-2">Quantity</th>
-                  <th className="text-left py-2 px-2">Status</th>
-                </tr>
-              </thead>
-              <tbody>
-                {[
-                  { no: "RMR-001", date: "2026-01-06", supplier: "Steel Corp", material: "Steel Plates", qty: "500 kg", status: "Received" },
-                  { no: "RMR-002", date: "2026-01-05", supplier: "Alu World", material: "Aluminum Rods", qty: "250 units", status: "QC Pending" },
-                  { no: "RMR-003", date: "2026-01-04", supplier: "Wire Masters", material: "Copper Wire", qty: "1000 m", status: "Received" },
-                ].map((row, i) => (
-                  <tr key={i} className="border-b hover:bg-muted/50">
-                    <td className="py-2 px-2">{row.no}</td>
-                    <td className="py-2 px-2">{row.date}</td>
-                    <td className="py-2 px-2">{row.supplier}</td>
-                    <td className="py-2 px-2">{row.material}</td>
-                    <td className="py-2 px-2">{row.qty}</td>
-                    <td className="py-2 px-2">
-                      <span className={`px-2 py-1 rounded-full text-xs ${
-                        row.status === 'Received' ? 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400' : 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400'
-                      }`}>
-                        {row.status}
-                      </span>
-                    </td>
+          {loading ? (
+            <div className="flex justify-center py-8">
+              <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+            </div>
+          ) : filteredReceipts.length === 0 ? (
+            <div className="text-center py-8 text-muted-foreground">
+              {searchTerm || materialFilter !== "all"
+                ? "No receipts match your filters"
+                : "No receipts found. Click 'New Receipt' to add one."}
+            </div>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b">
+                    <th className="text-left py-2 px-2">Receipt No</th>
+                    <th className="text-left py-2 px-2">Date</th>
+                    <th className="text-left py-2 px-2">Material</th>
+                    <th className="text-right py-2 px-2">Gross Qty</th>
+                    <th className="text-right py-2 px-2">QC Passed</th>
+                    <th className="text-right py-2 px-2">Unit Cost</th>
+                    <th className="text-right py-2 px-2">Total Cost</th>
+                    <th className="text-left py-2 px-2">QC Status</th>
+                    <th className="text-center py-2 px-2">Actions</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+                </thead>
+                <tbody>
+                  {filteredReceipts.map((receipt) => (
+                    <tr
+                      key={receipt.id}
+                      className="border-b hover:bg-muted/50"
+                      data-testid={`row-receipt-${receipt.id}`}
+                    >
+                      <td className="py-2 px-2 font-mono text-primary">
+                        {receipt.receipt_no}
+                      </td>
+                      <td className="py-2 px-2">{receipt.received_date}</td>
+                      <td className="py-2 px-2">
+                        {receipt.raw_material_master?.name || "Unknown"}
+                      </td>
+                      <td className="py-2 px-2 text-right">
+                        {receipt.gross_qty} {receipt.raw_material_master?.uom}
+                      </td>
+                      <td className="py-2 px-2 text-right">
+                        {receipt.qc_passed_qty} {receipt.raw_material_master?.uom}
+                      </td>
+                      <td className="py-2 px-2 text-right">
+                        {Number(receipt.unit_cost).toFixed(2)}
+                      </td>
+                      <td className="py-2 px-2 text-right font-medium">
+                        {Number(receipt.total_cost || 0).toFixed(2)}
+                      </td>
+                      <td className="py-2 px-2">
+                        <span
+                          className={`px-2 py-1 rounded-full text-xs ${getQcStatusStyle(
+                            receipt.qc_status
+                          )}`}
+                        >
+                          {receipt.qc_status}
+                        </span>
+                      </td>
+                      <td className="py-2 px-2">
+                        <div className="flex justify-center gap-1">
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            onClick={() => openEditDialog(receipt)}
+                            data-testid={`button-edit-${receipt.id}`}
+                          >
+                            <Pencil className="h-4 w-4" />
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            onClick={() => {
+                              setDeletingReceipt(receipt);
+                              setDeleteDialogOpen(true);
+                            }}
+                            data-testid={`button-delete-${receipt.id}`}
+                          >
+                            <Trash2 className="h-4 w-4 text-destructive" />
+                          </Button>
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
         </CardContent>
       </Card>
+
+      <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
+        <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>
+              {editingReceipt ? "Edit Receipt" : "New Raw Material Receipt"}
+            </DialogTitle>
+          </DialogHeader>
+          <div className="grid gap-4 py-4">
+            <div className="grid grid-cols-2 gap-4">
+              <div className="space-y-2">
+                <Label htmlFor="receipt_no">Receipt No</Label>
+                <Input
+                  id="receipt_no"
+                  name="receipt_no"
+                  value={formData.receipt_no}
+                  onChange={handleInputChange}
+                  placeholder="RMR-YYYYMMDD-XXX"
+                  data-testid="input-receipt-no"
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="received_date">Received Date *</Label>
+                <Input
+                  id="received_date"
+                  name="received_date"
+                  type="date"
+                  value={formData.received_date}
+                  onChange={handleInputChange}
+                  data-testid="input-received-date"
+                />
+              </div>
+            </div>
+
+            <div className="grid grid-cols-2 gap-4">
+              <div className="space-y-2">
+                <Label htmlFor="material_id">Raw Material *</Label>
+                <Select
+                  value={formData.material_id}
+                  onValueChange={handleMaterialChange}
+                >
+                  <SelectTrigger data-testid="select-material">
+                    <SelectValue placeholder="Select material" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {materials.map((material) => (
+                      <SelectItem key={material.id} value={material.id}>
+                        {material.name} ({material.material_code})
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-2">
+                <Label>UOM (Auto-filled)</Label>
+                <Input
+                  value={selectedMaterialUom}
+                  disabled
+                  className="bg-muted"
+                  data-testid="input-uom"
+                />
+              </div>
+            </div>
+
+            <div className="grid grid-cols-2 gap-4">
+              <div className="space-y-2">
+                <Label htmlFor="purchase_order_no">Purchase Order No</Label>
+                <Input
+                  id="purchase_order_no"
+                  name="purchase_order_no"
+                  value={formData.purchase_order_no}
+                  onChange={handleInputChange}
+                  placeholder="PO-XXXX"
+                  data-testid="input-po-no"
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="supplier_invoice_no">Supplier Invoice No</Label>
+                <Input
+                  id="supplier_invoice_no"
+                  name="supplier_invoice_no"
+                  value={formData.supplier_invoice_no}
+                  onChange={handleInputChange}
+                  placeholder="INV-XXXX"
+                  data-testid="input-invoice-no"
+                />
+              </div>
+            </div>
+
+            <div className="grid grid-cols-2 gap-4">
+              <div className="space-y-2">
+                <Label htmlFor="lot_no">Lot / Batch No</Label>
+                <Input
+                  id="lot_no"
+                  name="lot_no"
+                  value={formData.lot_no}
+                  onChange={handleInputChange}
+                  placeholder="LOT-XXXX"
+                  data-testid="input-lot-no"
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="container_no">Container No</Label>
+                <Input
+                  id="container_no"
+                  name="container_no"
+                  value={formData.container_no}
+                  onChange={handleInputChange}
+                  placeholder="CONT-XXXX"
+                  data-testid="input-container-no"
+                />
+              </div>
+            </div>
+
+            <div className="grid grid-cols-3 gap-4">
+              <div className="space-y-2">
+                <Label htmlFor="gross_qty">Gross Quantity *</Label>
+                <Input
+                  id="gross_qty"
+                  name="gross_qty"
+                  type="number"
+                  step="0.01"
+                  value={formData.gross_qty}
+                  onChange={handleInputChange}
+                  placeholder="0.00"
+                  data-testid="input-gross-qty"
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="qc_passed_qty">QC Passed Qty *</Label>
+                <Input
+                  id="qc_passed_qty"
+                  name="qc_passed_qty"
+                  type="number"
+                  step="0.01"
+                  value={formData.qc_passed_qty}
+                  onChange={handleInputChange}
+                  placeholder="0.00"
+                  data-testid="input-qc-passed-qty"
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="rejected_qty">Rejected Qty</Label>
+                <Input
+                  id="rejected_qty"
+                  name="rejected_qty"
+                  type="number"
+                  step="0.01"
+                  value={formData.rejected_qty}
+                  onChange={handleInputChange}
+                  placeholder="0.00"
+                  data-testid="input-rejected-qty"
+                />
+              </div>
+            </div>
+
+            <div className="grid grid-cols-3 gap-4">
+              <div className="space-y-2">
+                <Label htmlFor="unit_cost">Unit Cost *</Label>
+                <Input
+                  id="unit_cost"
+                  name="unit_cost"
+                  type="number"
+                  step="0.01"
+                  value={formData.unit_cost}
+                  onChange={handleInputChange}
+                  placeholder="0.00"
+                  data-testid="input-unit-cost"
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="warehouse_location">Warehouse Location</Label>
+                <Select
+                  value={formData.warehouse_location}
+                  onValueChange={(value) =>
+                    setFormData((prev) => ({ ...prev, warehouse_location: value }))
+                  }
+                >
+                  <SelectTrigger data-testid="select-warehouse">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="MAIN">MAIN</SelectItem>
+                    <SelectItem value="WH-A">Warehouse A</SelectItem>
+                    <SelectItem value="WH-B">Warehouse B</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="qc_status">QC Status</Label>
+                <Select
+                  value={formData.qc_status}
+                  onValueChange={(value) =>
+                    setFormData((prev) => ({ ...prev, qc_status: value }))
+                  }
+                >
+                  <SelectTrigger data-testid="select-qc-status">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="Pending">Pending</SelectItem>
+                    <SelectItem value="Passed">Passed</SelectItem>
+                    <SelectItem value="Failed">Failed</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+
+            <div className="space-y-2">
+              <Label htmlFor="remarks">Remarks</Label>
+              <Textarea
+                id="remarks"
+                name="remarks"
+                value={formData.remarks}
+                onChange={handleInputChange}
+                placeholder="Additional notes..."
+                rows={3}
+                data-testid="textarea-remarks"
+              />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setDialogOpen(false)}>
+              Cancel
+            </Button>
+            <Button onClick={handleSubmit} disabled={saving} data-testid="button-save">
+              {saving && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
+              {editingReceipt ? "Update" : "Save"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <AlertDialog open={deleteDialogOpen} onOpenChange={setDeleteDialogOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete Receipt</AlertDialogTitle>
+            <AlertDialogDescription>
+              Are you sure you want to delete receipt {deletingReceipt?.receipt_no}? This
+              action cannot be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={handleDelete}
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+            >
+              {saving && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
+              Delete
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

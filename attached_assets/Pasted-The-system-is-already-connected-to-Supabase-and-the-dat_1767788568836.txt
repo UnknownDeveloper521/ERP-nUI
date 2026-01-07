@@ -1,0 +1,129 @@
+The system is already connected to Supabase and the database already exists.
+Your job is to build the UI and CRUD logic — DO NOT create or change the database structure.
+
+🎯 Screen Name
+
+Raw Material Receipt
+
+🧩 Tabs (already exist — just keep them working)
+
+Dashboard
+
+Raw Material Receipt
+
+RM Issue
+
+RM Ledger
+
+FG Stock
+
+Stock Adjustment
+
+Alert & Thresholds
+
+➕ New Receipt Button
+
+When the user clicks “New Receipt”, open a form popup or page to capture a Raw Material Receipt entry.
+
+📥 Form Fields (Bind to database fields)
+
+Use the fields that already exist in my database for raw material receipts.
+The form should include:
+
+Select Raw Material from a dropdown (load from Raw Material Master table)
+
+Select Vendor from a dropdown (load from Vendor/Supplier table if available)
+
+Receipt No (auto-generated if database already handles it — otherwise allow input)
+
+Purchase Order No (optional)
+
+Supplier Invoice No
+
+Batch / Lot / Reference fields if available in the table
+
+Quantity Received
+
+UOM (auto-fill when material is selected)
+
+Received Date
+
+Remarks / Notes
+
+🔗 Important Binding Rules
+
+Do NOT rename columns.
+
+Map inputs directly to the existing columns in the Raw Material Receipts table.
+
+Use the database’s existing triggers and logic — don’t duplicate calculations in the UI.
+
+🔒 System Logic (UI only — DB already handles backend logic)
+
+After submitting a receipt:
+
+Insert the record into the database
+
+Let the database triggers update stock and ledger
+
+Show a success confirmation
+
+Refresh the list view
+
+📋 Below the form — Receipt List Table
+
+Show all Raw Material Receipt records in a table:
+
+Receipt No
+
+Material Name
+
+Vendor Name
+
+Quantity
+
+UOM
+
+Date
+
+Created / Updated timestamps
+
+Add:
+
+Search
+
+Sort by newest first
+
+Filters by material & date
+
+✏️ Edit & Delete
+
+Allow updating a receipt
+
+Allow deleting if allowed by database rules
+
+🚨 Validation
+
+Quantity must be greater than zero
+
+Required fields cannot be empty
+
+🎨 UI Style
+
+Clean ERP-style layout
+
+Responsive table
+
+Simple form design
+
+⚠️ VERY IMPORTANT
+
+DO NOT modify the database structure
+
+DO NOT create new tables
+
+Use the existing Supabase schema
+
+Use the existing triggers
+
+Just build the UI + API calls so the screens work end-to-end.
