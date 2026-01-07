@@ -496,7 +496,7 @@ function Router() {
         )}
       </Route>
 
-      {/* Home route - must be after all other routes */}
+      {/* Home route - exact match for / */}
       <Route path="/">
         {() => (
           <ProtectedRoute>
@@ -507,8 +507,10 @@ function Router() {
         )}
       </Route>
 
-      {/* Fallback to 404 */}
-      <Route component={NotFound} />
+      {/* Catch-all route for unknown paths - show 404 */}
+      <Route path="/:rest*">
+        {() => <NotFound />}
+      </Route>
     </Switch>
   );
 }
