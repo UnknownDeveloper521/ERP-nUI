@@ -8,15 +8,16 @@ const SUPABASE_URL =
 const SUPABASE_ANON_KEY =
   process.env.SUPABASE_ANON_KEY || process.env.VITE_SUPABASE_ANON_KEY;
 
-if (!SUPABASE_ANON_KEY) {
-  throw new Error(
-    "Missing server Supabase configuration. Set SUPABASE_ANON_KEY (or VITE_SUPABASE_ANON_KEY) in your .env file."
-  );
-}
-
-export const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+export const supabase = SUPABASE_ANON_KEY
+  ? createClient(SUPABASE_URL, SUPABASE_ANON_KEY)
+  : null;
 
 export async function getUserFromAccessToken(accessToken: string) {
+  if (!supabase) {
+    throw new Error(
+      "Missing server Supabase configuration. Set SUPABASE_ANON_KEY (or VITE_SUPABASE_ANON_KEY) in your .env file."
+    );
+  }
   const { data, error } = await supabase.auth.getUser(accessToken);
   if (error) throw error;
   if (!data.user) throw new Error("Invalid access token");

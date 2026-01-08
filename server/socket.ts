@@ -10,16 +10,14 @@ const SUPABASE_URL =
 
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
 
-if (!SUPABASE_SERVICE_ROLE_KEY) {
-  throw new Error("SUPABASE_SERVICE_ROLE_KEY is required for chat functionality");
-}
-
-const supabaseAdmin = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, {
-  auth: {
-    autoRefreshToken: false,
-    persistSession: false,
-  },
-});
+const supabaseAdmin = SUPABASE_SERVICE_ROLE_KEY
+  ? createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, {
+      auth: {
+        autoRefreshToken: false,
+        persistSession: false,
+      },
+    })
+  : null;
 
 type AuthedSocket = Parameters<NonNullable<Parameters<Server["use"]>[0]>>[0] & {
   data: {
@@ -57,6 +55,9 @@ function setUserOffline(userId: string, socketId: string) {
 }
 
 async function assertMember(roomId: string, userId: string) {
+  if (!supabaseAdmin) {
+    throw new Error("Chat is not configured (missing SUPABASE_SERVICE_ROLE_KEY)");
+  }
   const { data, error } = await supabaseAdmin
     .from("chat_members")
     .select("room_id")
@@ -73,6 +74,9 @@ async function assertMember(roomId: string, userId: string) {
 }
 
 async function ensureDirectRoom(userA: string, userB: string) {
+  if (!supabaseAdmin) {
+    throw new Error("Chat is not configured (missing SUPABASE_SERVICE_ROLE_KEY)");
+  }
   // First, try to find an existing private room between these two users
   const { data: userARooms } = await supabaseAdmin
     .from("chat_members")
@@ -138,6 +142,12 @@ async function ensureDirectRoom(userA: string, userB: string) {
 }
 
 export function setupSocketServer(httpServer: HttpServer) {
+  if (!supabaseAdmin) {
+    console.warn(
+      "Socket.IO chat disabled: SUPABASE_SERVICE_ROLE_KEY is not set. Configure it to enable chat."
+    );
+    return null;
+  }
   const io = new Server(httpServer, {
     path: "/socket.io",
     cors: {
