@@ -61,7 +61,7 @@ interface SidebarProps {
 
 const Sidebar = ({ className }: SidebarProps) => {
   const [location] = useLocation();
-  const { isModuleVisible } = useAuth();
+  const { isModuleVisible, user } = useAuth();
 
   const moduleConfig: { [key: string]: { name: string; icon: any; path: string; subItems?: { name: string; path: string }[] } } = {
     "Dashboard": { name: "Dashboard", icon: LayoutDashboard, path: "/" },
@@ -144,10 +144,30 @@ const Sidebar = ({ className }: SidebarProps) => {
   const menuItems = [
     ...(visibleCoreModules.length > 0 ? [{ title: "Core Modules", items: visibleCoreModules }] : []),
     ...(visibleOptionalModules.length > 0 ? [{ title: "Optional Modules", items: visibleOptionalModules }] : []),
-    ...(visibleSystemModules.length > 0 ? [{ title: "System", items: [
-      ...visibleSystemModules,
-      { name: "My Account", icon: Users, path: "/my-account" }
-    ]}] : [{ title: "System", items: [{ name: "My Account", icon: Users, path: "/my-account" }] }]),
+    ...(visibleSystemModules.length > 0
+      ? [
+          {
+            title: "System",
+            items: [
+              ...(user?.role === "Admin"
+                ? [{ name: "Master Data", icon: Settings, path: "/master" }]
+                : []),
+              ...visibleSystemModules,
+              { name: "My Account", icon: Users, path: "/my-account" },
+            ],
+          },
+        ]
+      : [
+          {
+            title: "System",
+            items: [
+              ...(user?.role === "Admin"
+                ? [{ name: "Master Data", icon: Settings, path: "/master" }]
+                : []),
+              { name: "My Account", icon: Users, path: "/my-account" },
+            ],
+          },
+        ]),
   ];
 
   return (
@@ -241,11 +261,17 @@ const Sidebar = ({ className }: SidebarProps) => {
         <div className="flex items-center gap-3 rounded-lg bg-sidebar-accent/20 p-3">
           <Avatar className="h-9 w-9 rounded-md">
             <AvatarImage src="https://github.com/shadcn.png" />
-            <AvatarFallback>AD</AvatarFallback>
+            <AvatarFallback>
+              {(user?.name || "User").slice(0, 2).toUpperCase()}
+            </AvatarFallback>
           </Avatar>
           <div className="flex flex-col overflow-hidden">
-            <span className="truncate text-sm font-medium text-sidebar-foreground">Admin User</span>
-            <span className="truncate text-xs text-sidebar-foreground/70">admin@tassos.com</span>
+            <span className="truncate text-sm font-medium text-sidebar-foreground">
+              {user?.name || "User"}
+            </span>
+            <span className="truncate text-xs text-sidebar-foreground/70">
+              {user?.email || ""}
+            </span>
           </div>
         </div>
       </div>

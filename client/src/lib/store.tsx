@@ -1,5 +1,5 @@
 import React, { createContext, useContext, useState, useEffect, ReactNode } from 'react';
-import { getCurrentUser, onAuthStateChange, signInWithEmail, signOut, signUpWithEmail } from './supabase';
+import { getCurrentUser, onAuthStateChange, signInWithEmail, signOut, signUpWithEmail, supabase } from './supabase';
 
 // --- Types ---
 
@@ -154,6 +154,8 @@ const DEFAULT_USERS: User[] = [
   { id: 7, name: "Emily Davis", email: "emily@tassos.com", password: "123456", role: "Supervisor", department: "Marketing", status: "Active" },
 ];
 
+const DEFAULT_ROLE: Role = "Operator";
+
 // --- Context ---
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -215,10 +217,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     localStorage.setItem('attendance', JSON.stringify(attendance));
   }, [attendance]);
 
-  const upsertLocalUserFromEmail = (email: string, supabaseId?: string) => {
+  const upsertLocalUserFromEmail = (email: string, supabaseId?: string, role?: Role) => {
     const existing = users.find(u => u.email.toLowerCase() === email.toLowerCase());
     if (existing) {
-      const updated = { ...existing, supabaseId };
+      const updated = { ...existing, supabaseId, role: role ?? existing.role };
       setUsers(prev => prev.map(u => u.id === existing.id ? updated : u));
       return updated;
     }
@@ -228,13 +230,38 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       supabaseId,
       name: email.split("@")[0] || "User",
       email,
-      role: "Admin",
+      role: role ?? DEFAULT_ROLE,
       department: "General",
       status: "Active",
       avatar: `https://api.dicebear.com/7.x/avataaars/svg?seed=${email}`,
     };
     setUsers(prev => [...prev, newUser]);
     return newUser;
+  };
+
+  const getDbRoleForUser = async (supabaseUserId: string): Promise<Role> => {
+    try {
+      const { data, error } = await supabase
+        .from("user_roles")
+        .select("role")
+        .eq("user_id", supabaseUserId)
+        .maybeSingle();
+
+      if (error) throw error;
+      const role = (data?.role as Role | undefined) ?? DEFAULT_ROLE;
+      return role;
+    } catch {
+      return DEFAULT_ROLE;
+    }
+  };
+
+  const hydrateUserFromSupabase = async (supaUser: any) => {
+    if (!supaUser?.email || !supaUser?.id) return null;
+
+    const dbRole = await getDbRoleForUser(supaUser.id);
+    const localUser = upsertLocalUserFromEmail(supaUser.email, supaUser.id, dbRole);
+    if (localUser.status === "Inactive") return null;
+    return localUser;
   };
 
   const login = async (email: string, password: string): Promise<boolean> => {
@@ -250,12 +277,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       return false;
     }
 
-    const localUser = upsertLocalUserFromEmail(supaUser.email, supaUser.id);
-    if (localUser.status === "Inactive") {
-      console.error("Local user is inactive");
-      return false;
-    }
-    setUser(localUser);
+    const hydrated = await hydrateUserFromSupabase(supaUser);
+    if (!hydrated) return false;
+    setUser(hydrated);
     return true;
   };
 
@@ -276,19 +300,21 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       try {
         const supaUser = await getCurrentUser();
         if (supaUser?.email) {
-          const localUser = upsertLocalUserFromEmail(supaUser.email, supaUser.id);
-          setUser(localUser.status === "Inactive" ? null : localUser);
+          const hydrated = await hydrateUserFromSupabase(supaUser);
+          setUser(hydrated);
         } else {
           setUser(null);
         }
 
         unsub = onAuthStateChange((nextUser) => {
-          if (nextUser?.email) {
-            const localUser = upsertLocalUserFromEmail(nextUser.email, nextUser.id);
-            setUser(localUser.status === "Inactive" ? null : localUser);
-          } else {
-            setUser(null);
-          }
+          (async () => {
+            if (nextUser?.email) {
+              const hydrated = await hydrateUserFromSupabase(nextUser);
+              setUser(hydrated);
+            } else {
+              setUser(null);
+            }
+          })();
         });
       } finally {
         setIsAuthLoading(false);

@@ -46,6 +46,17 @@ interface RawMaterial {
   grade?: string;
 }
 
+interface Vendor {
+  id: string;
+  name: string;
+}
+
+interface Warehouse {
+  id: string;
+  name: string | null;
+  is_main: boolean;
+}
+
 interface Receipt {
   id: string;
   receipt_no: string;
@@ -86,9 +97,11 @@ interface ReceiptFormData {
   remarks: string;
 }
 
+const NONE_VENDOR_VALUE = "__none__";
+
 const initialFormData: ReceiptFormData = {
   material_id: "",
-  vendor_id: "",
+  vendor_id: NONE_VENDOR_VALUE,
   receipt_no: "",
   purchase_order_no: "",
   supplier_invoice_no: "",
@@ -108,6 +121,8 @@ export default function RawMaterialReceipt() {
   const { toast } = useToast();
   const [receipts, setReceipts] = useState<Receipt[]>([]);
   const [materials, setMaterials] = useState<RawMaterial[]>([]);
+  const [vendors, setVendors] = useState<Vendor[]>([]);
+  const [warehouses, setWarehouses] = useState<Warehouse[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [dialogOpen, setDialogOpen] = useState(false);
@@ -123,6 +138,8 @@ export default function RawMaterialReceipt() {
   useEffect(() => {
     fetchReceipts();
     fetchMaterials();
+    fetchVendors();
+    fetchWarehouses();
   }, []);
 
   const fetchReceipts = async () => {
@@ -156,6 +173,42 @@ export default function RawMaterialReceipt() {
       });
     } finally {
       setLoading(false);
+    }
+  };
+
+  const fetchVendors = async () => {
+    try {
+      const { data, error } = await supabase
+        .from("vendors_master")
+        .select("id, name")
+        .order("name");
+
+      if (error) throw error;
+      setVendors((data as any) || []);
+    } catch (error: any) {
+      toast({
+        title: "Error loading vendors",
+        description: error.message,
+        variant: "destructive",
+      });
+    }
+  };
+
+  const fetchWarehouses = async () => {
+    try {
+      const { data, error } = await supabase
+        .from("warehouses_master")
+        .select("id, name, is_main")
+        .order("is_main", { ascending: false });
+
+      if (error) throw error;
+      setWarehouses((data as any) || []);
+    } catch (error: any) {
+      toast({
+        title: "Error loading warehouses",
+        description: error.message,
+        variant: "destructive",
+      });
     }
   };
 
@@ -201,7 +254,7 @@ export default function RawMaterialReceipt() {
     setEditingReceipt(receipt);
     setFormData({
       material_id: receipt.material_id,
-      vendor_id: receipt.vendor_id || "",
+      vendor_id: receipt.vendor_id || NONE_VENDOR_VALUE,
       receipt_no: receipt.receipt_no,
       purchase_order_no: receipt.purchase_order_no || "",
       supplier_invoice_no: receipt.supplier_invoice_no || "",
@@ -239,6 +292,10 @@ export default function RawMaterialReceipt() {
       toast({ title: "Please select a material", variant: "destructive" });
       return false;
     }
+    if (!formData.warehouse_location) {
+      toast({ title: "Warehouse is required", variant: "destructive" });
+      return false;
+    }
     if (!formData.receipt_no) {
       toast({ title: "Receipt number is required", variant: "destructive" });
       return false;
@@ -272,7 +329,10 @@ export default function RawMaterialReceipt() {
     try {
       const receiptData = {
         material_id: formData.material_id,
-        vendor_id: formData.vendor_id || null,
+        vendor_id:
+          !formData.vendor_id || formData.vendor_id === NONE_VENDOR_VALUE
+            ? null
+            : formData.vendor_id,
         receipt_no: formData.receipt_no,
         purchase_order_no: formData.purchase_order_no || null,
         supplier_invoice_no: formData.supplier_invoice_no || null,
@@ -372,6 +432,12 @@ export default function RawMaterialReceipt() {
     }
   };
 
+  const vendorNameById = (id?: string) => {
+    if (!id || id === NONE_VENDOR_VALUE) return "-";
+    const v = vendors.find((x) => x.id === id);
+    return v?.name || "-";
+  };
+
   return (
     <div className="space-y-4">
       <h1 className="text-xl font-semibold" data-testid="text-page-title">Inventory</h1>
@@ -443,6 +509,8 @@ export default function RawMaterialReceipt() {
                     <th className="text-left py-2 px-2">Receipt No</th>
                     <th className="text-left py-2 px-2">Date</th>
                     <th className="text-left py-2 px-2">Material</th>
+                    <th className="text-left py-2 px-2">Vendor</th>
+                    <th className="text-left py-2 px-2">Warehouse</th>
                     <th className="text-right py-2 px-2">Gross Qty</th>
                     <th className="text-right py-2 px-2">QC Passed</th>
                     <th className="text-right py-2 px-2">Unit Cost</th>
@@ -465,6 +533,8 @@ export default function RawMaterialReceipt() {
                       <td className="py-2 px-2">
                         {receipt.raw_material_master?.name || "Unknown"}
                       </td>
+                      <td className="py-2 px-2">{vendorNameById(receipt.vendor_id)}</td>
+                      <td className="py-2 px-2">{receipt.warehouse_location || "-"}</td>
                       <td className="py-2 px-2 text-right">
                         {receipt.gross_qty} {receipt.raw_material_master?.uom}
                       </td>
@@ -578,6 +648,52 @@ export default function RawMaterialReceipt() {
                   className="bg-muted"
                   data-testid="input-uom"
                 />
+              </div>
+            </div>
+
+            <div className="grid grid-cols-2 gap-4">
+              <div className="space-y-2">
+                <Label htmlFor="vendor_id">Vendor</Label>
+                <Select
+                  value={formData.vendor_id}
+                  onValueChange={(v) => setFormData((prev) => ({ ...prev, vendor_id: v }))}
+                >
+                  <SelectTrigger data-testid="select-vendor">
+                    <SelectValue placeholder="Select vendor" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value={NONE_VENDOR_VALUE}>None</SelectItem>
+                    {vendors.map((vendor) => (
+                      <SelectItem key={vendor.id} value={vendor.id}>
+                        {vendor.name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="warehouse_location">Warehouse *</Label>
+                <Select
+                  value={formData.warehouse_location}
+                  onValueChange={(v) =>
+                    setFormData((prev) => ({ ...prev, warehouse_location: v }))
+                  }
+                >
+                  <SelectTrigger data-testid="select-warehouse">
+                    <SelectValue placeholder="Select warehouse" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {warehouses
+                      .filter((w) => !!w.name)
+                      .map((w) => (
+                        <SelectItem key={w.id} value={w.name as string}>
+                          {w.name}
+                          {w.is_main ? " (Main)" : ""}
+                        </SelectItem>
+                      ))}
+                    <SelectItem value="MAIN">MAIN</SelectItem>
+                  </SelectContent>
+                </Select>
               </div>
             </div>
 

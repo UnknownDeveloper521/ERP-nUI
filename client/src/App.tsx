@@ -8,6 +8,7 @@ import NotFound from "@/pages/not-found";
 import Login from "@/pages/Login";
 import Register from "@/pages/Register";
 import ProtectedRoute from "@/components/auth/ProtectedRoute";
+import AdminRoute from "@/components/auth/AdminRoute";
 import Dashboard from "@/pages/Dashboard";
 import HRMS from "@/pages/HRMS";
 import Customers from "@/pages/Customers";
@@ -43,6 +44,8 @@ import RMLedger from "@/pages/inventory/RMLedger";
 import FGStock from "@/pages/inventory/FGStock";
 import StockAdjustment from "@/pages/inventory/StockAdjustment";
 import AlertsThresholds from "@/pages/inventory/AlertsThresholds";
+
+import MasterData from "@/pages/master/MasterData";
 
 import ProductionDashboard from "@/pages/production/ProductionDashboard";
 import ProductionEntry from "@/pages/production/ProductionEntry";
@@ -243,6 +246,16 @@ function Router() {
               <AlertsThresholds />
             </MainLayout>
           </ProtectedRoute>
+        )}
+      </Route>
+
+      <Route path="/master">
+        {() => (
+          <AdminRoute>
+            <MainLayout>
+              <MasterData />
+            </MainLayout>
+          </AdminRoute>
         )}
       </Route>
 
