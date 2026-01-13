@@ -23,19 +23,29 @@ import { Plus, Search, Loader2, ArrowUpDown } from "lucide-react";
 import { supabase } from "@/lib/supabase";
 import { useToast } from "@/hooks/use-toast";
 
-interface RawMaterial {
+type MaterialType = "ROLL" | "PACKAGING";
+
+interface RollMaterial {
   id: string;
-  material_code: string;
   name: string;
-  uom: string;
+  weight_kg: number;
+}
+
+interface PackagingMaterial {
+  id: string;
+  name: string;
+  weight_per_unit: number | null;
 }
 
 interface ReceiptRef {
   id: string;
   receipt_no: string;
-  material_id: string;
+  material_type: MaterialType | null;
+  roll_material_id: string | null;
+  packaging_material_id: string | null;
   unit_cost: number;
-  raw_material_master?: RawMaterial;
+  raw_material_roll_master?: RollMaterial;
+  packaging_material_master?: PackagingMaterial;
 }
 
 interface MachineRef {
@@ -52,27 +62,29 @@ interface RmIssue {
   id: string;
   issue_no: string;
   receipt_id: string;
-  material_id: string;
+  material_type: MaterialType | null;
+  roll_material_id: string | null;
+  packaging_material_id: string | null;
   machine_id: string | null;
-  production_batch_no: string;
-  issued_weight: number;
+  batch_id: string | null;
+  issued_qty: number;
   issued_cost: number | null;
-  standard_yield_pct: number | null;
   issued_date: string;
   created_at: string;
-  raw_material_master?: RawMaterial;
   raw_material_receipts?: ReceiptRef;
   machine_master?: MachineRef;
+  raw_material_roll_master?: RollMaterial;
+  packaging_material_master?: PackagingMaterial;
+  production_batches?: BatchRef;
 }
 
 interface IssueFormData {
   issue_no: string;
   receipt_id: string;
   machine_id: string;
-  production_batch_no: string;
+  batch_id: string;
   issued_date: string;
-  issued_weight: string;
-  standard_yield_pct: string;
+  issued_qty: string;
 }
 
 const NONE_MACHINE_VALUE = "__none__";
@@ -81,17 +93,17 @@ const initialFormData: IssueFormData = {
   issue_no: "",
   receipt_id: "",
   machine_id: NONE_MACHINE_VALUE,
-  production_batch_no: "",
+  batch_id: "",
   issued_date: new Date().toISOString().split("T")[0],
-  issued_weight: "",
-  standard_yield_pct: "95",
+  issued_qty: "",
 };
 
 export default function RMIssue() {
   const { toast } = useToast();
   const [issues, setIssues] = useState<RmIssue[]>([]);
-  const [materials, setMaterials] = useState<RawMaterial[]>([]);
   const [receipts, setReceipts] = useState<ReceiptRef[]>([]);
+  const [rollMaterials, setRollMaterials] = useState<RollMaterial[]>([]);
+  const [packagingMaterials, setPackagingMaterials] = useState<PackagingMaterial[]>([]);
   const [machines, setMachines] = useState<MachineRef[]>([]);
   const [batches, setBatches] = useState<BatchRef[]>([]);
   const [loading, setLoading] = useState(true);
@@ -102,13 +114,18 @@ export default function RMIssue() {
   const [materialFilter, setMaterialFilter] = useState<string>("all");
   const [sortOrder, setSortOrder] = useState<"asc" | "desc">("desc");
   const [selectedMaterialUom, setSelectedMaterialUom] = useState("");
-  const [selectedMaterialId, setSelectedMaterialId] = useState<string>("");
+  const [selectedReceiptMaterial, setSelectedReceiptMaterial] = useState<{
+    material_type: MaterialType | null;
+    roll_material_id: string | null;
+    packaging_material_id: string | null;
+  }>({ material_type: null, roll_material_id: null, packaging_material_id: null });
   const [availableQty, setAvailableQty] = useState<number | null>(null);
 
   useEffect(() => {
     fetchIssues();
-    fetchMaterials();
     fetchReceipts();
+    fetchRollMaterials();
+    fetchPackagingMaterials();
     fetchMachines();
     fetchBatches();
   }, []);
@@ -121,9 +138,20 @@ export default function RMIssue() {
         .select(
           `
           *,
-          raw_material_master ( id, material_code, name, uom ),
-          raw_material_receipts ( id, receipt_no, material_id, unit_cost ),
-          machine_master ( id, name )
+          raw_material_receipts (
+            id,
+            receipt_no,
+            material_type,
+            roll_material_id,
+            packaging_material_id,
+            unit_cost,
+            raw_material_roll_master ( id, name, weight_kg ),
+            packaging_material_master ( id, name, weight_per_unit )
+          ),
+          raw_material_roll_master ( id, name, weight_kg ),
+          packaging_material_master ( id, name, weight_per_unit ),
+          machine_master ( id, name ),
+          production_batches ( id, batch_no )
         `
         )
         .order("created_at", { ascending: false });
@@ -177,18 +205,32 @@ export default function RMIssue() {
     }
   };
 
-  const fetchMaterials = async () => {
+  const fetchRollMaterials = async () => {
     try {
       const { data, error } = await supabase
-        .from("raw_material_master")
-        .select("*")
-        .order("name");
+        .from("raw_material_roll_master")
+        .select("id, name, weight_kg")
+        .order("created_at", { ascending: false });
 
       if (error) throw error;
-      setMaterials((data as any) || []);
+      setRollMaterials((data as any) || []);
+    } catch (error: any) {
+      toast({ title: "Error loading roll materials", description: error.message, variant: "destructive" });
+    }
+  };
+
+  const fetchPackagingMaterials = async () => {
+    try {
+      const { data, error } = await supabase
+        .from("packaging_material_master")
+        .select("id, name, weight_per_unit")
+        .order("created_at", { ascending: false });
+
+      if (error) throw error;
+      setPackagingMaterials((data as any) || []);
     } catch (error: any) {
       toast({
-        title: "Error loading materials",
+        title: "Error loading packaging materials",
         description: error.message,
         variant: "destructive",
       });
@@ -203,9 +245,12 @@ export default function RMIssue() {
           `
           id,
           receipt_no,
-          material_id,
+          material_type,
+          roll_material_id,
+          packaging_material_id,
           unit_cost,
-          raw_material_master ( id, material_code, name, uom )
+          raw_material_roll_master ( id, name, weight_kg ),
+          packaging_material_master ( id, name, weight_per_unit )
         `
         )
         .order("created_at", { ascending: false });
@@ -239,7 +284,7 @@ export default function RMIssue() {
       issued_date: new Date().toISOString().split("T")[0],
     });
     setSelectedMaterialUom("");
-    setSelectedMaterialId("");
+    setSelectedReceiptMaterial({ material_type: null, roll_material_id: null, packaging_material_id: null });
     setAvailableQty(null);
     setDialogOpen(true);
   };
@@ -251,15 +296,30 @@ export default function RMIssue() {
     setFormData((prev) => ({ ...prev, [name]: value }));
   };
 
-  const fetchAvailableQty = async (materialId: string) => {
+  const fetchAvailableQty = async (m: {
+    material_type: MaterialType | null;
+    roll_material_id: string | null;
+    packaging_material_id: string | null;
+  }) => {
     setAvailableQty(null);
-    if (!materialId) return;
+    if (!m.material_type) return;
+    if (m.material_type === "ROLL" && !m.roll_material_id) return;
+    if (m.material_type === "PACKAGING" && !m.packaging_material_id) return;
 
     try {
-      const { data, error } = await supabase
+      let q = supabase
         .from("raw_material_stock")
         .select("available_qty")
-        .eq("material_id", materialId);
+        .eq("material_type", m.material_type)
+        .eq("warehouse_location", "MAIN");
+
+      if (m.material_type === "ROLL") {
+        q = q.eq("roll_material_id", m.roll_material_id).is("packaging_material_id", null);
+      } else {
+        q = q.eq("packaging_material_id", m.packaging_material_id).is("roll_material_id", null);
+      }
+
+      const { data, error } = await q;
 
       if (error) throw error;
 
@@ -276,31 +336,45 @@ export default function RMIssue() {
   const handleReceiptChange = async (receiptId: string) => {
     setFormData((prev) => ({ ...prev, receipt_id: receiptId }));
     const receipt = receipts.find((r) => r.id === receiptId);
-    const materialId = receipt?.material_id || "";
-    setSelectedMaterialId(materialId);
 
-    const material =
-      receipt?.raw_material_master ||
-      materials.find((m) => m.id === materialId) ||
-      undefined;
-    setSelectedMaterialUom(material?.uom || "");
-    await fetchAvailableQty(materialId);
+    const mat = {
+      material_type: receipt?.material_type || null,
+      roll_material_id: receipt?.roll_material_id || null,
+      packaging_material_id: receipt?.packaging_material_id || null,
+    };
+    setSelectedReceiptMaterial(mat);
+
+    const uom = mat.material_type === "PACKAGING" ? "UNITS" : "KG";
+    setSelectedMaterialUom(uom);
+
+    await fetchAvailableQty(mat);
   };
 
   const filteredIssues = useMemo(() => {
     const searchLower = searchTerm.toLowerCase();
     return issues
       .filter((issue) => {
+        const materialName =
+          issue.material_type === "PACKAGING"
+            ? issue.packaging_material_master?.name ||
+              issue.raw_material_receipts?.packaging_material_master?.name ||
+              ""
+            : issue.raw_material_roll_master?.name ||
+              issue.raw_material_receipts?.raw_material_roll_master?.name ||
+              "";
+
         const matchesSearch =
           (issue.issue_no || "").toLowerCase().includes(searchLower) ||
-          (issue.raw_material_master?.name || "")
-            .toLowerCase()
-            .includes(searchLower) ||
-          (issue.production_batch_no || "").toLowerCase().includes(searchLower) ||
+          materialName.toLowerCase().includes(searchLower) ||
+          (issue.production_batches?.batch_no || "").toLowerCase().includes(searchLower) ||
           (issue.machine_master?.name || "").toLowerCase().includes(searchLower);
 
-        const matchesMaterial =
-          materialFilter === "all" || issue.material_id === materialFilter;
+        const filterKey =
+          issue.material_type === "PACKAGING"
+            ? `PACKAGING:${issue.packaging_material_id || ""}`
+            : `ROLL:${issue.roll_material_id || ""}`;
+
+        const matchesMaterial = materialFilter === "all" || filterKey === materialFilter;
 
         return matchesSearch && matchesMaterial;
       })
@@ -320,11 +394,23 @@ export default function RMIssue() {
       toast({ title: "Please select a receipt", variant: "destructive" });
       return false;
     }
-    if (!selectedMaterialId) {
-      toast({ title: "Receipt does not have a material", variant: "destructive" });
+    if (!selectedReceiptMaterial.material_type) {
+      toast({ title: "Receipt does not have a material type", variant: "destructive" });
       return false;
     }
-    if (!formData.production_batch_no) {
+    if (selectedReceiptMaterial.material_type === "ROLL" && !selectedReceiptMaterial.roll_material_id) {
+      toast({ title: "Receipt does not have a roll material", variant: "destructive" });
+      return false;
+    }
+    if (
+      selectedReceiptMaterial.material_type === "PACKAGING" &&
+      !selectedReceiptMaterial.packaging_material_id
+    ) {
+      toast({ title: "Receipt does not have a packaging material", variant: "destructive" });
+      return false;
+    }
+
+    if (!formData.batch_id) {
       toast({ title: "Production batch is required", variant: "destructive" });
       return false;
     }
@@ -333,10 +419,10 @@ export default function RMIssue() {
       return false;
     }
 
-    const qty = parseFloat(formData.issued_weight);
+    const qty = parseFloat(formData.issued_qty);
     if (isNaN(qty) || qty <= 0) {
       toast({
-        title: "Issued weight must be greater than zero",
+        title: "Issued quantity must be greater than zero",
         variant: "destructive",
       });
       return false;
@@ -350,22 +436,23 @@ export default function RMIssue() {
     setSaving(true);
     try {
       const receipt = receipts.find((r) => r.id === formData.receipt_id);
-      const materialId = receipt?.material_id || selectedMaterialId;
+      const matType = receipt?.material_type || selectedReceiptMaterial.material_type;
+      const rollId = receipt?.roll_material_id || selectedReceiptMaterial.roll_material_id;
+      const packId = receipt?.packaging_material_id || selectedReceiptMaterial.packaging_material_id;
 
       const issueData = {
         issue_no: formData.issue_no,
         receipt_id: formData.receipt_id,
-        material_id: materialId,
+        material_type: matType,
+        roll_material_id: matType === "ROLL" ? rollId : null,
+        packaging_material_id: matType === "PACKAGING" ? packId : null,
         machine_id:
           !formData.machine_id || formData.machine_id === NONE_MACHINE_VALUE
             ? null
             : formData.machine_id,
-        production_batch_no: formData.production_batch_no,
+        batch_id: formData.batch_id,
         issued_date: formData.issued_date,
-        issued_weight: parseFloat(formData.issued_weight),
-        standard_yield_pct: formData.standard_yield_pct.trim()
-          ? parseFloat(formData.standard_yield_pct)
-          : null,
+        issued_qty: parseFloat(formData.issued_qty),
       };
 
       const { error } = await supabase
@@ -433,9 +520,20 @@ export default function RMIssue() {
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="all">All Materials</SelectItem>
-                  {materials.map((material) => (
-                    <SelectItem key={material.id} value={material.id}>
-                      {material.name}
+                  <SelectItem value="ROLL:__all__" disabled>
+                    Rolls
+                  </SelectItem>
+                  {rollMaterials.map((m) => (
+                    <SelectItem key={m.id} value={`ROLL:${m.id}`}>
+                      {m.name}
+                    </SelectItem>
+                  ))}
+                  <SelectItem value="PACKAGING:__all__" disabled>
+                    Packaging
+                  </SelectItem>
+                  {packagingMaterials.map((m) => (
+                    <SelectItem key={m.id} value={`PACKAGING:${m.id}`}>
+                      {m.name}
                     </SelectItem>
                   ))}
                 </SelectContent>
@@ -474,7 +572,7 @@ export default function RMIssue() {
                     <th className="text-left py-2 px-2">Machine</th>
                     <th className="text-left py-2 px-2">Material</th>
                     <th className="text-left py-2 px-2">Receipt Ref</th>
-                    <th className="text-right py-2 px-2">Issued Wt</th>
+                    <th className="text-right py-2 px-2">Issued Qty</th>
                     <th className="text-right py-2 px-2">Issued Cost</th>
                   </tr>
                 </thead>
@@ -489,16 +587,22 @@ export default function RMIssue() {
                         {issue.issue_no}
                       </td>
                       <td className="py-2 px-2">{issue.issued_date}</td>
-                      <td className="py-2 px-2 font-mono">{issue.production_batch_no}</td>
+                      <td className="py-2 px-2 font-mono">{issue.production_batches?.batch_no || "-"}</td>
                       <td className="py-2 px-2">{issue.machine_master?.name || "-"}</td>
                       <td className="py-2 px-2">
-                        {issue.raw_material_master?.name || "Unknown"}
+                        {issue.material_type === "PACKAGING"
+                          ? issue.packaging_material_master?.name ||
+                            issue.raw_material_receipts?.packaging_material_master?.name ||
+                            "Unknown"
+                          : issue.raw_material_roll_master?.name ||
+                            issue.raw_material_receipts?.raw_material_roll_master?.name ||
+                            "Unknown"}
                       </td>
                       <td className="py-2 px-2">
                         {issue.raw_material_receipts?.receipt_no || "-"}
                       </td>
                       <td className="py-2 px-2 text-right">
-                        {issue.issued_weight} {issue.raw_material_master?.uom}
+                        {issue.issued_qty} {issue.material_type === "PACKAGING" ? "UNITS" : "KG"}
                       </td>
                       <td className="py-2 px-2 text-right">
                         {Number(issue.issued_cost || 0).toFixed(2)}
@@ -576,19 +680,17 @@ export default function RMIssue() {
 
             <div className="grid grid-cols-2 gap-4">
               <div className="space-y-2">
-                <Label htmlFor="production_batch_no">Production Batch *</Label>
+                <Label htmlFor="batch_id">Production Batch *</Label>
                 <Select
-                  value={formData.production_batch_no}
-                  onValueChange={(v) =>
-                    setFormData((prev) => ({ ...prev, production_batch_no: v }))
-                  }
+                  value={formData.batch_id}
+                  onValueChange={(v) => setFormData((prev) => ({ ...prev, batch_id: v }))}
                 >
                   <SelectTrigger data-testid="select-batch">
                     <SelectValue placeholder="Select batch" />
                   </SelectTrigger>
                   <SelectContent>
                     {batches.map((b) => (
-                      <SelectItem key={b.id} value={b.batch_no}>
+                      <SelectItem key={b.id} value={b.id}>
                         {b.batch_no}
                       </SelectItem>
                     ))}
@@ -621,23 +723,23 @@ export default function RMIssue() {
 
             <div className="grid grid-cols-2 gap-4">
               <div className="space-y-2">
-                <Label htmlFor="issued_weight">Issued Weight *</Label>
+                <Label htmlFor="issued_qty">Issued Quantity *</Label>
                 <Input
-                  id="issued_weight"
-                  name="issued_weight"
+                  id="issued_qty"
+                  name="issued_qty"
                   type="number"
-                  value={formData.issued_weight}
+                  value={formData.issued_qty}
                   onChange={handleInputChange}
                   placeholder="0"
-                  data-testid="input-issued-weight"
+                  data-testid="input-issued-qty"
                 />
               </div>
               <div className="space-y-2">
-                <Label>Available Stock (All Locations)</Label>
+                <Label>Available Stock (MAIN)</Label>
                 <Input
                   value={
                     availableQty === null
-                      ? selectedMaterialId
+                      ? selectedReceiptMaterial.material_type
                         ? "Loading..."
                         : "-"
                       : `${availableQty} ${selectedMaterialUom || ""}`
@@ -647,19 +749,6 @@ export default function RMIssue() {
                   data-testid="input-available-qty"
                 />
               </div>
-            </div>
-
-            <div className="space-y-2">
-              <Label htmlFor="standard_yield_pct">Standard Yield %</Label>
-              <Input
-                id="standard_yield_pct"
-                name="standard_yield_pct"
-                type="number"
-                value={formData.standard_yield_pct}
-                onChange={handleInputChange}
-                placeholder="95"
-                data-testid="input-standard-yield"
-              />
             </div>
           </div>
 

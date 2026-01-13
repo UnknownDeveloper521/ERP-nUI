@@ -18,6 +18,13 @@ import {
   TabsList,
   TabsTrigger,
 } from "@/components/ui/tabs";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { Loader2, Plus, Search, Pencil, Trash2 } from "lucide-react";
 
@@ -46,16 +53,32 @@ type Machine = {
   created_at: string;
 };
 
-type RawMaterial = {
+type RollMaterial = {
   id: string;
-  material_code: string;
   name: string;
-  material_type: string | null;
   gsm: number | null;
   ply: number | null;
   width_mm: number | null;
   grade: string | null;
-  uom: string;
+  product_id: string | null;
+  weight_kg: number;
+  vendor_id: string | null;
+  purchase_order_no: string | null;
+  lot_no: string | null;
+  container_no: string | null;
+  created_at: string;
+};
+
+type PackagingMaterial = {
+  id: string;
+  name: string;
+  packaging_type: string | null;
+  material: string | null;
+  product_id: string | null;
+  weight_per_unit: number | null;
+  batch_weight: number | null;
+  vendor_id: string | null;
+  purchase_order_no: string | null;
   created_at: string;
 };
 
@@ -77,7 +100,7 @@ export default function MasterData() {
   const { toast } = useToast();
 
   const [activeTab, setActiveTab] = useState<
-    "vendors" | "warehouses" | "machines" | "raw-materials" | "products"
+    "vendors" | "warehouses" | "machines" | "roll-materials" | "packaging-materials" | "products"
   >("vendors");
 
   const [loading, setLoading] = useState(true);
@@ -86,7 +109,8 @@ export default function MasterData() {
   const [vendorList, setVendorList] = useState<Vendor[]>([]);
   const [warehouseList, setWarehouseList] = useState<Warehouse[]>([]);
   const [machineList, setMachineList] = useState<Machine[]>([]);
-  const [rawMaterialList, setRawMaterialList] = useState<RawMaterial[]>([]);
+  const [rollMaterialList, setRollMaterialList] = useState<RollMaterial[]>([]);
+  const [packagingMaterialList, setPackagingMaterialList] = useState<PackagingMaterial[]>([]);
   const [productList, setProductList] = useState<Product[]>([]);
 
   const [search, setSearch] = useState("");
@@ -117,17 +141,33 @@ export default function MasterData() {
     classification: "",
   });
 
-  const [rmDialogOpen, setRmDialogOpen] = useState(false);
-  const [editingRm, setEditingRm] = useState<RawMaterial | null>(null);
-  const [rmForm, setRmForm] = useState({
-    material_code: "",
+  const [rollDialogOpen, setRollDialogOpen] = useState(false);
+  const [editingRoll, setEditingRoll] = useState<RollMaterial | null>(null);
+  const [rollForm, setRollForm] = useState({
     name: "",
-    material_type: "",
     gsm: "",
     ply: "",
     width_mm: "",
     grade: "",
-    uom: "KG",
+    product_id: "",
+    weight_kg: "",
+    vendor_id: "",
+    purchase_order_no: "",
+    lot_no: "",
+    container_no: "",
+  });
+
+  const [packagingDialogOpen, setPackagingDialogOpen] = useState(false);
+  const [editingPackaging, setEditingPackaging] = useState<PackagingMaterial | null>(null);
+  const [packagingForm, setPackagingForm] = useState({
+    name: "",
+    packaging_type: "",
+    material: "",
+    product_id: "",
+    weight_per_unit: "",
+    batch_weight: "",
+    vendor_id: "",
+    purchase_order_no: "",
   });
 
   const [productDialogOpen, setProductDialogOpen] = useState(false);
@@ -152,7 +192,8 @@ export default function MasterData() {
           fetchVendors(),
           fetchWarehouses(),
           fetchMachines(),
-          fetchRawMaterials(),
+          fetchRollMaterials(),
+          fetchPackagingMaterials(),
           fetchProducts(),
         ]);
       } finally {
@@ -191,14 +232,24 @@ export default function MasterData() {
     setMachineList((data as any) || []);
   };
 
-  const fetchRawMaterials = async () => {
+  const fetchRollMaterials = async () => {
     const { data, error } = await supabase
-      .from("raw_material_master")
+      .from("raw_material_roll_master")
       .select("*")
       .order("created_at", { ascending: false });
 
     if (error) throw error;
-    setRawMaterialList((data as any) || []);
+    setRollMaterialList((data as any) || []);
+  };
+
+  const fetchPackagingMaterials = async () => {
+    const { data, error } = await supabase
+      .from("packaging_material_master")
+      .select("*")
+      .order("created_at", { ascending: false });
+
+    if (error) throw error;
+    setPackagingMaterialList((data as any) || []);
   };
 
   const fetchProducts = async () => {
@@ -407,89 +458,192 @@ export default function MasterData() {
     }
   };
 
-  const openNewRm = () => {
-    setEditingRm(null);
-    setRmForm({
-      material_code: "",
+  const openNewRoll = () => {
+    setEditingRoll(null);
+    setRollForm({
       name: "",
-      material_type: "",
       gsm: "",
       ply: "",
       width_mm: "",
       grade: "",
-      uom: "KG",
+      product_id: "",
+      weight_kg: "",
+      vendor_id: "",
+      purchase_order_no: "",
+      lot_no: "",
+      container_no: "",
     });
-    setRmDialogOpen(true);
+    setRollDialogOpen(true);
   };
 
-  const openEditRm = (rm: RawMaterial) => {
-    setEditingRm(rm);
-    setRmForm({
-      material_code: rm.material_code || "",
+  const openEditRoll = (rm: RollMaterial) => {
+    setEditingRoll(rm);
+    setRollForm({
       name: rm.name || "",
-      material_type: rm.material_type || "",
       gsm: rm.gsm === null || rm.gsm === undefined ? "" : String(rm.gsm),
       ply: rm.ply === null || rm.ply === undefined ? "" : String(rm.ply),
       width_mm: rm.width_mm === null || rm.width_mm === undefined ? "" : String(rm.width_mm),
       grade: rm.grade || "",
-      uom: rm.uom || "KG",
+      product_id: rm.product_id || "",
+      weight_kg: rm.weight_kg === null || rm.weight_kg === undefined ? "" : String(rm.weight_kg),
+      vendor_id: rm.vendor_id || "",
+      purchase_order_no: rm.purchase_order_no || "",
+      lot_no: rm.lot_no || "",
+      container_no: rm.container_no || "",
     });
-    setRmDialogOpen(true);
+    setRollDialogOpen(true);
   };
 
-  const saveRm = async () => {
-    if (!rmForm.material_code.trim() || !rmForm.name.trim()) {
-      toast({ title: "Material code and name are required", variant: "destructive" });
+  const saveRoll = async () => {
+    if (!rollForm.name.trim() || !rollForm.weight_kg.trim()) {
+      toast({ title: "Name and weight_kg are required", variant: "destructive" });
       return;
     }
 
     setSaving(true);
     try {
       const payload: any = {
-        material_code: rmForm.material_code.trim(),
-        name: rmForm.name.trim(),
-        material_type: rmForm.material_type.trim() || null,
-        gsm: rmForm.gsm.trim() ? Number(rmForm.gsm) : null,
-        ply: rmForm.ply.trim() ? Number(rmForm.ply) : null,
-        width_mm: rmForm.width_mm.trim() ? Number(rmForm.width_mm) : null,
-        grade: rmForm.grade.trim() || null,
-        uom: rmForm.uom.trim() || "KG",
+        name: rollForm.name.trim(),
+        gsm: rollForm.gsm.trim() ? Number(rollForm.gsm) : null,
+        ply: rollForm.ply.trim() ? Number(rollForm.ply) : null,
+        width_mm: rollForm.width_mm.trim() ? Number(rollForm.width_mm) : null,
+        grade: rollForm.grade.trim() || null,
+        product_id: rollForm.product_id.trim() || null,
+        weight_kg: Number(rollForm.weight_kg),
+        vendor_id: rollForm.vendor_id.trim() || null,
+        purchase_order_no: rollForm.purchase_order_no.trim() || null,
+        lot_no: rollForm.lot_no.trim() || null,
+        container_no: rollForm.container_no.trim() || null,
       };
 
-      if (editingRm) {
+      if (editingRoll) {
         const { error } = await supabase
-          .from("raw_material_master")
+          .from("raw_material_roll_master")
           .update(payload)
-          .eq("id", editingRm.id);
+          .eq("id", editingRoll.id);
         if (error) throw error;
-        toast({ title: "Raw material updated" });
+        toast({ title: "Roll material updated" });
       } else {
-        const { error } = await supabase.from("raw_material_master").insert([payload]);
+        const { error } = await supabase.from("raw_material_roll_master").insert([payload]);
         if (error) throw error;
-        toast({ title: "Raw material created" });
+        toast({ title: "Roll material created" });
       }
 
-      setRmDialogOpen(false);
-      await fetchRawMaterials();
+      setRollDialogOpen(false);
+      await fetchRollMaterials();
     } catch (e: any) {
-      toast({ title: "Error saving raw material", description: e.message, variant: "destructive" });
+      toast({ title: "Error saving roll material", description: e.message, variant: "destructive" });
     } finally {
       setSaving(false);
     }
   };
 
-  const deleteRm = async (rm: RawMaterial) => {
+  const deleteRoll = async (rm: RollMaterial) => {
     setSaving(true);
     try {
       const { error } = await supabase
-        .from("raw_material_master")
+        .from("raw_material_roll_master")
         .delete()
         .eq("id", rm.id);
       if (error) throw error;
-      toast({ title: "Raw material deleted" });
-      await fetchRawMaterials();
+      toast({ title: "Roll material deleted" });
+      await fetchRollMaterials();
     } catch (e: any) {
-      toast({ title: "Error deleting raw material", description: e.message, variant: "destructive" });
+      toast({ title: "Error deleting roll material", description: e.message, variant: "destructive" });
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const openNewPackaging = () => {
+    setEditingPackaging(null);
+    setPackagingForm({
+      name: "",
+      packaging_type: "",
+      material: "",
+      product_id: "",
+      weight_per_unit: "",
+      batch_weight: "",
+      vendor_id: "",
+      purchase_order_no: "",
+    });
+    setPackagingDialogOpen(true);
+  };
+
+  const openEditPackaging = (pm: PackagingMaterial) => {
+    setEditingPackaging(pm);
+    setPackagingForm({
+      name: pm.name || "",
+      packaging_type: pm.packaging_type || "",
+      material: pm.material || "",
+      product_id: pm.product_id || "",
+      weight_per_unit:
+        pm.weight_per_unit === null || pm.weight_per_unit === undefined ? "" : String(pm.weight_per_unit),
+      batch_weight:
+        pm.batch_weight === null || pm.batch_weight === undefined ? "" : String(pm.batch_weight),
+      vendor_id: pm.vendor_id || "",
+      purchase_order_no: pm.purchase_order_no || "",
+    });
+    setPackagingDialogOpen(true);
+  };
+
+  const savePackaging = async () => {
+    if (!packagingForm.name.trim()) {
+      toast({ title: "Name is required", variant: "destructive" });
+      return;
+    }
+
+    setSaving(true);
+    try {
+      const payload: any = {
+        name: packagingForm.name.trim(),
+        packaging_type: packagingForm.packaging_type.trim() || null,
+        material: packagingForm.material.trim() || null,
+        product_id: packagingForm.product_id.trim() || null,
+        weight_per_unit: packagingForm.weight_per_unit.trim() ? Number(packagingForm.weight_per_unit) : null,
+        batch_weight: packagingForm.batch_weight.trim() ? Number(packagingForm.batch_weight) : null,
+        vendor_id: packagingForm.vendor_id.trim() || null,
+        purchase_order_no: packagingForm.purchase_order_no.trim() || null,
+      };
+
+      if (editingPackaging) {
+        const { error } = await supabase
+          .from("packaging_material_master")
+          .update(payload)
+          .eq("id", editingPackaging.id);
+        if (error) throw error;
+        toast({ title: "Packaging material updated" });
+      } else {
+        const { error } = await supabase.from("packaging_material_master").insert([payload]);
+        if (error) throw error;
+        toast({ title: "Packaging material created" });
+      }
+
+      setPackagingDialogOpen(false);
+      await fetchPackagingMaterials();
+    } catch (e: any) {
+      toast({ title: "Error saving packaging material", description: e.message, variant: "destructive" });
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const deletePackaging = async (pm: PackagingMaterial) => {
+    setSaving(true);
+    try {
+      const { error } = await supabase
+        .from("packaging_material_master")
+        .delete()
+        .eq("id", pm.id);
+      if (error) throw error;
+      toast({ title: "Packaging material deleted" });
+      await fetchPackagingMaterials();
+    } catch (e: any) {
+      toast({
+        title: "Error deleting packaging material",
+        description: e.message,
+        variant: "destructive",
+      });
     } finally {
       setSaving(false);
     }
@@ -605,13 +759,17 @@ export default function MasterData() {
     return machineList.filter((m) => (m.name || "").toLowerCase().includes(s));
   }, [machineList, search]);
 
-  const filteredRawMaterials = useMemo(() => {
-    if (!search.trim()) return rawMaterialList;
+  const filteredRollMaterials = useMemo(() => {
+    if (!search.trim()) return rollMaterialList;
     const s = search.toLowerCase();
-    return rawMaterialList.filter((m) =>
-      `${m.name || ""} ${m.material_code || ""}`.toLowerCase().includes(s)
-    );
-  }, [rawMaterialList, search]);
+    return rollMaterialList.filter((m) => `${m.name || ""}`.toLowerCase().includes(s));
+  }, [rollMaterialList, search]);
+
+  const filteredPackagingMaterials = useMemo(() => {
+    if (!search.trim()) return packagingMaterialList;
+    const s = search.toLowerCase();
+    return packagingMaterialList.filter((m) => `${m.name || ""}`.toLowerCase().includes(s));
+  }, [packagingMaterialList, search]);
 
   const filteredProducts = useMemo(() => {
     if (!search.trim()) return productList;
@@ -656,10 +814,16 @@ export default function MasterData() {
               New Machine
             </Button>
           )}
-          {activeTab === "raw-materials" && (
-            <Button onClick={openNewRm} data-testid="button-add-raw-material">
+          {activeTab === "roll-materials" && (
+            <Button onClick={openNewRoll} data-testid="button-add-roll-material">
               <Plus className="h-4 w-4 mr-2" />
-              New Raw Material
+              New Roll
+            </Button>
+          )}
+          {activeTab === "packaging-materials" && (
+            <Button onClick={openNewPackaging} data-testid="button-add-packaging-material">
+              <Plus className="h-4 w-4 mr-2" />
+              New Packaging
             </Button>
           )}
           {activeTab === "products" && (
@@ -686,7 +850,8 @@ export default function MasterData() {
                 <TabsTrigger value="vendors">Vendors</TabsTrigger>
                 <TabsTrigger value="warehouses">Warehouses</TabsTrigger>
                 <TabsTrigger value="machines">Machines</TabsTrigger>
-                <TabsTrigger value="raw-materials">Raw Materials</TabsTrigger>
+                <TabsTrigger value="roll-materials">RM Roll</TabsTrigger>
+                <TabsTrigger value="packaging-materials">RM Packaging</TabsTrigger>
                 <TabsTrigger value="products">Products</TabsTrigger>
               </TabsList>
 
@@ -809,34 +974,81 @@ export default function MasterData() {
                 </div>
               </TabsContent>
 
-              <TabsContent value="raw-materials" className="mt-4">
+              <TabsContent value="roll-materials" className="mt-4">
                 <div className="overflow-x-auto">
                   <table className="w-full text-sm">
                     <thead>
                       <tr className="border-b">
-                        <th className="text-left py-2 px-2">Code</th>
                         <th className="text-left py-2 px-2">Name</th>
-                        <th className="text-left py-2 px-2">UOM</th>
-                        <th className="text-left py-2 px-2">Type</th>
+                        <th className="text-right py-2 px-2">Weight (KG)</th>
+                        <th className="text-left py-2 px-2">GSM</th>
+                        <th className="text-left py-2 px-2">Ply</th>
+                        <th className="text-left py-2 px-2">Width (mm)</th>
+                        <th className="text-left py-2 px-2">Grade</th>
                         <th className="text-center py-2 px-2">Actions</th>
                       </tr>
                     </thead>
                     <tbody>
-                      {filteredRawMaterials.map((rm) => (
+                      {filteredRollMaterials.map((rm) => (
                         <tr key={rm.id} className="border-b hover:bg-muted/50">
-                          <td className="py-2 px-2 font-mono">{rm.material_code}</td>
                           <td className="py-2 px-2 font-medium">{rm.name}</td>
-                          <td className="py-2 px-2">{rm.uom}</td>
-                          <td className="py-2 px-2">{rm.material_type || "-"}</td>
+                          <td className="py-2 px-2 text-right">{Number(rm.weight_kg || 0).toFixed(3)}</td>
+                          <td className="py-2 px-2">{rm.gsm ?? "-"}</td>
+                          <td className="py-2 px-2">{rm.ply ?? "-"}</td>
+                          <td className="py-2 px-2">{rm.width_mm ?? "-"}</td>
+                          <td className="py-2 px-2">{rm.grade ?? "-"}</td>
                           <td className="py-2 px-2">
                             <div className="flex justify-center gap-1">
-                              <Button variant="ghost" size="icon" onClick={() => openEditRm(rm)}>
+                              <Button variant="ghost" size="icon" onClick={() => openEditRoll(rm)}>
                                 <Pencil className="h-4 w-4" />
                               </Button>
                               <Button
                                 variant="ghost"
                                 size="icon"
-                                onClick={() => deleteRm(rm)}
+                                onClick={() => deleteRoll(rm)}
+                                disabled={saving}
+                              >
+                                <Trash2 className="h-4 w-4 text-destructive" />
+                              </Button>
+                            </div>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </TabsContent>
+
+              <TabsContent value="packaging-materials" className="mt-4">
+                <div className="overflow-x-auto">
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="border-b">
+                        <th className="text-left py-2 px-2">Name</th>
+                        <th className="text-left py-2 px-2">Type</th>
+                        <th className="text-left py-2 px-2">Material</th>
+                        <th className="text-right py-2 px-2">Wt/Unit</th>
+                        <th className="text-right py-2 px-2">Batch Wt</th>
+                        <th className="text-center py-2 px-2">Actions</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {filteredPackagingMaterials.map((pm) => (
+                        <tr key={pm.id} className="border-b hover:bg-muted/50">
+                          <td className="py-2 px-2 font-medium">{pm.name}</td>
+                          <td className="py-2 px-2">{pm.packaging_type ?? "-"}</td>
+                          <td className="py-2 px-2">{pm.material ?? "-"}</td>
+                          <td className="py-2 px-2 text-right">{pm.weight_per_unit ?? "-"}</td>
+                          <td className="py-2 px-2 text-right">{pm.batch_weight ?? "-"}</td>
+                          <td className="py-2 px-2">
+                            <div className="flex justify-center gap-1">
+                              <Button variant="ghost" size="icon" onClick={() => openEditPackaging(pm)}>
+                                <Pencil className="h-4 w-4" />
+                              </Button>
+                              <Button
+                                variant="ghost"
+                                size="icon"
+                                onClick={() => deletePackaging(pm)}
                                 disabled={saving}
                               >
                                 <Trash2 className="h-4 w-4 text-destructive" />
@@ -1068,91 +1280,265 @@ export default function MasterData() {
         </DialogContent>
       </Dialog>
 
-      <Dialog open={rmDialogOpen} onOpenChange={setRmDialogOpen}>
+      <Dialog open={rollDialogOpen} onOpenChange={setRollDialogOpen}>
         <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
           <DialogHeader>
-            <DialogTitle>{editingRm ? "Edit Raw Material" : "New Raw Material"}</DialogTitle>
+            <DialogTitle>{editingRoll ? "Edit RM Roll" : "New RM Roll"}</DialogTitle>
           </DialogHeader>
           <div className="grid gap-4 py-4">
             <div className="grid grid-cols-2 gap-4">
               <div className="space-y-2">
-                <Label htmlFor="rm_code">Material Code *</Label>
+                <Label htmlFor="roll_name">Name *</Label>
                 <Input
-                  id="rm_code"
-                  value={rmForm.material_code}
-                  onChange={(e) => setRmForm((p) => ({ ...p, material_code: e.target.value }))}
+                  id="roll_name"
+                  value={rollForm.name}
+                  onChange={(e) => setRollForm((p) => ({ ...p, name: e.target.value }))}
                 />
               </div>
               <div className="space-y-2">
-                <Label htmlFor="rm_name">Name *</Label>
+                <Label htmlFor="roll_weight">Weight (KG) *</Label>
                 <Input
-                  id="rm_name"
-                  value={rmForm.name}
-                  onChange={(e) => setRmForm((p) => ({ ...p, name: e.target.value }))}
-                />
-              </div>
-            </div>
-            <div className="grid grid-cols-2 gap-4">
-              <div className="space-y-2">
-                <Label htmlFor="rm_uom">UOM</Label>
-                <Input
-                  id="rm_uom"
-                  value={rmForm.uom}
-                  onChange={(e) => setRmForm((p) => ({ ...p, uom: e.target.value }))}
-                />
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="rm_type">Material Type</Label>
-                <Input
-                  id="rm_type"
-                  value={rmForm.material_type}
-                  onChange={(e) => setRmForm((p) => ({ ...p, material_type: e.target.value }))}
+                  id="roll_weight"
+                  type="number"
+                  value={rollForm.weight_kg}
+                  onChange={(e) => setRollForm((p) => ({ ...p, weight_kg: e.target.value }))}
                 />
               </div>
             </div>
             <div className="grid grid-cols-4 gap-4">
               <div className="space-y-2">
-                <Label htmlFor="rm_gsm">GSM</Label>
+                <Label htmlFor="roll_gsm">GSM</Label>
                 <Input
-                  id="rm_gsm"
+                  id="roll_gsm"
                   type="number"
-                  value={rmForm.gsm}
-                  onChange={(e) => setRmForm((p) => ({ ...p, gsm: e.target.value }))}
+                  value={rollForm.gsm}
+                  onChange={(e) => setRollForm((p) => ({ ...p, gsm: e.target.value }))}
                 />
               </div>
               <div className="space-y-2">
-                <Label htmlFor="rm_ply">Ply</Label>
+                <Label htmlFor="roll_ply">Ply</Label>
                 <Input
-                  id="rm_ply"
+                  id="roll_ply"
                   type="number"
-                  value={rmForm.ply}
-                  onChange={(e) => setRmForm((p) => ({ ...p, ply: e.target.value }))}
+                  value={rollForm.ply}
+                  onChange={(e) => setRollForm((p) => ({ ...p, ply: e.target.value }))}
                 />
               </div>
               <div className="space-y-2">
-                <Label htmlFor="rm_width">Width (mm)</Label>
+                <Label htmlFor="roll_width">Width (mm)</Label>
                 <Input
-                  id="rm_width"
+                  id="roll_width"
                   type="number"
-                  value={rmForm.width_mm}
-                  onChange={(e) => setRmForm((p) => ({ ...p, width_mm: e.target.value }))}
+                  value={rollForm.width_mm}
+                  onChange={(e) => setRollForm((p) => ({ ...p, width_mm: e.target.value }))}
                 />
               </div>
               <div className="space-y-2">
-                <Label htmlFor="rm_grade">Grade</Label>
+                <Label htmlFor="roll_grade">Grade</Label>
                 <Input
-                  id="rm_grade"
-                  value={rmForm.grade}
-                  onChange={(e) => setRmForm((p) => ({ ...p, grade: e.target.value }))}
+                  id="roll_grade"
+                  value={rollForm.grade}
+                  onChange={(e) => setRollForm((p) => ({ ...p, grade: e.target.value }))}
+                />
+              </div>
+            </div>
+            <div className="grid grid-cols-2 gap-4">
+              <div className="space-y-2">
+                <Label>Product</Label>
+                <Select
+                  value={rollForm.product_id ? rollForm.product_id : "__none__"}
+                  onValueChange={(v) => setRollForm((p) => ({ ...p, product_id: v === "__none__" ? "" : v }))}
+                >
+                  <SelectTrigger>
+                    <SelectValue placeholder="Select product" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="__none__">None</SelectItem>
+                    {productList.map((p) => (
+                      <SelectItem key={p.id} value={p.id}>
+                        {p.product_code} - {p.name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-2">
+                <Label>Vendor</Label>
+                <Select
+                  value={rollForm.vendor_id ? rollForm.vendor_id : "__none__"}
+                  onValueChange={(v) => setRollForm((p) => ({ ...p, vendor_id: v === "__none__" ? "" : v }))}
+                >
+                  <SelectTrigger>
+                    <SelectValue placeholder="Select vendor" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="__none__">None</SelectItem>
+                    {vendorList.map((v) => (
+                      <SelectItem key={v.id} value={v.id}>
+                        {v.name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+            <div className="grid grid-cols-3 gap-4">
+              <div className="space-y-2">
+                <Label htmlFor="roll_po">Purchase Order No</Label>
+                <Input
+                  id="roll_po"
+                  value={rollForm.purchase_order_no}
+                  onChange={(e) => setRollForm((p) => ({ ...p, purchase_order_no: e.target.value }))}
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="roll_lot">Lot No</Label>
+                <Input
+                  id="roll_lot"
+                  value={rollForm.lot_no}
+                  onChange={(e) => setRollForm((p) => ({ ...p, lot_no: e.target.value }))}
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="roll_container">Container No</Label>
+                <Input
+                  id="roll_container"
+                  value={rollForm.container_no}
+                  onChange={(e) => setRollForm((p) => ({ ...p, container_no: e.target.value }))}
                 />
               </div>
             </div>
           </div>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setRmDialogOpen(false)} disabled={saving}>
+            <Button variant="outline" onClick={() => setRollDialogOpen(false)} disabled={saving}>
               Cancel
             </Button>
-            <Button onClick={saveRm} disabled={saving}>
+            <Button onClick={saveRoll} disabled={saving}>
+              {saving ? (
+                <>
+                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                  Saving...
+                </>
+              ) : (
+                "Save"
+              )}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={packagingDialogOpen} onOpenChange={setPackagingDialogOpen}>
+        <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>{editingPackaging ? "Edit RM Packaging" : "New RM Packaging"}</DialogTitle>
+          </DialogHeader>
+          <div className="grid gap-4 py-4">
+            <div className="grid grid-cols-2 gap-4">
+              <div className="space-y-2">
+                <Label htmlFor="pack_name">Name *</Label>
+                <Input
+                  id="pack_name"
+                  value={packagingForm.name}
+                  onChange={(e) => setPackagingForm((p) => ({ ...p, name: e.target.value }))}
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="pack_type">Packaging Type</Label>
+                <Input
+                  id="pack_type"
+                  value={packagingForm.packaging_type}
+                  onChange={(e) => setPackagingForm((p) => ({ ...p, packaging_type: e.target.value }))}
+                />
+              </div>
+            </div>
+            <div className="grid grid-cols-2 gap-4">
+              <div className="space-y-2">
+                <Label htmlFor="pack_material">Material</Label>
+                <Input
+                  id="pack_material"
+                  value={packagingForm.material}
+                  onChange={(e) => setPackagingForm((p) => ({ ...p, material: e.target.value }))}
+                />
+              </div>
+              <div className="space-y-2">
+                <Label>Product</Label>
+                <Select
+                  value={packagingForm.product_id ? packagingForm.product_id : "__none__"}
+                  onValueChange={(v) =>
+                    setPackagingForm((p) => ({ ...p, product_id: v === "__none__" ? "" : v }))
+                  }
+                >
+                  <SelectTrigger>
+                    <SelectValue placeholder="Select product" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="__none__">None</SelectItem>
+                    {productList.map((p) => (
+                      <SelectItem key={p.id} value={p.id}>
+                        {p.product_code} - {p.name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+            <div className="grid grid-cols-2 gap-4">
+              <div className="space-y-2">
+                <Label htmlFor="pack_wt_unit">Weight per unit</Label>
+                <Input
+                  id="pack_wt_unit"
+                  type="number"
+                  value={packagingForm.weight_per_unit}
+                  onChange={(e) => setPackagingForm((p) => ({ ...p, weight_per_unit: e.target.value }))}
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="pack_batch_wt">Batch weight</Label>
+                <Input
+                  id="pack_batch_wt"
+                  type="number"
+                  value={packagingForm.batch_weight}
+                  onChange={(e) => setPackagingForm((p) => ({ ...p, batch_weight: e.target.value }))}
+                />
+              </div>
+            </div>
+            <div className="grid grid-cols-2 gap-4">
+              <div className="space-y-2">
+                <Label>Vendor</Label>
+                <Select
+                  value={packagingForm.vendor_id ? packagingForm.vendor_id : "__none__"}
+                  onValueChange={(v) =>
+                    setPackagingForm((p) => ({ ...p, vendor_id: v === "__none__" ? "" : v }))
+                  }
+                >
+                  <SelectTrigger>
+                    <SelectValue placeholder="Select vendor" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="__none__">None</SelectItem>
+                    {vendorList.map((v) => (
+                      <SelectItem key={v.id} value={v.id}>
+                        {v.name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="pack_po">Purchase Order No</Label>
+                <Input
+                  id="pack_po"
+                  value={packagingForm.purchase_order_no}
+                  onChange={(e) => setPackagingForm((p) => ({ ...p, purchase_order_no: e.target.value }))}
+                />
+              </div>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setPackagingDialogOpen(false)} disabled={saving}>
+              Cancel
+            </Button>
+            <Button onClick={savePackaging} disabled={saving}>
               {saving ? (
                 <>
                   <Loader2 className="h-4 w-4 mr-2 animate-spin" />

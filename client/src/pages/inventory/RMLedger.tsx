@@ -15,51 +15,73 @@ import { ArrowUpDown, Loader2, Search } from "lucide-react";
 import { supabase } from "@/lib/supabase";
 import { useToast } from "@/hooks/use-toast";
 
-type RawMaterial = {
+type MaterialType = "ROLL" | "PACKAGING";
+
+type RollMaterial = {
   id: string;
-  material_code: string;
   name: string;
-  uom: string;
+};
+
+type PackagingMaterial = {
+  id: string;
+  name: string;
 };
 
 type LedgerRow = {
   id: string;
-  material_id: string | null;
+  material_type: MaterialType | null;
+  roll_material_id: string | null;
+  packaging_material_id: string | null;
   txn_type: string | null;
   reference_id: string | null;
   qty_in: number | null;
   qty_out: number | null;
   balance_after: number | null;
   txn_date: string;
-  raw_material_master?: RawMaterial;
 };
 
 export default function RMLedger() {
   const { toast } = useToast();
   const [loading, setLoading] = useState(true);
   const [rows, setRows] = useState<LedgerRow[]>([]);
-  const [materials, setMaterials] = useState<RawMaterial[]>([]);
+  const [rollMaterials, setRollMaterials] = useState<RollMaterial[]>([]);
+  const [packagingMaterials, setPackagingMaterials] = useState<PackagingMaterial[]>([]);
   const [searchTerm, setSearchTerm] = useState("");
   const [materialFilter, setMaterialFilter] = useState<string>("all");
   const [sortOrder, setSortOrder] = useState<"asc" | "desc">("desc");
 
   useEffect(() => {
-    fetchMaterials();
+    fetchRollMaterials();
+    fetchPackagingMaterials();
     fetchLedger();
   }, []);
 
-  const fetchMaterials = async () => {
+  const fetchRollMaterials = async () => {
     try {
       const { data, error } = await supabase
-        .from("raw_material_master")
-        .select("id, material_code, name, uom")
-        .order("name");
+        .from("raw_material_roll_master")
+        .select("id, name")
+        .order("created_at", { ascending: false });
 
       if (error) throw error;
-      setMaterials((data as any) || []);
+      setRollMaterials((data as any) || []);
+    } catch (error: any) {
+      toast({ title: "Error loading roll materials", description: error.message, variant: "destructive" });
+    }
+  };
+
+  const fetchPackagingMaterials = async () => {
+    try {
+      const { data, error } = await supabase
+        .from("packaging_material_master")
+        .select("id, name")
+        .order("created_at", { ascending: false });
+
+      if (error) throw error;
+      setPackagingMaterials((data as any) || []);
     } catch (error: any) {
       toast({
-        title: "Error loading materials",
+        title: "Error loading packaging materials",
         description: error.message,
         variant: "destructive",
       });
@@ -71,12 +93,7 @@ export default function RMLedger() {
     try {
       const { data, error } = await supabase
         .from("raw_material_ledger")
-        .select(
-          `
-          *,
-          raw_material_master ( id, material_code, name, uom )
-        `
-        )
+        .select(`*`)
         .order("txn_date", { ascending: false });
 
       if (error) throw error;
@@ -94,16 +111,28 @@ export default function RMLedger() {
 
   const filteredRows = useMemo(() => {
     const s = searchTerm.toLowerCase();
+
+    const rollNameById = new Map(rollMaterials.map((m) => [m.id, m.name] as const));
+    const packNameById = new Map(packagingMaterials.map((m) => [m.id, m.name] as const));
+
     return rows
       .filter((r) => {
+        const materialName =
+          r.material_type === "PACKAGING"
+            ? packNameById.get(r.packaging_material_id || "") || ""
+            : rollNameById.get(r.roll_material_id || "") || "";
+
         const matchesSearch =
           (r.txn_type || "").toLowerCase().includes(s) ||
           (r.reference_id || "").toLowerCase().includes(s) ||
-          (r.raw_material_master?.name || "").toLowerCase().includes(s) ||
-          (r.raw_material_master?.material_code || "").toLowerCase().includes(s);
+          materialName.toLowerCase().includes(s);
 
-        const matchesMaterial =
-          materialFilter === "all" || r.material_id === materialFilter;
+        const filterKey =
+          r.material_type === "PACKAGING"
+            ? `PACKAGING:${r.packaging_material_id || ""}`
+            : `ROLL:${r.roll_material_id || ""}`;
+
+        const matchesMaterial = materialFilter === "all" || filterKey === materialFilter;
 
         return matchesSearch && matchesMaterial;
       })
@@ -112,7 +141,16 @@ export default function RMLedger() {
         const db = new Date(b.txn_date).getTime();
         return sortOrder === "desc" ? db - da : da - db;
       });
-  }, [rows, searchTerm, materialFilter, sortOrder]);
+  }, [rows, searchTerm, materialFilter, sortOrder, rollMaterials, packagingMaterials]);
+
+  const materialNameForRow = (r: LedgerRow) => {
+    if (r.material_type === "PACKAGING") {
+      const m = packagingMaterials.find((x) => x.id === r.packaging_material_id);
+      return m?.name || "Unknown";
+    }
+    const m = rollMaterials.find((x) => x.id === r.roll_material_id);
+    return m?.name || "Unknown";
+  };
 
   const typeBadgeClass = (t: string | null | undefined) => {
     const type = (t || "").toUpperCase();
@@ -154,8 +192,19 @@ export default function RMLedger() {
             </SelectTrigger>
             <SelectContent>
               <SelectItem value="all">All Materials</SelectItem>
-              {materials.map((m) => (
-                <SelectItem key={m.id} value={m.id}>
+              <SelectItem value="ROLL:__all__" disabled>
+                Rolls
+              </SelectItem>
+              {rollMaterials.map((m) => (
+                <SelectItem key={m.id} value={`ROLL:${m.id}`}>
+                  {m.name}
+                </SelectItem>
+              ))}
+              <SelectItem value="PACKAGING:__all__" disabled>
+                Packaging
+              </SelectItem>
+              {packagingMaterials.map((m) => (
+                <SelectItem key={m.id} value={`PACKAGING:${m.id}`}>
                   {m.name}
                 </SelectItem>
               ))}
@@ -195,7 +244,8 @@ export default function RMLedger() {
                     <th className="text-left py-2 px-2">Date</th>
                     <th className="text-left py-2 px-2">Reference</th>
                     <th className="text-left py-2 px-2">Material</th>
-                    <th className="text-left py-2 px-2">Type</th>
+                    <th className="text-left py-2 px-2">Material Type</th>
+                    <th className="text-left py-2 px-2">Txn Type</th>
                     <th className="text-right py-2 px-2">In</th>
                     <th className="text-right py-2 px-2">Out</th>
                     <th className="text-right py-2 px-2">Balance</th>
@@ -213,7 +263,10 @@ export default function RMLedger() {
                         {(r.reference_id || "-").slice(0, 8)}
                       </td>
                       <td className="py-2 px-2">
-                        {r.raw_material_master?.name || "Unknown"}
+                        {materialNameForRow(r)}
+                      </td>
+                      <td className="py-2 px-2">
+                        {r.material_type || "-"}
                       </td>
                       <td className="py-2 px-2">
                         <span
