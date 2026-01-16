@@ -47,7 +47,17 @@ export default function RMLedger() {
   const [rollMaterials, setRollMaterials] = useState<RollMaterial[]>([]);
   const [packagingMaterials, setPackagingMaterials] = useState<PackagingMaterial[]>([]);
   const [searchTerm, setSearchTerm] = useState("");
-  const [materialFilter, setMaterialFilter] = useState<string>("all");
+  const [materialFilter, setMaterialFilter] = useState<string>(() => {
+    try {
+      const qs = new URLSearchParams(window.location.search);
+      const mt = (qs.get("material_type") || "").toUpperCase();
+      const mid = qs.get("material_id") || "";
+      if ((mt === "ROLL" || mt === "PACKAGING") && mid) return `${mt}:${mid}`;
+    } catch {
+      // ignore
+    }
+    return "all";
+  });
   const [sortOrder, setSortOrder] = useState<"asc" | "desc">("desc");
 
   useEffect(() => {

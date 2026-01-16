@@ -83,7 +83,6 @@ CREATE TABLE public.products (
 );
 
 
-
 -- /////////// Transaction Tables ///////////
 CREATE TABLE public.raw_material_receipts (
   id uuid NOT NULL DEFAULT uuid_generate_v4(),

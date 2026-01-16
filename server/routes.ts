@@ -2,6 +2,7 @@ import type { Express } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
 import * as schema from "@shared/schema";
+import { createAuthedSupabaseClient, getBearerTokenFromHeaders, getUserFromAccessToken } from "./supabase";
 
 export async function registerRoutes(
   httpServer: Server,
@@ -258,6 +259,472 @@ export async function registerRoutes(
   });
 
   // ==================== INVENTORY ROUTES ====================
+  
+  // Alerts & Thresholds
+  app.get("/api/thresholds", async (req, res) => {
+    try {
+      const token = getBearerTokenFromHeaders(req.headers as any);
+      if (!token) return res.status(401).json({ message: "Missing Authorization token" });
+
+      const sb = createAuthedSupabaseClient(token);
+      const { data, error } = await sb
+        .from("inventory_thresholds")
+        .select("material_type, material_id, warehouse_location, min_qty, reorder_level, max_qty, created_at")
+        .order("created_at", { ascending: false });
+      if (error) {
+        const msg = String(error.message || "");
+        if (msg.toLowerCase().includes("material_type") && msg.toLowerCase().includes("does not exist")) {
+          return res.status(409).json({
+            message:
+              "inventory_thresholds schema mismatch: expected columns (material_type, material_id, warehouse_location). Run your latest SQL migration and then refresh Supabase schema cache.",
+          });
+        }
+        throw error;
+      }
+      const rows = (data || []).map((t: any) => ({
+        id: `${t.material_type}::${t.material_id}::${t.warehouse_location}`,
+        ...t,
+      }));
+      res.json(rows);
+    } catch (error: any) {
+      res.status(400).json({ message: error.message });
+    }
+  });
+
+  app.post("/api/thresholds", async (req, res) => {
+    try {
+      const token = getBearerTokenFromHeaders(req.headers as any);
+      if (!token) return res.status(401).json({ message: "Missing Authorization token" });
+
+      const sb = createAuthedSupabaseClient(token);
+      const { data: isAdmin, error: adminErr } = await sb.rpc("is_admin");
+      if (adminErr) throw adminErr;
+      if (!isAdmin) return res.status(403).json({ message: "Admin only" });
+
+      const material_type = String(req.body.material_type || "").toUpperCase();
+      const material_id = req.body.material_id ? String(req.body.material_id) : null;
+      const warehouse_location = String(req.body.warehouse_location || "").trim();
+      const min_qty = Number(req.body.min_qty ?? 0);
+      const reorder_level = Number(req.body.reorder_level ?? 0);
+      const max_qty = Number(req.body.max_qty ?? 0);
+
+      if (!material_type || !["ROLL", "PACKAGING"].includes(material_type)) {
+        return res.status(400).json({ message: "material_type must be ROLL or PACKAGING" });
+      }
+      if (!material_id) return res.status(400).json({ message: "material_id is required" });
+      if (!warehouse_location) return res.status(400).json({ message: "warehouse_location is required" });
+
+      const upsertPayload = {
+        material_type,
+        material_id,
+        warehouse_location,
+        min_qty,
+        reorder_level,
+        max_qty,
+      };
+
+      const { data, error } = await sb
+        .from("inventory_thresholds")
+        .upsert([upsertPayload], { onConflict: "material_type,material_id,warehouse_location" })
+        .select("material_type, material_id, warehouse_location, min_qty, reorder_level, max_qty, created_at")
+        .single();
+      if (error) {
+        const msg = String(error.message || "");
+        if (msg.toLowerCase().includes("material_type") && msg.toLowerCase().includes("schema cache")) {
+          return res.status(409).json({
+            message:
+              "Supabase schema cache is not updated (material_type not found). After running the SQL migration, go to Supabase: Settings → API → Refresh schema cache.",
+          });
+        }
+        if (msg.toLowerCase().includes("material_type") && msg.toLowerCase().includes("does not exist")) {
+          return res.status(409).json({
+            message:
+              "inventory_thresholds table is missing required columns. Please run the provided SQL that creates inventory_thresholds(material_type, material_id, warehouse_location, ...) and then refresh schema cache.",
+          });
+        }
+        throw error;
+      }
+
+      res.status(201).json({
+        id: `${data.material_type}::${data.material_id}::${data.warehouse_location}`,
+        ...data,
+      });
+    } catch (error: any) {
+      res.status(400).json({ message: error.message });
+    }
+  });
+
+  app.delete("/api/thresholds/:id", async (req, res) => {
+    try {
+      const token = getBearerTokenFromHeaders(req.headers as any);
+      if (!token) return res.status(401).json({ message: "Missing Authorization token" });
+
+      const sb = createAuthedSupabaseClient(token);
+      const { data: isAdmin, error: adminErr } = await sb.rpc("is_admin");
+      if (adminErr) throw adminErr;
+      if (!isAdmin) return res.status(403).json({ message: "Admin only" });
+
+      const parts = String(req.params.id || "").split("::");
+      if (parts.length !== 3) {
+        return res.status(400).json({ message: "Invalid threshold id" });
+      }
+      const [material_type, material_id, warehouse_location] = parts;
+
+      const { error } = await sb
+        .from("inventory_thresholds")
+        .delete()
+        .eq("material_type", material_type)
+        .eq("material_id", material_id)
+        .eq("warehouse_location", warehouse_location);
+      if (error) throw error;
+      res.status(204).send();
+    } catch (error: any) {
+      res.status(400).json({ message: error.message });
+    }
+  });
+
+  app.get("/api/stock-alerts", async (req, res) => {
+    try {
+      const token = getBearerTokenFromHeaders(req.headers as any);
+      if (!token) return res.status(401).json({ message: "Missing Authorization token" });
+
+      const sb = createAuthedSupabaseClient(token);
+
+      const [{ data: thresholds, error: thErr }, { data: stock, error: stErr }, { data: rollMaster, error: rollErr }, { data: packMaster, error: packErr }] =
+        await Promise.all([
+          sb
+            .from("inventory_thresholds")
+            .select("material_type, material_id, warehouse_location, min_qty, reorder_level, max_qty"),
+          sb
+            .from("raw_material_stock")
+            .select("material_type, roll_material_id, packaging_material_id, material_key, warehouse_location, available_qty"),
+          sb.from("raw_material_roll_master").select("id, name"),
+          sb.from("packaging_material_master").select("id, name"),
+        ]);
+
+      if (thErr) {
+        const msg = String(thErr.message || "");
+        if (msg.toLowerCase().includes("material_type") && msg.toLowerCase().includes("does not exist")) {
+          return res.status(409).json({
+            message:
+              "inventory_thresholds schema mismatch: expected columns (material_type, material_id, warehouse_location). Run your latest SQL migration and refresh Supabase schema cache.",
+          });
+        }
+        throw thErr;
+      }
+      if (stErr) throw stErr;
+      if (rollErr) throw rollErr;
+      if (packErr) throw packErr;
+
+      const rollNameById = new Map((rollMaster || []).map((m: any) => [m.id, m.name]));
+      const packNameById = new Map((packMaster || []).map((m: any) => [m.id, m.name]));
+
+      const thresholdByKey = new Map<string, any>();
+      for (const t of thresholds || []) {
+        const k = `${t.material_type}::${t.material_id}::${t.warehouse_location}`;
+        thresholdByKey.set(k, t);
+      }
+
+      const alerts = (stock || []).map((s: any) => {
+        const material_id = (s.material_type === "PACKAGING" ? s.packaging_material_id : s.roll_material_id) || s.material_key;
+        const t = thresholdByKey.get(`${s.material_type}::${material_id}::${s.warehouse_location}`) || null;
+
+        const available_qty = Number(s.available_qty ?? 0);
+        const min_qty = Number(t?.min_qty ?? 0);
+        const reorder_level = Number(t?.reorder_level ?? 0);
+        const max_qty = Number(t?.max_qty ?? 0);
+
+        let status: "OK" | "REORDER" | "CRITICAL" = "OK";
+        if (t) {
+          if (available_qty <= min_qty) status = "CRITICAL";
+          else if (available_qty <= reorder_level) status = "REORDER";
+        }
+
+        const material_name =
+          s.material_type === "PACKAGING"
+            ? packNameById.get(material_id) || "-"
+            : rollNameById.get(material_id) || "-";
+
+        return {
+          threshold_id: t
+            ? `${t.material_type}::${t.material_id}::${t.warehouse_location}`
+            : null,
+          material_type: s.material_type,
+          material_id,
+          material_name,
+          warehouse_location: s.warehouse_location,
+          available_qty,
+          min_qty,
+          reorder_level,
+          max_qty,
+          status,
+        };
+      });
+
+      res.json(alerts);
+    } catch (error: any) {
+      res.status(400).json({ message: error.message });
+    }
+  });
+
+  // Stock Adjustment
+  app.get("/api/raw-materials", async (req, res) => {
+    try {
+      const token = getBearerTokenFromHeaders(req.headers as any);
+      if (!token) return res.status(401).json({ message: "Missing Authorization token" });
+
+      const sb = createAuthedSupabaseClient(token);
+      const material_type = req.query.material_type ? String(req.query.material_type).toUpperCase() : null;
+
+      if (material_type && material_type !== "ROLL" && material_type !== "PACKAGING") {
+        return res.status(400).json({ message: "material_type must be ROLL or PACKAGING" });
+      }
+
+      if (material_type === "PACKAGING") {
+        const { data, error } = await sb
+          .from("packaging_material_master")
+          .select("id, name")
+          .order("name", { ascending: true });
+        if (error) throw error;
+        return res.json((data as any) || []);
+      }
+
+      // Default to ROLL
+      const { data, error } = await sb
+        .from("raw_material_roll_master")
+        .select("id, name")
+        .order("name", { ascending: true });
+      if (error) throw error;
+      return res.json((data as any) || []);
+    } catch (error: any) {
+      res.status(400).json({ message: error.message });
+    }
+  });
+
+  app.get("/api/raw-material-stock", async (req, res) => {
+    try {
+      const token = getBearerTokenFromHeaders(req.headers as any);
+      if (!token) return res.status(401).json({ message: "Missing Authorization token" });
+
+      const sb = createAuthedSupabaseClient(token);
+      const material_id = req.query.material_id ? String(req.query.material_id) : null;
+      const material_type = req.query.material_type ? String(req.query.material_type).toUpperCase() : null;
+      const warehouse_location = String(req.query.warehouse_location || "").trim() || "MAIN";
+
+      if (!material_id) return res.status(400).json({ message: "material_id is required" });
+
+      if (material_type && material_type !== "ROLL" && material_type !== "PACKAGING") {
+        return res.status(400).json({ message: "material_type must be ROLL or PACKAGING" });
+      }
+
+      // Preferred: material_key (newer schema)
+      const readByMaterialKey = async () => {
+        let q = sb
+          .from("raw_material_stock")
+          .select("available_qty")
+          .eq("material_key", material_id)
+          .eq("warehouse_location", warehouse_location);
+        if (material_type) q = q.eq("material_type", material_type);
+        return q.maybeSingle();
+      };
+
+      // Fallback: separate roll_material_id / packaging_material_id
+      const readByTypedId = async () => {
+        if (!material_type) {
+          return { data: null as any, error: new Error("material_type is required when material_key is not available") } as any;
+        }
+
+        if (material_type === "PACKAGING") {
+          return sb
+            .from("raw_material_stock")
+            .select("available_qty")
+            .eq("material_type", "PACKAGING")
+            .eq("packaging_material_id", material_id)
+            .eq("warehouse_location", warehouse_location)
+            .maybeSingle();
+        }
+
+        return sb
+          .from("raw_material_stock")
+          .select("available_qty")
+          .eq("material_type", "ROLL")
+          .eq("roll_material_id", material_id)
+          .eq("warehouse_location", warehouse_location)
+          .maybeSingle();
+      };
+
+      let data: any = null;
+      let error: any = null;
+
+      const r1 = await readByMaterialKey();
+      data = r1.data;
+      error = r1.error;
+
+      if (error) {
+        const msg = String(error.message || "").toLowerCase();
+        if (msg.includes("material_key") && msg.includes("does not exist")) {
+          const r2 = await readByTypedId();
+          data = r2.data;
+          error = r2.error;
+        }
+      }
+
+      if (error) throw error;
+      return res.json({ available_qty: Number(data?.available_qty ?? 0) });
+    } catch (error: any) {
+      res.status(400).json({ message: error.message });
+    }
+  });
+
+  app.get("/api/stock-adjustments", async (req, res) => {
+    try {
+      const token = getBearerTokenFromHeaders(req.headers as any);
+      if (!token) return res.status(401).json({ message: "Missing Authorization token" });
+
+      const sb = createAuthedSupabaseClient(token);
+      const limit = Math.min(Math.max(Number(req.query.limit ?? 50), 1), 200);
+
+      const [{ data: adjustments, error: adjErr }, { data: rollMaster, error: rollErr }, { data: packMaster, error: packErr }] =
+        await Promise.all([
+          sb
+            .from("stock_adjustments")
+            .select(
+              "id, material_type, roll_material_id, packaging_material_id, adj_type, qty_change, reason, approved_by, created_at"
+            )
+            .order("created_at", { ascending: false })
+            .limit(limit),
+          sb.from("raw_material_roll_master").select("id, name"),
+          sb.from("packaging_material_master").select("id, name"),
+        ]);
+
+      if (adjErr) throw adjErr;
+      if (rollErr) throw rollErr;
+      if (packErr) throw packErr;
+
+      const rollNameById = new Map((rollMaster || []).map((m: any) => [m.id, m.name]));
+      const packNameById = new Map((packMaster || []).map((m: any) => [m.id, m.name]));
+
+      const rows = ((adjustments as any) || []).map((r: any) => {
+        const mt = String(r.material_type || "").toUpperCase();
+        const material_id = (mt === "PACKAGING" ? r.packaging_material_id : r.roll_material_id) || null;
+        const material_name =
+          mt === "PACKAGING"
+            ? packNameById.get(material_id) || "-"
+            : rollNameById.get(material_id) || "-";
+
+        return {
+          ...r,
+          material_id,
+          material_name,
+        };
+      });
+
+      return res.json(rows);
+    } catch (error: any) {
+      res.status(400).json({ message: error.message });
+    }
+  });
+
+  app.post("/api/stock-adjustments", async (req, res) => {
+    try {
+      const token = getBearerTokenFromHeaders(req.headers as any);
+      if (!token) return res.status(401).json({ message: "Missing Authorization token" });
+
+      const sb = createAuthedSupabaseClient(token);
+      const user = await getUserFromAccessToken(token);
+
+      const material_type = String(req.body.material_type || "").toUpperCase();
+      const material_id = req.body.material_id ? String(req.body.material_id) : null;
+      const adj_type = String(req.body.adj_type || "").toUpperCase();
+      const qty = Number(req.body.quantity ?? req.body.qty ?? req.body.qty_change ?? 0);
+      const reason = String(req.body.reason || "").trim();
+      const warehouse_location = String(req.body.warehouse_location || "").trim() || "MAIN";
+
+      if (!material_type || !["ROLL", "PACKAGING"].includes(material_type)) {
+        return res.status(400).json({ message: "material_type must be ROLL or PACKAGING" });
+      }
+      if (!material_id) return res.status(400).json({ message: "material_id is required" });
+      if (!adj_type || !["IN", "OUT"].includes(adj_type)) {
+        return res.status(400).json({ message: "adj_type must be IN or OUT" });
+      }
+      if (!Number.isFinite(qty) || qty <= 0) return res.status(400).json({ message: "Quantity must be > 0" });
+      if (!reason) return res.status(400).json({ message: "Reason is required" });
+
+      // Server-side safety: don't allow removing more than available.
+      if (adj_type === "OUT") {
+        const { data, error } = await sb
+          .from("raw_material_stock")
+          .select("available_qty")
+          .eq("material_type", material_type)
+          .eq("material_key", material_id)
+          .eq("warehouse_location", warehouse_location)
+          .maybeSingle();
+
+        if (error) {
+          const msg = String(error.message || "").toLowerCase();
+          if (msg.includes("material_key") && msg.includes("does not exist")) {
+            // fallback older schema
+            const r2 =
+              material_type === "PACKAGING"
+                ? await sb
+                    .from("raw_material_stock")
+                    .select("available_qty")
+                    .eq("material_type", "PACKAGING")
+                    .eq("packaging_material_id", material_id)
+                    .eq("warehouse_location", warehouse_location)
+                    .maybeSingle()
+                : await sb
+                    .from("raw_material_stock")
+                    .select("available_qty")
+                    .eq("material_type", "ROLL")
+                    .eq("roll_material_id", material_id)
+                    .eq("warehouse_location", warehouse_location)
+                    .maybeSingle();
+            if (r2.error) throw r2.error;
+            const available2 = Number(r2.data?.available_qty ?? 0);
+            if (qty > available2) {
+              return res.status(400).json({ message: "Cannot remove more stock than available." });
+            }
+          } else {
+            throw error;
+          }
+        } else {
+          const available = Number(data?.available_qty ?? 0);
+          if (qty > available) {
+            return res.status(400).json({ message: "Cannot remove more stock than available." });
+          }
+        }
+      }
+
+      const qty_change = adj_type === "IN" ? qty : -qty;
+
+      const dbAdjType = adj_type === "IN" ? "ADD" : "REDUCE";
+
+      const insertPayload: any = {
+        material_type,
+        adj_type: dbAdjType,
+        qty_change,
+        reason,
+        approved_by: user.id,
+      };
+
+      if (material_type === "PACKAGING") insertPayload.packaging_material_id = material_id;
+      else insertPayload.roll_material_id = material_id;
+
+      const { data, error } = await sb
+        .from("stock_adjustments")
+        .insert([insertPayload])
+        .select(
+          "id, material_type, roll_material_id, packaging_material_id, adj_type, qty_change, reason, approved_by, created_at"
+        )
+        .single();
+
+      if (error) throw error;
+      res.status(201).json(data);
+    } catch (error: any) {
+      res.status(400).json({ message: error.message });
+    }
+  });
   
   // Products
   app.get("/api/products", async (_req, res) => {

@@ -12,6 +12,28 @@ export const supabase = SUPABASE_ANON_KEY
   ? createClient(SUPABASE_URL, SUPABASE_ANON_KEY)
   : null;
 
+export function getBearerTokenFromHeaders(headers: Record<string, any>) {
+  const h = (headers?.authorization || headers?.Authorization || "") as string;
+  const m = h.match(/^Bearer\s+(.+)$/i);
+  return m?.[1] ?? null;
+}
+
+export function createAuthedSupabaseClient(accessToken: string) {
+  if (!SUPABASE_ANON_KEY) {
+    throw new Error(
+      "Missing server Supabase configuration. Set SUPABASE_ANON_KEY (or VITE_SUPABASE_ANON_KEY) in your .env file."
+    );
+  }
+  return createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+    global: {
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+      },
+    },
+    auth: { persistSession: false },
+  });
+}
+
 export async function getUserFromAccessToken(accessToken: string) {
   if (!supabase) {
     throw new Error(
