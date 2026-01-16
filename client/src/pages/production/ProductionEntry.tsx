@@ -19,7 +19,17 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { ArrowUpDown, Loader2, Plus, Search } from "lucide-react";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
+import { ArrowUpDown, Loader2, Plus, Search, Pencil, Trash2 } from "lucide-react";
 import { supabase } from "@/lib/supabase";
 import { useToast } from "@/hooks/use-toast";
 
@@ -74,6 +84,14 @@ export default function ProductionEntry() {
 
   const [batchDialogOpen, setBatchDialogOpen] = useState(false);
   const [entryDialogOpen, setEntryDialogOpen] = useState(false);
+
+  const [editingBatch, setEditingBatch] = useState<Batch | null>(null);
+  const [editingEntry, setEditingEntry] = useState<Entry | null>(null);
+
+  const [deleteBatchDialogOpen, setDeleteBatchDialogOpen] = useState(false);
+  const [deletingBatch, setDeletingBatch] = useState<Batch | null>(null);
+  const [deleteEntryDialogOpen, setDeleteEntryDialogOpen] = useState(false);
+  const [deletingEntry, setDeletingEntry] = useState<Entry | null>(null);
 
   const [batchForm, setBatchForm] = useState({
     batch_no: "",
@@ -177,12 +195,37 @@ export default function ProductionEntry() {
   };
 
   const openNewBatch = () => {
+    setEditingBatch(null);
     setBatchForm({ batch_no: generateBatchNo(), product_id: "", machine_id: "", shift: "", planned_qty: "" });
     setBatchDialogOpen(true);
   };
 
+  const openEditBatch = (b: Batch) => {
+    setEditingBatch(b);
+    setBatchForm({
+      batch_no: b.batch_no || "",
+      product_id: b.product_id || "",
+      machine_id: b.machine_id || "",
+      shift: b.shift || "",
+      planned_qty: b.planned_qty === null || b.planned_qty === undefined ? "" : String(b.planned_qty),
+    });
+    setBatchDialogOpen(true);
+  };
+
   const openNewEntry = () => {
+    setEditingEntry(null);
     setEntryForm({ batch_id: "", operator_name: "", produced_qty: "", status: "In Progress" });
+    setEntryDialogOpen(true);
+  };
+
+  const openEditEntry = (e: Entry) => {
+    setEditingEntry(e);
+    setEntryForm({
+      batch_id: e.batch_id || "",
+      operator_name: e.operator_name || "",
+      produced_qty: e.produced_qty === null || e.produced_qty === undefined ? "" : String(e.produced_qty),
+      status: e.status || "In Progress",
+    });
     setEntryDialogOpen(true);
   };
 
@@ -207,16 +250,32 @@ export default function ProductionEntry() {
         machine_id: batchForm.machine_id,
         shift: batchForm.shift.trim() || null,
         planned_qty: batchForm.planned_qty.trim() ? Number(batchForm.planned_qty) : null,
-        status: "Running",
-        started_at: new Date().toISOString(),
       };
-      const { error } = await supabase.from("production_batches").insert([payload]);
-      if (error) throw error;
-      toast({ title: "Batch created" });
+
+      if (editingBatch) {
+        if ((editingBatch.status || "").toLowerCase() === "completed") {
+          toast({ title: "Completed batch cannot be edited", variant: "destructive" });
+          return;
+        }
+        const { error } = await supabase.from("production_batches").update(payload).eq("id", editingBatch.id);
+        if (error) throw error;
+        toast({ title: "Batch updated" });
+      } else {
+        const createPayload = {
+          ...payload,
+          status: "Running",
+          started_at: new Date().toISOString(),
+        };
+        const { error } = await supabase.from("production_batches").insert([createPayload]);
+        if (error) throw error;
+        toast({ title: "Batch created" });
+      }
+
       setBatchDialogOpen(false);
+      setEditingBatch(null);
       await fetchBatches();
     } catch (e: any) {
-      toast({ title: "Error creating batch", description: e.message, variant: "destructive" });
+      toast({ title: "Error saving batch", description: e.message, variant: "destructive" });
     } finally {
       setSaving(false);
     }
@@ -241,13 +300,78 @@ export default function ProductionEntry() {
         produced_qty: qty,
         status: entryForm.status || null,
       };
-      const { error } = await supabase.from("production_entries").insert([payload]);
-      if (error) throw error;
-      toast({ title: "Entry created" });
+
+      if (editingEntry) {
+        if ((editingEntry.status || "").toLowerCase().includes("complete")) {
+          toast({ title: "Completed entry cannot be edited", variant: "destructive" });
+          return;
+        }
+        const { error } = await supabase.from("production_entries").update(payload).eq("id", editingEntry.id);
+        if (error) throw error;
+        toast({ title: "Entry updated" });
+      } else {
+        const { error } = await supabase.from("production_entries").insert([payload]);
+        if (error) throw error;
+        toast({ title: "Entry created" });
+      }
+
       setEntryDialogOpen(false);
+      setEditingEntry(null);
       await fetchEntries();
     } catch (e: any) {
-      toast({ title: "Error creating entry", description: e.message, variant: "destructive" });
+      toast({ title: "Error saving entry", description: e.message, variant: "destructive" });
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const confirmDeleteBatch = async () => {
+    if (!deletingBatch) return;
+    if ((deletingBatch.status || "").toLowerCase() === "completed") {
+      toast({ title: "Completed batch cannot be deleted", variant: "destructive" });
+      return;
+    }
+
+    setSaving(true);
+    try {
+      const { error: delEntriesErr } = await supabase
+        .from("production_entries")
+        .delete()
+        .eq("batch_id", deletingBatch.id);
+      if (delEntriesErr) throw delEntriesErr;
+
+      const { error } = await supabase.from("production_batches").delete().eq("id", deletingBatch.id);
+      if (error) throw error;
+
+      toast({ title: "Batch deleted" });
+      setDeleteBatchDialogOpen(false);
+      setDeletingBatch(null);
+      await Promise.all([fetchBatches(), fetchEntries()]);
+    } catch (e: any) {
+      toast({ title: "Error deleting batch", description: e.message, variant: "destructive" });
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const confirmDeleteEntry = async () => {
+    if (!deletingEntry) return;
+    if ((deletingEntry.status || "").toLowerCase().includes("complete")) {
+      toast({ title: "Completed entry cannot be deleted", variant: "destructive" });
+      return;
+    }
+
+    setSaving(true);
+    try {
+      const { error } = await supabase.from("production_entries").delete().eq("id", deletingEntry.id);
+      if (error) throw error;
+
+      toast({ title: "Entry deleted" });
+      setDeleteEntryDialogOpen(false);
+      setDeletingEntry(null);
+      await fetchEntries();
+    } catch (e: any) {
+      toast({ title: "Error deleting entry", description: e.message, variant: "destructive" });
     } finally {
       setSaving(false);
     }
@@ -363,6 +487,7 @@ export default function ProductionEntry() {
                     <th className="text-right py-2 px-2">Produced Qty</th>
                     <th className="text-left py-2 px-2">Operator</th>
                     <th className="text-left py-2 px-2">Status</th>
+                    <th className="text-center py-2 px-2">Actions</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -380,6 +505,29 @@ export default function ProductionEntry() {
                         <span className={`px-2 py-1 rounded-full text-xs ${statusBadge(e.status)}`}>
                           {e.status || "-"}
                         </span>
+                      </td>
+                      <td className="py-2 px-2">
+                        <div className="flex justify-center gap-1">
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            onClick={() => openEditEntry(e)}
+                            disabled={saving || (e.status || "").toLowerCase().includes("complete")}
+                          >
+                            <Pencil className="h-4 w-4" />
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            onClick={() => {
+                              setDeletingEntry(e);
+                              setDeleteEntryDialogOpen(true);
+                            }}
+                            disabled={saving || (e.status || "").toLowerCase().includes("complete")}
+                          >
+                            <Trash2 className="h-4 w-4 text-destructive" />
+                          </Button>
+                        </div>
                       </td>
                     </tr>
                   ))}
@@ -431,7 +579,26 @@ export default function ProductionEntry() {
                         </span>
                       </td>
                       <td className="py-2 px-2">
-                        <div className="flex justify-center">
+                        <div className="flex justify-center gap-1">
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            onClick={() => openEditBatch(b)}
+                            disabled={saving || (b.status || "").toLowerCase() === "completed"}
+                          >
+                            <Pencil className="h-4 w-4" />
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            onClick={() => {
+                              setDeletingBatch(b);
+                              setDeleteBatchDialogOpen(true);
+                            }}
+                            disabled={saving || (b.status || "").toLowerCase() === "completed"}
+                          >
+                            <Trash2 className="h-4 w-4 text-destructive" />
+                          </Button>
                           <Button
                             variant="outline"
                             size="sm"
@@ -455,7 +622,7 @@ export default function ProductionEntry() {
       <Dialog open={batchDialogOpen} onOpenChange={setBatchDialogOpen}>
         <DialogContent className="max-w-xl">
           <DialogHeader>
-            <DialogTitle>New Production Batch</DialogTitle>
+            <DialogTitle>{editingBatch ? "Edit Production Batch" : "New Production Batch"}</DialogTitle>
           </DialogHeader>
           <div className="grid gap-4 py-4">
             <div className="space-y-2">
@@ -536,7 +703,7 @@ export default function ProductionEntry() {
                   Saving...
                 </>
               ) : (
-                "Create Batch"
+                editingBatch ? "Update Batch" : "Create Batch"
               )}
             </Button>
           </DialogFooter>
@@ -546,7 +713,7 @@ export default function ProductionEntry() {
       <Dialog open={entryDialogOpen} onOpenChange={setEntryDialogOpen}>
         <DialogContent className="max-w-xl">
           <DialogHeader>
-            <DialogTitle>New Production Entry</DialogTitle>
+            <DialogTitle>{editingEntry ? "Edit Production Entry" : "New Production Entry"}</DialogTitle>
           </DialogHeader>
           <div className="grid gap-4 py-4">
             <div className="space-y-2">
@@ -616,12 +783,46 @@ export default function ProductionEntry() {
                   Saving...
                 </>
               ) : (
-                "Create Entry"
+                editingEntry ? "Update Entry" : "Create Entry"
               )}
             </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <AlertDialog open={deleteBatchDialogOpen} onOpenChange={setDeleteBatchDialogOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete batch?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This will delete the production batch and its entries (only allowed if not completed).
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={saving}>Cancel</AlertDialogCancel>
+            <AlertDialogAction onClick={confirmDeleteBatch} disabled={saving}>
+              Delete
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      <AlertDialog open={deleteEntryDialogOpen} onOpenChange={setDeleteEntryDialogOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete entry?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This will delete the production entry (only allowed if not completed).
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={saving}>Cancel</AlertDialogCancel>
+            <AlertDialogAction onClick={confirmDeleteEntry} disabled={saving}>
+              Delete
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

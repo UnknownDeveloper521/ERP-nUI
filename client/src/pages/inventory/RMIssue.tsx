@@ -17,9 +17,19 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import ModuleTabs from "@/components/shared/ModuleTabs";
 import { inventoryTabs } from "./InventoryDashboard";
-import { Plus, Search, Loader2, ArrowUpDown } from "lucide-react";
+import { Plus, Search, Loader2, ArrowUpDown, Pencil, Trash2 } from "lucide-react";
 import { supabase } from "@/lib/supabase";
 import { useToast } from "@/hooks/use-toast";
 
@@ -114,6 +124,9 @@ export default function RMIssue() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [dialogOpen, setDialogOpen] = useState(false);
+  const [editingIssue, setEditingIssue] = useState<RmIssue | null>(null);
+  const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
+  const [deletingIssue, setDeletingIssue] = useState<RmIssue | null>(null);
   const [formData, setFormData] = useState<IssueFormData>(initialFormData);
   const [searchTerm, setSearchTerm] = useState("");
   const [materialFilter, setMaterialFilter] = useState<string>("all");
@@ -187,6 +200,49 @@ export default function RMIssue() {
       });
     } finally {
       setLoading(false);
+    }
+  };
+
+  const confirmDeleteIssue = async () => {
+    if (!deletingIssue) return;
+    setSaving(true);
+    try {
+      const matType = deletingIssue.material_type;
+      if (!matType) throw new Error("Material type is missing");
+      const materialKey =
+        matType === "ROLL" ? deletingIssue.roll_material_id : deletingIssue.packaging_material_id;
+      if (!materialKey) throw new Error("Material id is missing");
+
+      const wh = (deletingIssue.warehouse_location || "").trim() || "MAIN";
+      const qty = Number(deletingIssue.issued_qty || 0);
+
+      const bal = await updateStock({
+        material_type: matType,
+        material_key: materialKey,
+        warehouse_location: wh,
+        delta_qty: qty,
+      });
+
+      await insertLedgerRow({
+        material_type: matType,
+        roll_material_id: matType === "ROLL" ? (deletingIssue.roll_material_id as string) : null,
+        packaging_material_id: matType === "PACKAGING" ? (deletingIssue.packaging_material_id as string) : null,
+        txn_type: "ISSUE_DELETE",
+        reference_id: deletingIssue.id,
+        qty_in: qty,
+        balance_after: bal,
+      });
+
+      const { error } = await supabase.from("raw_material_issues").delete().eq("id", deletingIssue.id);
+      if (error) throw error;
+      toast({ title: "Issue deleted" });
+      setDeleteDialogOpen(false);
+      setDeletingIssue(null);
+      await fetchIssues();
+    } catch (e: any) {
+      toast({ title: "Error deleting issue", description: e.message, variant: "destructive" });
+    } finally {
+      setSaving(false);
     }
   };
 
@@ -300,6 +356,7 @@ export default function RMIssue() {
   };
 
   const openNewIssueDialog = () => {
+    setEditingIssue(null);
     setFormData({
       ...initialFormData,
       issue_no: generateIssueNo(),
@@ -314,6 +371,96 @@ export default function RMIssue() {
     });
     setAvailableQty(null);
     setDialogOpen(true);
+  };
+
+  const openEditIssueDialog = async (issue: RmIssue) => {
+    setEditingIssue(issue);
+
+    setFormData({
+      ...initialFormData,
+      issue_no: issue.issue_no,
+      receipt_id: issue.receipt_id,
+      machine_id: issue.machine_id || NONE_MACHINE_VALUE,
+      batch_id: issue.batch_id || "",
+      warehouse_location: issue.warehouse_location || "MAIN",
+      issued_date: issue.issued_date ? String(issue.issued_date).slice(0, 10) : new Date().toISOString().slice(0, 10),
+      issued_qty: String(issue.issued_qty ?? ""),
+    });
+
+    const mat = {
+      material_type: issue.material_type,
+      roll_material_id: issue.roll_material_id,
+      packaging_material_id: issue.packaging_material_id,
+      warehouse_location: issue.warehouse_location || null,
+    };
+    setSelectedReceiptMaterial(mat);
+
+    const uom = issue.material_type === "PACKAGING" ? "UNITS" : "KG";
+    setSelectedMaterialUom(uom);
+
+    setDialogOpen(true);
+    await fetchAvailableQty({
+      material_type: mat.material_type,
+      roll_material_id: mat.roll_material_id,
+      packaging_material_id: mat.packaging_material_id,
+      warehouse_location: (issue.warehouse_location || "").trim() || null,
+    });
+  };
+
+  const updateStock = async (args: {
+    material_type: MaterialType;
+    material_key: string;
+    warehouse_location: string;
+    delta_qty: number; // positive adds stock, negative subtracts stock
+  }) => {
+    const { data: row, error: readErr } = await supabase
+      .from("raw_material_stock")
+      .select("available_qty")
+      .eq("material_type", args.material_type)
+      .eq("material_key", args.material_key)
+      .eq("warehouse_location", args.warehouse_location)
+      .maybeSingle();
+
+    if (readErr) throw readErr;
+
+    const current = Number((row as any)?.available_qty ?? 0);
+    const next = current + args.delta_qty;
+
+    const { error: updErr } = await supabase
+      .from("raw_material_stock")
+      .update({ available_qty: next, last_updated: new Date().toISOString() })
+      .eq("material_type", args.material_type)
+      .eq("material_key", args.material_key)
+      .eq("warehouse_location", args.warehouse_location);
+
+    if (updErr) throw updErr;
+    return next;
+  };
+
+  const insertLedgerRow = async (args: {
+    material_type: MaterialType;
+    roll_material_id: string | null;
+    packaging_material_id: string | null;
+    txn_type: string;
+    reference_id: string;
+    qty_in?: number;
+    qty_out?: number;
+    balance_after: number;
+  }) => {
+    const payload = {
+      material_type: args.material_type,
+      roll_material_id: args.roll_material_id,
+      packaging_material_id: args.packaging_material_id,
+      txn_type: args.txn_type,
+      reference_id: args.reference_id,
+      qty_in: args.qty_in ?? 0,
+      qty_out: args.qty_out ?? 0,
+      balance_after: args.balance_after,
+      txn_date: new Date().toISOString(),
+    };
+
+    const { error } = await supabase.from("raw_material_ledger").insert([payload]);
+    if (error) throw error;
   };
 
   const handleInputChange = (
@@ -472,6 +619,19 @@ export default function RMIssue() {
       const rollId = receipt?.roll_material_id || selectedReceiptMaterial.roll_material_id;
       const packId = receipt?.packaging_material_id || selectedReceiptMaterial.packaging_material_id;
 
+      if (!matType) {
+        throw new Error("Material type is missing");
+      }
+
+      const materialKey = matType === "ROLL" ? rollId : packId;
+      if (!materialKey) {
+        throw new Error("Material id is missing");
+      }
+
+      const qtyNew = parseFloat(formData.issued_qty);
+      const whNew = (formData.warehouse_location || "").trim();
+      if (!whNew) throw new Error("Warehouse location is required");
+
       const issueData = {
         issue_no: formData.issue_no,
         receipt_id: formData.receipt_id,
@@ -485,17 +645,78 @@ export default function RMIssue() {
             : formData.machine_id,
         batch_id: formData.batch_id,
         issued_date: formData.issued_date,
-        issued_qty: parseFloat(formData.issued_qty),
+        issued_qty: qtyNew,
       };
 
-      const { error } = await supabase
-        .from("raw_material_issues")
-        .insert([issueData]);
+      if (editingIssue) {
+        // Adjust stock/ledger based on delta and/or warehouse change
+        const oldQty = Number(editingIssue.issued_qty || 0);
+        const oldWh = (editingIssue.warehouse_location || "").trim() || "MAIN";
+        const delta = qtyNew - oldQty;
 
-      if (error) throw error;
+        // If warehouse changed, reverse old and apply new
+        if (oldWh !== whNew) {
+          const balOld = await updateStock({
+            material_type: matType,
+            material_key: materialKey,
+            warehouse_location: oldWh,
+            delta_qty: oldQty, // add back
+          });
+          await insertLedgerRow({
+            material_type: matType,
+            roll_material_id: matType === "ROLL" ? (rollId as string) : null,
+            packaging_material_id: matType === "PACKAGING" ? (packId as string) : null,
+            txn_type: "ISSUE_EDIT_REVERSAL",
+            reference_id: editingIssue.id,
+            qty_in: oldQty,
+            balance_after: balOld,
+          });
 
-      toast({ title: "Issue created successfully" });
+          const balNew = await updateStock({
+            material_type: matType,
+            material_key: materialKey,
+            warehouse_location: whNew,
+            delta_qty: -qtyNew,
+          });
+          await insertLedgerRow({
+            material_type: matType,
+            roll_material_id: matType === "ROLL" ? (rollId as string) : null,
+            packaging_material_id: matType === "PACKAGING" ? (packId as string) : null,
+            txn_type: "ISSUE_EDIT_APPLY",
+            reference_id: editingIssue.id,
+            qty_out: qtyNew,
+            balance_after: balNew,
+          });
+        } else if (delta !== 0) {
+          const bal = await updateStock({
+            material_type: matType,
+            material_key: materialKey,
+            warehouse_location: whNew,
+            delta_qty: -delta,
+          });
+          await insertLedgerRow({
+            material_type: matType,
+            roll_material_id: matType === "ROLL" ? (rollId as string) : null,
+            packaging_material_id: matType === "PACKAGING" ? (packId as string) : null,
+            txn_type: "ISSUE_EDIT_DELTA",
+            reference_id: editingIssue.id,
+            qty_in: delta < 0 ? Math.abs(delta) : 0,
+            qty_out: delta > 0 ? delta : 0,
+            balance_after: bal,
+          });
+        }
+
+        const { error } = await supabase.from("raw_material_issues").update(issueData).eq("id", editingIssue.id);
+        if (error) throw error;
+        toast({ title: "Issue updated" });
+      } else {
+        const { error } = await supabase.from("raw_material_issues").insert([issueData]);
+        if (error) throw error;
+        toast({ title: "Issue created successfully" });
+      }
+
       setDialogOpen(false);
+      setEditingIssue(null);
       await fetchIssues();
     } catch (error: any) {
       const msg = String(error?.message || "Error creating issue");
@@ -608,6 +829,7 @@ export default function RMIssue() {
                     <th className="text-left py-2 px-2">Receipt Ref</th>
                     <th className="text-right py-2 px-2">Issued Qty</th>
                     <th className="text-right py-2 px-2">Issued Cost</th>
+                    <th className="text-center py-2 px-2">Actions</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -642,6 +864,31 @@ export default function RMIssue() {
                       <td className="py-2 px-2 text-right">
                         {Number(issue.issued_cost || 0).toFixed(2)}
                       </td>
+                      <td className="py-2 px-2">
+                        <div className="flex justify-center gap-1">
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            onClick={() => openEditIssueDialog(issue)}
+                            disabled={saving}
+                            data-testid={`button-edit-${issue.id}`}
+                          >
+                            <Pencil className="h-4 w-4" />
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            onClick={() => {
+                              setDeletingIssue(issue);
+                              setDeleteDialogOpen(true);
+                            }}
+                            disabled={saving}
+                            data-testid={`button-delete-${issue.id}`}
+                          >
+                            <Trash2 className="h-4 w-4 text-destructive" />
+                          </Button>
+                        </div>
+                      </td>
                     </tr>
                   ))}
                 </tbody>
@@ -654,7 +901,7 @@ export default function RMIssue() {
       <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
         <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
           <DialogHeader>
-            <DialogTitle>New RM Issue</DialogTitle>
+            <DialogTitle>{editingIssue ? "Edit RM Issue" : "New RM Issue"}</DialogTitle>
           </DialogHeader>
 
           <div className="grid gap-4 py-4">
@@ -824,12 +1071,29 @@ export default function RMIssue() {
                   Saving...
                 </>
               ) : (
-                "Create Issue"
+                editingIssue ? "Update Issue" : "Create Issue"
               )}
             </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <AlertDialog open={deleteDialogOpen} onOpenChange={setDeleteDialogOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete RM Issue?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This will delete the RM Issue and add the issued quantity back to stock.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={saving}>Cancel</AlertDialogCancel>
+            <AlertDialogAction onClick={confirmDeleteIssue} disabled={saving}>
+              Delete
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }
