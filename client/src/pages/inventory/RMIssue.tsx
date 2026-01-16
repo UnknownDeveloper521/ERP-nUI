@@ -43,6 +43,7 @@ interface ReceiptRef {
   material_type: MaterialType | null;
   roll_material_id: string | null;
   packaging_material_id: string | null;
+  warehouse_location: string | null;
   unit_cost: number;
   raw_material_roll_master?: RollMaterial;
   packaging_material_master?: PackagingMaterial;
@@ -65,11 +66,13 @@ interface RmIssue {
   material_type: MaterialType | null;
   roll_material_id: string | null;
   packaging_material_id: string | null;
+  warehouse_location: string;
   machine_id: string | null;
   batch_id: string | null;
   issued_qty: number;
   issued_cost: number | null;
   issued_date: string;
+  issued_by?: string | null;
   created_at: string;
   raw_material_receipts?: ReceiptRef;
   machine_master?: MachineRef;
@@ -83,6 +86,7 @@ interface IssueFormData {
   receipt_id: string;
   machine_id: string;
   batch_id: string;
+  warehouse_location: string;
   issued_date: string;
   issued_qty: string;
 }
@@ -94,6 +98,7 @@ const initialFormData: IssueFormData = {
   receipt_id: "",
   machine_id: NONE_MACHINE_VALUE,
   batch_id: "",
+  warehouse_location: "MAIN",
   issued_date: new Date().toISOString().split("T")[0],
   issued_qty: "",
 };
@@ -118,7 +123,8 @@ export default function RMIssue() {
     material_type: MaterialType | null;
     roll_material_id: string | null;
     packaging_material_id: string | null;
-  }>({ material_type: null, roll_material_id: null, packaging_material_id: null });
+    warehouse_location: string | null;
+  }>({ material_type: null, roll_material_id: null, packaging_material_id: null, warehouse_location: null });
   const [availableQty, setAvailableQty] = useState<number | null>(null);
 
   useEffect(() => {
@@ -129,6 +135,21 @@ export default function RMIssue() {
     fetchMachines();
     fetchBatches();
   }, []);
+
+  useEffect(() => {
+    if (!formData.receipt_id) return;
+    if (!selectedReceiptMaterial.material_type) return;
+
+    const mat = {
+      material_type: selectedReceiptMaterial.material_type,
+      roll_material_id: selectedReceiptMaterial.roll_material_id,
+      packaging_material_id: selectedReceiptMaterial.packaging_material_id,
+      warehouse_location: (formData.warehouse_location || "").trim() || null,
+    };
+
+    fetchAvailableQty(mat);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [formData.warehouse_location]);
 
   const fetchIssues = async () => {
     setLoading(true);
@@ -248,6 +269,7 @@ export default function RMIssue() {
           material_type,
           roll_material_id,
           packaging_material_id,
+          warehouse_location,
           unit_cost,
           raw_material_roll_master ( id, name, weight_kg ),
           packaging_material_master ( id, name, weight_per_unit )
@@ -284,7 +306,12 @@ export default function RMIssue() {
       issued_date: new Date().toISOString().split("T")[0],
     });
     setSelectedMaterialUom("");
-    setSelectedReceiptMaterial({ material_type: null, roll_material_id: null, packaging_material_id: null });
+    setSelectedReceiptMaterial({
+      material_type: null,
+      roll_material_id: null,
+      packaging_material_id: null,
+      warehouse_location: null,
+    });
     setAvailableQty(null);
     setDialogOpen(true);
   };
@@ -300,34 +327,27 @@ export default function RMIssue() {
     material_type: MaterialType | null;
     roll_material_id: string | null;
     packaging_material_id: string | null;
+    warehouse_location: string | null;
   }) => {
     setAvailableQty(null);
     if (!m.material_type) return;
     if (m.material_type === "ROLL" && !m.roll_material_id) return;
     if (m.material_type === "PACKAGING" && !m.packaging_material_id) return;
+    if (!m.warehouse_location || !m.warehouse_location.trim()) return;
 
     try {
-      let q = supabase
+      const materialKey = m.material_type === "ROLL" ? m.roll_material_id : m.packaging_material_id;
+      const { data, error } = await supabase
         .from("raw_material_stock")
         .select("available_qty")
         .eq("material_type", m.material_type)
-        .eq("warehouse_location", "MAIN");
-
-      if (m.material_type === "ROLL") {
-        q = q.eq("roll_material_id", m.roll_material_id).is("packaging_material_id", null);
-      } else {
-        q = q.eq("packaging_material_id", m.packaging_material_id).is("roll_material_id", null);
-      }
-
-      const { data, error } = await q;
+        .eq("material_key", materialKey)
+        .eq("warehouse_location", m.warehouse_location);
 
       if (error) throw error;
 
-      const total = (data || []).reduce(
-        (sum: number, row: any) => sum + Number(row.available_qty || 0),
-        0
-      );
-      setAvailableQty(total);
+      const qty = (data as any)?.[0]?.available_qty;
+      setAvailableQty(qty === null || qty === undefined ? 0 : Number(qty));
     } catch {
       setAvailableQty(null);
     }
@@ -337,17 +357,25 @@ export default function RMIssue() {
     setFormData((prev) => ({ ...prev, receipt_id: receiptId }));
     const receipt = receipts.find((r) => r.id === receiptId);
 
+    const whLoc = (receipt?.warehouse_location || formData.warehouse_location || "MAIN").trim();
+
     const mat = {
       material_type: receipt?.material_type || null,
       roll_material_id: receipt?.roll_material_id || null,
       packaging_material_id: receipt?.packaging_material_id || null,
+      warehouse_location: whLoc || null,
     };
     setSelectedReceiptMaterial(mat);
+
+    setFormData((prev) => ({
+      ...prev,
+      warehouse_location: whLoc,
+    }));
 
     const uom = mat.material_type === "PACKAGING" ? "UNITS" : "KG";
     setSelectedMaterialUom(uom);
 
-    await fetchAvailableQty(mat);
+    await fetchAvailableQty({ ...mat, warehouse_location: whLoc });
   };
 
   const filteredIssues = useMemo(() => {
@@ -414,6 +442,10 @@ export default function RMIssue() {
       toast({ title: "Production batch is required", variant: "destructive" });
       return false;
     }
+    if (!formData.warehouse_location || !formData.warehouse_location.trim()) {
+      toast({ title: "Warehouse location is required", variant: "destructive" });
+      return false;
+    }
     if (!formData.issued_date) {
       toast({ title: "Issued date is required", variant: "destructive" });
       return false;
@@ -446,6 +478,7 @@ export default function RMIssue() {
         material_type: matType,
         roll_material_id: matType === "ROLL" ? rollId : null,
         packaging_material_id: matType === "PACKAGING" ? packId : null,
+        warehouse_location: formData.warehouse_location,
         machine_id:
           !formData.machine_id || formData.machine_id === NONE_MACHINE_VALUE
             ? null
@@ -570,6 +603,7 @@ export default function RMIssue() {
                     <th className="text-left py-2 px-2">Date</th>
                     <th className="text-left py-2 px-2">Batch</th>
                     <th className="text-left py-2 px-2">Machine</th>
+                    <th className="text-left py-2 px-2">Warehouse</th>
                     <th className="text-left py-2 px-2">Material</th>
                     <th className="text-left py-2 px-2">Receipt Ref</th>
                     <th className="text-right py-2 px-2">Issued Qty</th>
@@ -589,6 +623,7 @@ export default function RMIssue() {
                       <td className="py-2 px-2">{issue.issued_date}</td>
                       <td className="py-2 px-2 font-mono">{issue.production_batches?.batch_no || "-"}</td>
                       <td className="py-2 px-2">{issue.machine_master?.name || "-"}</td>
+                      <td className="py-2 px-2">{issue.warehouse_location || "-"}</td>
                       <td className="py-2 px-2">
                         {issue.material_type === "PACKAGING"
                           ? issue.packaging_material_master?.name ||
@@ -680,6 +715,37 @@ export default function RMIssue() {
 
             <div className="grid grid-cols-2 gap-4">
               <div className="space-y-2">
+                <Label htmlFor="warehouse_location">Warehouse Location *</Label>
+                <Input
+                  id="warehouse_location"
+                  name="warehouse_location"
+                  value={formData.warehouse_location}
+                  onChange={handleInputChange}
+                  placeholder="e.g. MAIN"
+                  data-testid="input-warehouse-location"
+                />
+              </div>
+              <div className="space-y-2">
+                <Label>
+                  Available Stock ({(formData.warehouse_location || "").trim() || "-"})
+                </Label>
+                <Input
+                  value={
+                    availableQty === null
+                      ? selectedReceiptMaterial.material_type
+                        ? "Loading..."
+                        : "-"
+                      : `${availableQty} ${selectedMaterialUom || ""}`
+                  }
+                  disabled
+                  className="bg-muted"
+                  data-testid="input-available-qty"
+                />
+              </div>
+            </div>
+
+            <div className="grid grid-cols-2 gap-4">
+              <div className="space-y-2">
                 <Label htmlFor="batch_id">Production Batch *</Label>
                 <Select
                   value={formData.batch_id}
@@ -734,21 +800,7 @@ export default function RMIssue() {
                   data-testid="input-issued-qty"
                 />
               </div>
-              <div className="space-y-2">
-                <Label>Available Stock (MAIN)</Label>
-                <Input
-                  value={
-                    availableQty === null
-                      ? selectedReceiptMaterial.material_type
-                        ? "Loading..."
-                        : "-"
-                      : `${availableQty} ${selectedMaterialUom || ""}`
-                  }
-                  disabled
-                  className="bg-muted"
-                  data-testid="input-available-qty"
-                />
-              </div>
+              <div />
             </div>
           </div>
 

@@ -108,48 +108,48 @@ CREATE TABLE raw_material_receipts (
 -- FOR EACH ROW EXECUTE FUNCTION fn_calc_rm_issue_cost();
 
 -- -- Post issue to stock
--- CREATE OR REPLACE FUNCTION fn_post_rm_issue()
--- RETURNS trigger AS $$
--- DECLARE new_balance numeric;
--- BEGIN
---   UPDATE raw_material_stock
---   SET available_qty = available_qty - NEW.issued_weight,
---       last_updated = now()
---   WHERE material_id = NEW.material_id;
+CREATE OR REPLACE FUNCTION fn_post_rm_issue()
+RETURNS trigger AS $$
+DECLARE new_balance numeric;
+BEGIN
+  UPDATE raw_material_stock
+  SET available_qty = available_qty - NEW.issued_weight,
+      last_updated = now()
+  WHERE material_id = NEW.material_id;
 
---   SELECT available_qty INTO new_balance FROM raw_material_stock WHERE material_id = NEW.material_id;
+  SELECT available_qty INTO new_balance FROM raw_material_stock WHERE material_id = NEW.material_id;
 
---   INSERT INTO raw_material_ledger(material_id, txn_type, reference_id,
---                                   qty_out, balance_after)
---   VALUES(NEW.material_id, 'ISSUE', NEW.id, NEW.issued_weight, new_balance);
+  INSERT INTO raw_material_ledger(material_id, txn_type, reference_id,
+                                  qty_out, balance_after)
+  VALUES(NEW.material_id, 'ISSUE', NEW.id, NEW.issued_weight, new_balance);
 
---   RETURN NEW;
--- END;
--- $$ LANGUAGE plpgsql;
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
 
--- CREATE TRIGGER trg_post_rm_issue
--- AFTER INSERT ON raw_material_issues
--- FOR EACH ROW EXECUTE FUNCTION fn_post_rm_issue();
+CREATE TRIGGER trg_post_rm_issue
+AFTER INSERT ON raw_material_issues
+FOR EACH ROW EXECUTE FUNCTION fn_post_rm_issue();
 
 
 -- -- SAFETY: PREVENT NEGATIVE STOCK
--- CREATE OR REPLACE FUNCTION fn_block_negative_rm_issue()
--- RETURNS trigger AS $$
--- DECLARE current_qty numeric;
--- BEGIN
---   SELECT available_qty INTO current_qty
---   FROM raw_material_stock WHERE material_id = NEW.material_id;
+CREATE OR REPLACE FUNCTION fn_block_negative_rm_issue()
+RETURNS trigger AS $$
+DECLARE current_qty numeric;
+BEGIN
+  SELECT available_qty INTO current_qty
+  FROM raw_material_stock WHERE material_id = NEW.material_id;
 
---   IF current_qty < NEW.issued_weight THEN
---      RAISE EXCEPTION 'Insufficient stock for RM Issue!';
---   END IF;
---   RETURN NEW;
--- END;
--- $$ LANGUAGE plpgsql;
+  IF current_qty < NEW.issued_weight THEN
+     RAISE EXCEPTION 'Insufficient stock for RM Issue!';
+  END IF;
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
 
--- CREATE TRIGGER trg_block_negative_rm_issue
--- BEFORE INSERT ON raw_material_issues
--- FOR EACH ROW EXECUTE FUNCTION fn_block_negative_rm_issue();
+CREATE TRIGGER trg_block_negative_rm_issue
+BEFORE INSERT ON raw_material_issues
+FOR EACH ROW EXECUTE FUNCTION fn_block_negative_rm_issue();
 
 
 -- -- **************************
