@@ -129,5 +129,54 @@ AFTER INSERT ON raw_material_issues
 FOR EACH ROW EXECUTE FUNCTION fn_post_rm_issue();
 
 
+-- CREATE OR REPLACE FUNCTION fn_update_receipt_stock()
+-- RETURNS trigger AS $$
+-- DECLARE
+--   new_bal numeric;
+-- BEGIN
+--   -- Step 1: Subtract OLD quantity from stock
+--   UPDATE raw_material_stock
+--   SET available_qty = available_qty - OLD.qc_passed_qty,
+--       last_updated = now()
+--   WHERE material_type = OLD.material_type
+--     AND roll_material_id = OLD.roll_material_id
+--     AND packaging_material_id = OLD.packaging_material_id
+--     AND warehouse_location = OLD.warehouse_location;
+
+--   -- Step 2: Add NEW quantity to stock
+--   INSERT INTO raw_material_stock(material_type, roll_material_id, packaging_material_id,
+--                                  warehouse_location, available_qty)
+--   VALUES (NEW.material_type, NEW.roll_material_id, NEW.packaging_material_id,
+--           NEW.warehouse_location, NEW.qc_passed_qty)
+--   ON CONFLICT (material_type, roll_material_id, packaging_material_id, warehouse_location)
+--   DO UPDATE 
+--   SET available_qty = raw_material_stock.available_qty + NEW.qc_passed_qty,
+--       last_updated = now();
+
+--   -- Get new balance
+--   SELECT available_qty INTO new_bal
+--   FROM raw_material_stock
+--   WHERE material_type = NEW.material_type
+--     AND roll_material_id = NEW.roll_material_id
+--     AND packaging_material_id = NEW.packaging_material_id
+--     AND warehouse_location = NEW.warehouse_location;
+
+--   -- Step 3: Insert ledger entry for correction
+--   INSERT INTO raw_material_ledger(
+--      material_type, roll_material_id, packaging_material_id,
+--      txn_type, reference_id, qty_in, balance_after
+--   )
+--   VALUES(
+--      NEW.material_type, NEW.roll_material_id, NEW.packaging_material_id,
+--      'RECEIPT-UPDATE', NEW.id, NEW.qc_passed_qty, new_bal
+--   );
+
+--   RETURN NEW;
+-- END;
+-- $$ LANGUAGE plpgsql;
 
 
+-- CREATE TRIGGER trg_update_receipt_stock
+-- AFTER UPDATE ON raw_material_receipts
+-- FOR EACH ROW
+-- EXECUTE FUNCTION fn_update_receipt_stock();

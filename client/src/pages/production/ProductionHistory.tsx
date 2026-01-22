@@ -18,23 +18,39 @@ type Machine = {
   name: string;
 };
 
-type Batch = {
+type RollMaterial = {
   id: string;
-  batch_no: string;
-  product_id: string | null;
-  machine_id: string | null;
-  shift: string | null;
-  planned_qty: number | null;
-  actual_qty: number | null;
-  status: string | null;
-  started_at: string | null;
-  completed_at: string | null;
-  created_at: string;
-  products_master?: Product;
-  machine_master?: Machine;
+  name: string;
 };
 
-type Entry = {
+type PackagingMaterial = {
+  id: string;
+  name: string;
+};
+
+type BatchRecord = {
+  id: string;
+  batch_id: string;
+  batch_no: string | null;
+  batch_date: string | null;
+  shift: string | null;
+  machine_id: string | null;
+  operator_id: string | null;
+  fg_product_id: string | null;
+  roll_material_id: string | null;
+  packaging_material_id: string | null;
+  rm_roll_qty: number | null;
+  rm_packaging_qty: number | null;
+  status: string | null;
+  planned_qty?: number | null;
+  actual_qty?: number | null;
+  started_at: string | null;
+  completed_at: string | null;
+  operation: string;
+  recorded_at: string;
+};
+
+type EntryRow = {
   id: string;
   batch_id: string | null;
   entry_time: string;
@@ -46,35 +62,92 @@ type Entry = {
 export default function ProductionHistory() {
   const { toast } = useToast();
   const [loading, setLoading] = useState(true);
-  const [batches, setBatches] = useState<Batch[]>([]);
+  const [batches, setBatches] = useState<BatchRecord[]>([]);
   const [entriesLoading, setEntriesLoading] = useState(false);
   const [selectedBatchId, setSelectedBatchId] = useState<string | null>(null);
   const [selectedBatchNo, setSelectedBatchNo] = useState<string | null>(null);
-  const [entries, setEntries] = useState<Entry[]>([]);
+  const [entries, setEntries] = useState<EntryRow[]>([]);
   const [searchTerm, setSearchTerm] = useState("");
   const [sortOrder, setSortOrder] = useState<"asc" | "desc">("desc");
 
+  const [products, setProducts] = useState<Product[]>([]);
+  const [machines, setMachines] = useState<Machine[]>([]);
+  const [rollMaterials, setRollMaterials] = useState<RollMaterial[]>([]);
+  const [packagingMaterials, setPackagingMaterials] = useState<PackagingMaterial[]>([]);
+
   useEffect(() => {
+    fetchLookups();
     fetchBatches();
   }, []);
+
+  const fetchLookups = async () => {
+    try {
+      const [p, m, r, pk] = await Promise.all([
+        supabase.from("products_master").select("id, product_code, name").order("name"),
+        supabase.from("machine_master").select("id, name").order("name"),
+        supabase.from("raw_material_roll_master").select("id, name").order("name"),
+        supabase.from("packaging_material_master").select("id, name").order("name"),
+      ]);
+      if (p.error) throw p.error;
+      if (m.error) throw m.error;
+      if (r.error) throw r.error;
+      if (pk.error) throw pk.error;
+      setProducts((p.data as any) || []);
+      setMachines((m.data as any) || []);
+      setRollMaterials((r.data as any) || []);
+      setPackagingMaterials((pk.data as any) || []);
+    } catch (e: any) {
+      toast({ title: "Error loading master data", description: e.message, variant: "destructive" });
+    }
+  };
 
   const fetchBatches = async () => {
     setLoading(true);
     try {
       const { data, error } = await supabase
-        .from("production_batches")
+        .from("production_batch_records")
         .select(
-          `
-          *,
-          products_master ( id, product_code, name ),
-          machine_master ( id, name )
-        `
+          "id, batch_id, batch_no, batch_date, shift, machine_id, operator_id, fg_product_id, roll_material_id, packaging_material_id, rm_roll_qty, rm_packaging_qty, status, started_at, completed_at, operation, recorded_at"
         )
-        .order("started_at", { ascending: false, nullsFirst: false })
-        .order("created_at", { ascending: false });
+        .order("recorded_at", { ascending: false });
 
       if (error) throw error;
-      setBatches((data as any) || []);
+
+      const rows = ((data as any) || []) as BatchRecord[];
+      const latestByBatchId = new Map<string, BatchRecord>();
+      for (const r of rows) {
+        if (!latestByBatchId.has(r.batch_id)) {
+          latestByBatchId.set(r.batch_id, r);
+        }
+      }
+
+      const latestRows = Array.from(latestByBatchId.values()).filter(
+        (r) => String(r.operation || "").toUpperCase() !== "DELETE"
+      );
+
+      const batchIds = latestRows.map((r) => r.batch_id).filter(Boolean);
+      if (batchIds.length > 0) {
+        const { data: live, error: liveErr } = await supabase
+          .from("production_batches")
+          .select("id, planned_qty, actual_qty")
+          .in("id", batchIds);
+
+        if (!liveErr) {
+          const byId = new Map<string, { planned_qty: number | null; actual_qty: number | null }>();
+          for (const r of (live as any) || []) {
+            byId.set(r.id, { planned_qty: r.planned_qty ?? null, actual_qty: r.actual_qty ?? null });
+          }
+          for (const r of latestRows) {
+            const x = byId.get(r.batch_id);
+            if (x) {
+              r.planned_qty = x.planned_qty;
+              r.actual_qty = x.actual_qty;
+            }
+          }
+        }
+      }
+
+      setBatches(latestRows);
     } catch (e: any) {
       toast({ title: "Error loading production history", description: e.message, variant: "destructive" });
     } finally {
@@ -86,25 +159,32 @@ export default function ProductionHistory() {
     const q = searchTerm.trim().toLowerCase();
     const rows = batches.filter((b) => {
       if (!q) return true;
+      const productName = products.find((p) => p.id === b.fg_product_id)?.name || "";
+      const productCode = products.find((p) => p.id === b.fg_product_id)?.product_code || "";
+      const machineName = machines.find((m) => m.id === b.machine_id)?.name || "";
+      const rollName = rollMaterials.find((m) => m.id === b.roll_material_id)?.name || "";
+      const packName = packagingMaterials.find((m) => m.id === b.packaging_material_id)?.name || "";
       const fields = [
-        b.batch_no,
+        b.batch_no ?? "",
         b.status ?? "",
         b.shift ?? "",
-        b.products_master?.name ?? "",
-        b.products_master?.product_code ?? "",
-        b.machine_master?.name ?? "",
+        productName,
+        productCode,
+        machineName,
+        rollName,
+        packName,
       ];
       return fields.some((f) => f.toLowerCase().includes(q));
     });
 
     rows.sort((a, b) => {
-      const da = (a.started_at ?? a.created_at ?? "") as string;
-      const db = (b.started_at ?? b.created_at ?? "") as string;
+      const da = (a.started_at ?? a.recorded_at ?? "") as string;
+      const db = (b.started_at ?? b.recorded_at ?? "") as string;
       return sortOrder === "asc" ? da.localeCompare(db) : db.localeCompare(da);
     });
 
     return rows;
-  }, [batches, searchTerm, sortOrder]);
+  }, [batches, machines, packagingMaterials, products, rollMaterials, searchTerm, sortOrder]);
 
   const fetchEntriesForBatch = async (batchId: string, batchNo: string) => {
     setSelectedBatchId(batchId);
@@ -112,6 +192,17 @@ export default function ProductionHistory() {
     setEntries([]);
     setEntriesLoading(true);
     try {
+      const fromRecords = await supabase
+        .from("production_entry_records")
+        .select("id, batch_id, entry_time, operator_name, produced_qty, status")
+        .eq("batch_id", batchId)
+        .order("entry_time", { ascending: false });
+
+      if (!fromRecords.error) {
+        setEntries((fromRecords.data as any) || []);
+        return;
+      }
+
       const { data, error } = await supabase
         .from("production_entries")
         .select("id, batch_id, entry_time, operator_name, produced_qty, status")
@@ -144,6 +235,26 @@ export default function ProductionHistory() {
     const pct = ((actual - planned) / planned) * 100;
     const sign = pct > 0 ? "+" : "";
     return `${sign}${pct.toFixed(1)}%`;
+  };
+
+  const productNameById = (id: string | null) => {
+    if (!id) return "-";
+    return products.find((p) => p.id === id)?.name ?? "-";
+  };
+
+  const machineNameById = (id: string | null) => {
+    if (!id) return "-";
+    return machines.find((m) => m.id === id)?.name ?? "-";
+  };
+
+  const rollNameById = (id: string | null) => {
+    if (!id) return "-";
+    return rollMaterials.find((m) => m.id === id)?.name ?? "-";
+  };
+
+  const packagingNameById = (id: string | null) => {
+    if (!id) return "-";
+    return packagingMaterials.find((m) => m.id === id)?.name ?? "-";
   };
 
   return (
@@ -188,6 +299,10 @@ export default function ProductionHistory() {
                   <th className="text-left py-2 px-2">Product</th>
                   <th className="text-left py-2 px-2">Machine</th>
                   <th className="text-left py-2 px-2">Shift</th>
+                  <th className="text-left py-2 px-2">Roll RM</th>
+                  <th className="text-right py-2 px-2">Roll Qty</th>
+                  <th className="text-left py-2 px-2">Packaging RM</th>
+                  <th className="text-right py-2 px-2">Pack Qty</th>
                   <th className="text-left py-2 px-2">Status</th>
                   <th className="text-right py-2 px-2">Planned</th>
                   <th className="text-right py-2 px-2">Actual</th>
@@ -198,13 +313,13 @@ export default function ProductionHistory() {
               <tbody>
                 {loading ? (
                   <tr>
-                    <td className="py-6 px-2 text-muted-foreground" colSpan={10}>
+                    <td className="py-6 px-2 text-muted-foreground" colSpan={14}>
                       Loading...
                     </td>
                   </tr>
                 ) : filteredBatches.length === 0 ? (
                   <tr>
-                    <td className="py-6 px-2 text-muted-foreground" colSpan={10}>
+                    <td className="py-6 px-2 text-muted-foreground" colSpan={14}>
                       No production records found.
                     </td>
                   </tr>
@@ -215,18 +330,22 @@ export default function ProductionHistory() {
                     const varianceIsNegative = typeof variance === "string" && variance.startsWith("-");
                     return (
                       <tr
-                        key={b.id}
+                        key={b.batch_id}
                         className={`border-b hover:bg-muted/50 cursor-pointer ${
-                          selectedBatchId === b.id ? "bg-muted/50" : ""
+                          selectedBatchId === b.batch_id ? "bg-muted/50" : ""
                         }`}
-                        onClick={() => fetchEntriesForBatch(b.id, b.batch_no)}
+                        onClick={() => fetchEntriesForBatch(b.batch_id, b.batch_no ?? "-")}
                         title="Click to view entries"
                       >
-                        <td className="py-2 px-2 whitespace-nowrap">{formatDateTime(b.started_at ?? b.created_at)}</td>
-                        <td className="py-2 px-2 font-mono whitespace-nowrap">{b.batch_no}</td>
-                        <td className="py-2 px-2">{b.products_master?.name ?? "-"}</td>
-                        <td className="py-2 px-2">{b.machine_master?.name ?? "-"}</td>
+                        <td className="py-2 px-2 whitespace-nowrap">{formatDateTime(b.started_at ?? b.recorded_at)}</td>
+                        <td className="py-2 px-2 font-mono whitespace-nowrap">{b.batch_no ?? "-"}</td>
+                        <td className="py-2 px-2">{productNameById(b.fg_product_id)}</td>
+                        <td className="py-2 px-2">{machineNameById(b.machine_id)}</td>
                         <td className="py-2 px-2">{b.shift ?? "-"}</td>
+                        <td className="py-2 px-2">{rollNameById(b.roll_material_id)}</td>
+                        <td className="py-2 px-2 text-right">{formatQty(b.rm_roll_qty)}</td>
+                        <td className="py-2 px-2">{packagingNameById(b.packaging_material_id)}</td>
+                        <td className="py-2 px-2 text-right">{formatQty(b.rm_packaging_qty)}</td>
                         <td className="py-2 px-2">{b.status ?? "-"}</td>
                         <td className="py-2 px-2 text-right">{formatQty(b.planned_qty)}</td>
                         <td className="py-2 px-2 text-right">{formatQty(b.actual_qty)}</td>

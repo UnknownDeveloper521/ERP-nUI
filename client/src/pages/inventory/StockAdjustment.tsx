@@ -64,6 +64,9 @@ export default function StockAdjustment() {
   const [form, setForm] = useState({
     material_type: "ROLL" as MaterialType,
     material_id: "",
+    warehouse_id: "",
+    // We'll keep warehouse_location for backward compatibility in display if needed, 
+    // but logic should rely on ID
     warehouse_location: "MAIN",
     adj_type: "IN" as AdjustmentType,
     quantity: "",
@@ -72,15 +75,10 @@ export default function StockAdjustment() {
 
   const [currentStock, setCurrentStock] = useState<number>(0);
 
-  const warehousesForSelect = useMemo(() => {
-    const names = (warehouses || []).map((w) => (w.name || "").trim()).filter(Boolean);
-    const fallback = ["MAIN", "WH1", "WH2"];
-    return Array.from(new Set([...names, ...fallback]));
-  }, [warehouses]);
-
-  const defaultWarehouse = useMemo(() => {
-    const main = (warehouses || []).find((w) => w.is_main && (w.name || "").trim());
-    return (main?.name || "MAIN").trim() || "MAIN";
+  // default to Main warehouse ID if available
+  const defaultWarehouseId = useMemo(() => {
+    const main = (warehouses || []).find((w) => w.is_main);
+    return main?.id || (warehouses?.[0]?.id) || "";
   }, [warehouses]);
 
   const approvedByLabel = useMemo(() => {
@@ -112,13 +110,23 @@ export default function StockAdjustment() {
     setHistory((rows as any) || []);
   };
 
-  const loadCurrentStock = async (materialId: string, warehouse: string) => {
-    if (!materialId) {
+  const loadCurrentStock = async (materialId: string, warehouseId: string) => {
+    if (!materialId || !warehouseId) {
       setCurrentStock(0);
       return;
     }
-    const res = await rawMaterialStockApi.getOne(form.material_type, materialId, warehouse);
-    setCurrentStock(Number(res?.available_qty ?? 0));
+
+    // Resolve warehouse name for the API which might still expect name for reading stock table
+    const wh = warehouses.find(w => w.id === warehouseId);
+    const whName = wh?.name || "MAIN";
+
+    try {
+      const res = await rawMaterialStockApi.getOne(form.material_type, materialId, whName, warehouseId);
+      setCurrentStock(Number(res?.available_qty ?? 0));
+    } catch (e) {
+      // ignore 404
+      setCurrentStock(0);
+    }
   };
 
   useEffect(() => {
@@ -128,8 +136,8 @@ export default function StockAdjustment() {
       try {
         await Promise.all([loadMaterials(form.material_type), loadHistory(), loadWarehouses()]);
         if (!cancelled) {
-          if (form.material_id) {
-            await loadCurrentStock(form.material_id, form.warehouse_location);
+          if (form.material_id && form.warehouse_id) {
+            await loadCurrentStock(form.material_id, form.warehouse_id);
           }
         }
       } catch (error: any) {
@@ -158,19 +166,15 @@ export default function StockAdjustment() {
   }, [form.material_type]);
 
   useEffect(() => {
-    (async () => {
-      try {
-        await loadCurrentStock(form.material_id, form.warehouse_location);
-      } catch (error: any) {
-        toast({ title: "Error fetching current stock", description: error.message, variant: "destructive" });
-      }
-    })();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [form.material_id, form.warehouse_location]);
+    if (form.material_id && form.warehouse_id) {
+      loadCurrentStock(form.material_id, form.warehouse_id);
+    }
+  }, [form.material_id, form.warehouse_id, warehouses]);
 
   const validate = () => {
     const qty = Number(form.quantity);
     if (!form.material_id) return "Material must be selected.";
+    if (!form.warehouse_id) return "Warehouse must be selected.";
     if (!Number.isFinite(qty) || qty <= 0) return "Quantity must be > 0.";
     if (!String(form.reason || "").trim()) return "Reason must not be empty.";
     if (form.adj_type === "OUT" && qty > currentStock) return "Cannot remove more stock than available.";
@@ -186,10 +190,14 @@ export default function StockAdjustment() {
 
     setSaving(true);
     try {
+      const wh = warehouses.find(w => w.id === form.warehouse_id);
+
       await stockAdjustmentsApi.create({
         material_id: form.material_id,
         material_type: form.material_type,
-        warehouse_location: form.warehouse_location,
+        warehouse_id: form.warehouse_id,
+        // Send location name for legacy reference/fallback if needed by API wrapper
+        warehouse_location: wh?.name || "MAIN",
         adj_type: form.adj_type,
         quantity: Number(form.quantity),
         reason: String(form.reason || "").trim(),
@@ -203,7 +211,7 @@ export default function StockAdjustment() {
       setForm((prev) => ({ ...prev, quantity: "", reason: "" }));
 
       await Promise.all([
-        loadCurrentStock(form.material_id, form.warehouse_location),
+        loadCurrentStock(form.material_id, form.warehouse_id),
         loadHistory(),
       ]);
 
@@ -219,7 +227,8 @@ export default function StockAdjustment() {
     setForm((prev) => ({
       ...prev,
       material_id: "",
-      warehouse_location: defaultWarehouse,
+      warehouse_id: defaultWarehouseId,
+      warehouse_location: "",
       adj_type: "IN",
       quantity: "",
       reason: "",
@@ -300,16 +309,16 @@ export default function StockAdjustment() {
               <div className="space-y-2">
                 <Label>Warehouse Location</Label>
                 <Select
-                  value={form.warehouse_location}
-                  onValueChange={(v) => setForm((p) => ({ ...p, warehouse_location: v }))}
+                  value={form.warehouse_id}
+                  onValueChange={(v) => setForm((p) => ({ ...p, warehouse_id: v }))}
                 >
                   <SelectTrigger data-testid="select-warehouse">
                     <SelectValue placeholder="Select warehouse" />
                   </SelectTrigger>
                   <SelectContent>
-                    {warehousesForSelect.map((w) => (
-                      <SelectItem key={w} value={w}>
-                        {w}
+                    {warehouses.map((w) => (
+                      <SelectItem key={w.id} value={w.id}>
+                        {w.name || "Unknown"}
                       </SelectItem>
                     ))}
                   </SelectContent>

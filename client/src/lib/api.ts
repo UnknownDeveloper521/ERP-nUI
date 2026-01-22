@@ -178,8 +178,11 @@ export const rawMaterialsApi = {
 };
 
 export const rawMaterialStockApi = {
-  getOne: (materialType: string, materialId: string, warehouseLocation: string) => {
-    const q = `?material_type=${encodeURIComponent(materialType)}&material_id=${encodeURIComponent(materialId)}&warehouse_location=${encodeURIComponent(warehouseLocation)}`;
+  getOne: (materialType: string, materialId: string, warehouseLocation: string, warehouseId?: string) => {
+    let q = `?material_type=${encodeURIComponent(materialType)}&material_id=${encodeURIComponent(materialId)}&warehouse_location=${encodeURIComponent(warehouseLocation)}`;
+    if (warehouseId) {
+      q += `&warehouse_id=${encodeURIComponent(warehouseId)}`;
+    }
     return apiRequest<{ available_qty: number }>(`/raw-material-stock${q}`);
   },
 };

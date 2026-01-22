@@ -32,6 +32,7 @@ import {
 import { ArrowUpDown, Loader2, Plus, Search, Pencil, Trash2 } from "lucide-react";
 import { supabase } from "@/lib/supabase";
 import { useToast } from "@/hooks/use-toast";
+import { useAuth } from "@/lib/store";
 
 type Product = {
   id: string;
@@ -44,19 +45,37 @@ type Machine = {
   name: string;
 };
 
+type RollMaterial = {
+  id: string;
+  name: string;
+};
+
+type PackagingMaterial = {
+  id: string;
+  name: string;
+};
+
 type Batch = {
   id: string;
   batch_no: string;
   product_id: string | null;
   machine_id: string | null;
+  batch_date?: string | null;
   shift: string | null;
   planned_qty: number | null;
   actual_qty: number | null;
   status: string | null;
   started_at: string | null;
   completed_at: string | null;
+  operator_id?: string | null;
+  roll_material_id?: string | null;
+  packaging_material_id?: string | null;
+  rm_roll_qty?: number | null;
+  rm_packaging_qty?: number | null;
   products_master?: Product;
   machine_master?: Machine;
+  raw_material_roll_master?: RollMaterial;
+  packaging_material_master?: PackagingMaterial;
 };
 
 type Entry = {
@@ -71,12 +90,20 @@ type Entry = {
 
 const NONE_SELECT = "__none__";
 
+const isUuid = (v: unknown) => {
+  if (!v || typeof v !== "string") return false;
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(v);
+};
+
 export default function ProductionEntry() {
   const { toast } = useToast();
+  const { user } = useAuth();
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [products, setProducts] = useState<Product[]>([]);
   const [machines, setMachines] = useState<Machine[]>([]);
+  const [rollMaterials, setRollMaterials] = useState<RollMaterial[]>([]);
+  const [packagingMaterials, setPackagingMaterials] = useState<PackagingMaterial[]>([]);
   const [batches, setBatches] = useState<Batch[]>([]);
   const [entries, setEntries] = useState<Entry[]>([]);
   const [searchTerm, setSearchTerm] = useState("");
@@ -97,8 +124,13 @@ export default function ProductionEntry() {
     batch_no: "",
     product_id: "",
     machine_id: "",
+    batch_date: new Date().toISOString().slice(0, 10),
     shift: "",
     planned_qty: "",
+    roll_material_id: "",
+    packaging_material_id: "",
+    rm_roll_qty: "",
+    rm_packaging_qty: "",
   });
 
   const [entryForm, setEntryForm] = useState({
@@ -116,14 +148,20 @@ export default function ProductionEntry() {
 
   const fetchLookups = async () => {
     try {
-      const [p, m] = await Promise.all([
+      const [p, m, r, pk] = await Promise.all([
         supabase.from("products_master").select("id, product_code, name").order("name"),
         supabase.from("machine_master").select("id, name").order("name"),
+        supabase.from("raw_material_roll_master").select("id, name").order("name"),
+        supabase.from("packaging_material_master").select("id, name").order("name"),
       ]);
       if (p.error) throw p.error;
       if (m.error) throw m.error;
+      if (r.error) throw r.error;
+      if (pk.error) throw pk.error;
       setProducts((p.data as any) || []);
       setMachines((m.data as any) || []);
+      setRollMaterials((r.data as any) || []);
+      setPackagingMaterials((pk.data as any) || []);
     } catch (e: any) {
       toast({ title: "Error loading master data", description: e.message, variant: "destructive" });
     }
@@ -138,7 +176,9 @@ export default function ProductionEntry() {
           `
           *,
           products_master ( id, product_code, name ),
-          machine_master ( id, name )
+          machine_master ( id, name ),
+          raw_material_roll_master ( id, name ),
+          packaging_material_master ( id, name )
         `
         )
         .order("started_at", { ascending: false, nullsFirst: false })
@@ -196,7 +236,18 @@ export default function ProductionEntry() {
 
   const openNewBatch = () => {
     setEditingBatch(null);
-    setBatchForm({ batch_no: generateBatchNo(), product_id: "", machine_id: "", shift: "", planned_qty: "" });
+    setBatchForm({
+      batch_no: generateBatchNo(),
+      product_id: "",
+      machine_id: "",
+      batch_date: new Date().toISOString().slice(0, 10),
+      shift: "",
+      planned_qty: "",
+      roll_material_id: "",
+      packaging_material_id: "",
+      rm_roll_qty: "",
+      rm_packaging_qty: "",
+    });
     setBatchDialogOpen(true);
   };
 
@@ -206,8 +257,14 @@ export default function ProductionEntry() {
       batch_no: b.batch_no || "",
       product_id: b.product_id || "",
       machine_id: b.machine_id || "",
+      batch_date: (b.batch_date ? String(b.batch_date).slice(0, 10) : new Date().toISOString().slice(0, 10)) as any,
       shift: b.shift || "",
       planned_qty: b.planned_qty === null || b.planned_qty === undefined ? "" : String(b.planned_qty),
+      roll_material_id: b.roll_material_id || "",
+      packaging_material_id: b.packaging_material_id || "",
+      rm_roll_qty: b.rm_roll_qty === null || b.rm_roll_qty === undefined ? "" : String(b.rm_roll_qty),
+      rm_packaging_qty:
+        b.rm_packaging_qty === null || b.rm_packaging_qty === undefined ? "" : String(b.rm_packaging_qty),
     });
     setBatchDialogOpen(true);
   };
@@ -242,14 +299,87 @@ export default function ProductionEntry() {
       toast({ title: "Machine is required", variant: "destructive" });
       return;
     }
+
+    if (!isUuid(batchForm.product_id)) {
+      toast({
+        title: "Invalid Product ID",
+        description:
+          "products_master.id must be a UUID. Your selected product id looks like a non-UUID value (e.g. '1').",
+        variant: "destructive",
+      });
+      return;
+    }
+    if (!isUuid(batchForm.machine_id)) {
+      toast({
+        title: "Invalid Machine ID",
+        description:
+          "machine_master.id must be a UUID. Your selected machine id looks like a non-UUID value (e.g. '1').",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    const operatorId = (editingBatch?.operator_id || user?.supabaseId || null) as any;
+    if (operatorId && !isUuid(String(operatorId))) {
+      toast({
+        title: "Invalid Operator ID",
+        description:
+          "operator_id must be a Supabase user UUID. Your current session user has a non-UUID id; make sure you are logged in via Supabase auth.",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    const rmRollQty = batchForm.rm_roll_qty.trim() ? Number(batchForm.rm_roll_qty) : 0;
+    const rmPackQty = batchForm.rm_packaging_qty.trim() ? Number(batchForm.rm_packaging_qty) : 0;
+    if (Number.isNaN(rmRollQty) || rmRollQty < 0) {
+      toast({ title: "RM Roll qty must be 0 or greater", variant: "destructive" });
+      return;
+    }
+    if (Number.isNaN(rmPackQty) || rmPackQty < 0) {
+      toast({ title: "RM Packaging qty must be 0 or greater", variant: "destructive" });
+      return;
+    }
+    if (!batchForm.roll_material_id && !batchForm.packaging_material_id) {
+      toast({ title: "Select at least one raw material (Roll or Packaging)", variant: "destructive" });
+      return;
+    }
+
+    if (batchForm.roll_material_id && !isUuid(batchForm.roll_material_id)) {
+      toast({
+        title: "Invalid Roll Material ID",
+        description:
+          "raw_material_roll_master.id must be a UUID. Your selected roll material id looks like a non-UUID value (e.g. '1').",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    if (batchForm.packaging_material_id && !isUuid(batchForm.packaging_material_id)) {
+      toast({
+        title: "Invalid Packaging Material ID",
+        description:
+          "packaging_material_master.id must be a UUID. Your selected packaging material id looks like a non-UUID value (e.g. '1').",
+        variant: "destructive",
+      });
+      return;
+    }
+
     setSaving(true);
     try {
       const payload = {
         batch_no: batchForm.batch_no.trim(),
         product_id: batchForm.product_id,
         machine_id: batchForm.machine_id,
+        batch_date: batchForm.batch_date || null,
         shift: batchForm.shift.trim() || null,
         planned_qty: batchForm.planned_qty.trim() ? Number(batchForm.planned_qty) : null,
+        operator_id: operatorId,
+        roll_material_id: batchForm.roll_material_id || null,
+        packaging_material_id: batchForm.packaging_material_id || null,
+        rm_roll_qty: rmRollQty,
+        rm_packaging_qty: rmPackQty,
+        updated_at: new Date().toISOString(),
       };
 
       if (editingBatch) {
@@ -554,10 +684,15 @@ export default function ProductionEntry() {
               <table className="w-full text-sm">
                 <thead>
                   <tr className="border-b">
+                    <th className="text-left py-2 px-2">Date</th>
                     <th className="text-left py-2 px-2">Batch No</th>
                     <th className="text-left py-2 px-2">Product</th>
                     <th className="text-left py-2 px-2">Machine</th>
                     <th className="text-left py-2 px-2">Shift</th>
+                    <th className="text-left py-2 px-2">Roll RM</th>
+                    <th className="text-right py-2 px-2">Roll Qty</th>
+                    <th className="text-left py-2 px-2">Packaging RM</th>
+                    <th className="text-right py-2 px-2">Pack Qty</th>
                     <th className="text-right py-2 px-2">Planned</th>
                     <th className="text-right py-2 px-2">Actual</th>
                     <th className="text-left py-2 px-2">Status</th>
@@ -567,10 +702,17 @@ export default function ProductionEntry() {
                 <tbody>
                   {batches.map((b) => (
                     <tr key={b.id} className="border-b hover:bg-muted/50">
+                      <td className="py-2 px-2 whitespace-nowrap">
+                        {b.batch_date ? String(b.batch_date).slice(0, 10) : "-"}
+                      </td>
                       <td className="py-2 px-2 font-mono text-primary">{b.batch_no}</td>
                       <td className="py-2 px-2">{b.products_master?.name || "-"}</td>
                       <td className="py-2 px-2">{b.machine_master?.name || "-"}</td>
                       <td className="py-2 px-2">{b.shift || "-"}</td>
+                      <td className="py-2 px-2">{b.raw_material_roll_master?.name || "-"}</td>
+                      <td className="py-2 px-2 text-right">{b.rm_roll_qty ?? 0}</td>
+                      <td className="py-2 px-2">{b.packaging_material_master?.name || "-"}</td>
+                      <td className="py-2 px-2 text-right">{b.rm_packaging_qty ?? 0}</td>
                       <td className="py-2 px-2 text-right">{b.planned_qty ?? 0}</td>
                       <td className="py-2 px-2 text-right">{b.actual_qty ?? 0}</td>
                       <td className="py-2 px-2">
@@ -635,6 +777,27 @@ export default function ProductionEntry() {
             </div>
             <div className="grid grid-cols-2 gap-4">
               <div className="space-y-2">
+                <Label htmlFor="batch_date">Batch Date</Label>
+                <Input
+                  id="batch_date"
+                  type="date"
+                  value={batchForm.batch_date}
+                  onChange={(e) => setBatchForm((p) => ({ ...p, batch_date: e.target.value }))}
+                />
+              </div>
+              <div className="space-y-2">
+                <Label>Operator (Auto)</Label>
+                <Input
+                  value={
+                    ((user?.email || "") + (user?.supabaseId ? ` (${user.supabaseId})` : "") || "-") as any
+                  }
+                  disabled
+                  className="bg-muted"
+                />
+              </div>
+            </div>
+            <div className="grid grid-cols-2 gap-4">
+              <div className="space-y-2">
                 <Label>Product *</Label>
                 <Select
                   value={batchForm.product_id}
@@ -688,6 +851,72 @@ export default function ProductionEntry() {
                   type="number"
                   value={batchForm.planned_qty}
                   onChange={(e) => setBatchForm((p) => ({ ...p, planned_qty: e.target.value }))}
+                />
+              </div>
+            </div>
+
+            <div className="grid grid-cols-2 gap-4">
+              <div className="space-y-2">
+                <Label>Roll Material</Label>
+                <Select
+                  value={batchForm.roll_material_id || NONE_SELECT}
+                  onValueChange={(v) =>
+                    setBatchForm((p) => ({ ...p, roll_material_id: v === NONE_SELECT ? "" : v }))
+                  }
+                >
+                  <SelectTrigger>
+                    <SelectValue placeholder="Select roll material" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value={NONE_SELECT}>None</SelectItem>
+                    {rollMaterials.map((m) => (
+                      <SelectItem key={m.id} value={m.id}>
+                        {m.name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="rm_roll_qty">RM Roll Qty</Label>
+                <Input
+                  id="rm_roll_qty"
+                  type="number"
+                  value={batchForm.rm_roll_qty}
+                  onChange={(e) => setBatchForm((p) => ({ ...p, rm_roll_qty: e.target.value }))}
+                />
+              </div>
+            </div>
+
+            <div className="grid grid-cols-2 gap-4">
+              <div className="space-y-2">
+                <Label>Packaging Material</Label>
+                <Select
+                  value={batchForm.packaging_material_id || NONE_SELECT}
+                  onValueChange={(v) =>
+                    setBatchForm((p) => ({ ...p, packaging_material_id: v === NONE_SELECT ? "" : v }))
+                  }
+                >
+                  <SelectTrigger>
+                    <SelectValue placeholder="Select packaging material" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value={NONE_SELECT}>None</SelectItem>
+                    {packagingMaterials.map((m) => (
+                      <SelectItem key={m.id} value={m.id}>
+                        {m.name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="rm_packaging_qty">RM Packaging Qty</Label>
+                <Input
+                  id="rm_packaging_qty"
+                  type="number"
+                  value={batchForm.rm_packaging_qty}
+                  onChange={(e) => setBatchForm((p) => ({ ...p, rm_packaging_qty: e.target.value }))}
                 />
               </div>
             </div>

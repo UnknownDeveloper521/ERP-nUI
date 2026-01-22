@@ -119,12 +119,15 @@ CREATE TABLE public.fg_stock (
   CONSTRAINT fg_stock_warehouse_id_fkey FOREIGN KEY (warehouse_id) REFERENCES public.warehouses_master(id)
 );
 CREATE TABLE public.inventory_thresholds (
+  material_type text NOT NULL,
   material_id uuid NOT NULL,
+  warehouse_location text NOT NULL,
   min_qty numeric DEFAULT 0,
   reorder_level numeric DEFAULT 0,
   max_qty numeric DEFAULT 0,
-  CONSTRAINT inventory_thresholds_pkey PRIMARY KEY (material_id),
-  CONSTRAINT inventory_thresholds_material_id_fkey FOREIGN KEY (material_id) REFERENCES public.raw_material_master(id)
+  created_at timestamp with time zone DEFAULT now(),
+  id uuid NOT NULL DEFAULT uuid_generate_v4(),
+  CONSTRAINT inventory_thresholds_pkey PRIMARY KEY (id)
 );
 CREATE TABLE public.job_postings (
   id character varying NOT NULL DEFAULT gen_random_uuid(),
@@ -252,6 +255,29 @@ CREATE TABLE public.payroll (
   created_at timestamp without time zone DEFAULT now(),
   CONSTRAINT payroll_pkey PRIMARY KEY (id)
 );
+CREATE TABLE public.production_batch_records (
+  id uuid NOT NULL DEFAULT uuid_generate_v4(),
+  batch_id uuid NOT NULL,
+  batch_no text,
+  batch_date date,
+  shift text,
+  machine_id uuid,
+  operator_id uuid,
+  fg_product_id uuid,
+  roll_material_id uuid,
+  packaging_material_id uuid,
+  rm_roll_qty numeric,
+  rm_packaging_qty numeric,
+  status text,
+  started_at timestamp with time zone,
+  completed_at timestamp with time zone,
+  remarks text,
+  source_created_at timestamp with time zone,
+  source_updated_at timestamp with time zone,
+  operation text NOT NULL,
+  recorded_at timestamp with time zone NOT NULL DEFAULT now(),
+  CONSTRAINT production_batch_records_pkey PRIMARY KEY (id)
+);
 CREATE TABLE public.production_batches (
   id uuid NOT NULL DEFAULT uuid_generate_v4(),
   batch_no text NOT NULL UNIQUE,
@@ -264,9 +290,19 @@ CREATE TABLE public.production_batches (
   started_at timestamp with time zone,
   completed_at timestamp with time zone,
   created_at timestamp without time zone DEFAULT now(),
+  batch_date date NOT NULL DEFAULT CURRENT_DATE,
+  operator_id uuid,
+  roll_material_id uuid,
+  packaging_material_id uuid,
+  rm_roll_qty numeric NOT NULL DEFAULT 0,
+  rm_packaging_qty numeric NOT NULL DEFAULT 0,
+  updated_at timestamp with time zone NOT NULL DEFAULT now(),
   CONSTRAINT production_batches_pkey PRIMARY KEY (id),
   CONSTRAINT production_batches_product_id_fkey FOREIGN KEY (product_id) REFERENCES public.products_master(id),
-  CONSTRAINT production_batches_machine_id_fkey FOREIGN KEY (machine_id) REFERENCES public.machine_master(id)
+  CONSTRAINT production_batches_machine_id_fkey FOREIGN KEY (machine_id) REFERENCES public.machine_master(id),
+  CONSTRAINT production_batches_roll_material_id_fkey FOREIGN KEY (roll_material_id) REFERENCES public.raw_material_roll_master(id),
+  CONSTRAINT production_batches_packaging_material_id_fkey FOREIGN KEY (packaging_material_id) REFERENCES public.packaging_material_master(id),
+  CONSTRAINT production_batches_operator_id_fkey FOREIGN KEY (operator_id) REFERENCES auth.users(id)
 );
 CREATE TABLE public.production_entries (
   id uuid NOT NULL DEFAULT uuid_generate_v4(),
@@ -277,7 +313,7 @@ CREATE TABLE public.production_entries (
   status text,
   rm_issue_id uuid,
   CONSTRAINT production_entries_pkey PRIMARY KEY (id),
-  CONSTRAINT production_entries_batch_id_fkey FOREIGN KEY (batch_id) REFERENCES public.production_batches(id)
+  CONSTRAINT production_entries_batch_fk FOREIGN KEY (batch_id) REFERENCES public.production_batches(id)
 );
 CREATE TABLE public.production_quality_checks (
   id uuid NOT NULL DEFAULT uuid_generate_v4(),
@@ -363,19 +399,21 @@ CREATE TABLE public.raw_material_issues (
   material_type text CHECK (material_type = ANY (ARRAY['ROLL'::text, 'PACKAGING'::text])),
   roll_material_id uuid,
   packaging_material_id uuid,
-  machine_id uuid,
+  warehouse_location text NOT NULL,
   batch_id uuid,
+  machine_id uuid,
   issued_qty numeric NOT NULL,
   issued_cost numeric,
-  issued_date date NOT NULL,
+  issued_date timestamp with time zone DEFAULT now(),
   issued_by uuid,
   created_at timestamp with time zone DEFAULT now(),
+  updated_at timestamp with time zone DEFAULT now(),
   CONSTRAINT raw_material_issues_pkey PRIMARY KEY (id),
   CONSTRAINT raw_material_issues_receipt_id_fkey FOREIGN KEY (receipt_id) REFERENCES public.raw_material_receipts(id),
   CONSTRAINT raw_material_issues_roll_material_id_fkey FOREIGN KEY (roll_material_id) REFERENCES public.raw_material_roll_master(id),
   CONSTRAINT raw_material_issues_packaging_material_id_fkey FOREIGN KEY (packaging_material_id) REFERENCES public.packaging_material_master(id),
-  CONSTRAINT raw_material_issues_machine_id_fkey FOREIGN KEY (machine_id) REFERENCES public.machine_master(id),
-  CONSTRAINT raw_material_issues_batch_id_fkey FOREIGN KEY (batch_id) REFERENCES public.production_batches(id)
+  CONSTRAINT raw_material_issues_batch_id_fkey FOREIGN KEY (batch_id) REFERENCES public.production_batches(id),
+  CONSTRAINT raw_material_issues_machine_id_fkey FOREIGN KEY (machine_id) REFERENCES public.machine_master(id)
 );
 CREATE TABLE public.raw_material_ledger (
   id uuid NOT NULL DEFAULT uuid_generate_v4(),
@@ -425,9 +463,11 @@ CREATE TABLE public.raw_material_receipts (
   material_type text CHECK (material_type = ANY (ARRAY['ROLL'::text, 'PACKAGING'::text])),
   roll_material_id uuid,
   packaging_material_id uuid,
+  warehouse_id uuid,
   CONSTRAINT raw_material_receipts_pkey PRIMARY KEY (id),
   CONSTRAINT raw_material_receipts_roll_material_id_fkey FOREIGN KEY (roll_material_id) REFERENCES public.raw_material_roll_master(id),
-  CONSTRAINT raw_material_receipts_packaging_material_id_fkey FOREIGN KEY (packaging_material_id) REFERENCES public.packaging_material_master(id)
+  CONSTRAINT raw_material_receipts_packaging_material_id_fkey FOREIGN KEY (packaging_material_id) REFERENCES public.packaging_material_master(id),
+  CONSTRAINT raw_material_receipts_warehouse_id_fkey FOREIGN KEY (warehouse_id) REFERENCES public.warehouses_master(id)
 );
 CREATE TABLE public.raw_material_roll_master (
   id uuid NOT NULL DEFAULT uuid_generate_v4(),
@@ -449,12 +489,13 @@ CREATE TABLE public.raw_material_roll_master (
 );
 CREATE TABLE public.raw_material_stock (
   material_type text NOT NULL CHECK (material_type = ANY (ARRAY['ROLL'::text, 'PACKAGING'::text])),
-  roll_material_id uuid NOT NULL,
-  packaging_material_id uuid NOT NULL,
+  roll_material_id uuid,
+  packaging_material_id uuid,
   warehouse_location text NOT NULL,
   available_qty numeric DEFAULT 0,
   last_updated timestamp with time zone DEFAULT now(),
-  CONSTRAINT raw_material_stock_pkey PRIMARY KEY (material_type, roll_material_id, packaging_material_id, warehouse_location)
+  material_key uuid NOT NULL DEFAULT COALESCE(roll_material_id, packaging_material_id),
+  CONSTRAINT raw_material_stock_pkey PRIMARY KEY (material_type, material_key, warehouse_location)
 );
 CREATE TABLE public.sales_order_items (
   id character varying NOT NULL DEFAULT gen_random_uuid(),
@@ -494,14 +535,29 @@ CREATE TABLE public.shift_summaries (
 );
 CREATE TABLE public.stock_adjustments (
   id uuid NOT NULL DEFAULT uuid_generate_v4(),
-  material_id uuid,
-  adj_type text,
-  qty_change numeric,
+  material_type text NOT NULL CHECK (material_type = ANY (ARRAY['ROLL'::text, 'PACKAGING'::text])),
+  roll_material_id uuid,
+  packaging_material_id uuid,
+  qty_change numeric NOT NULL,
   reason text,
   approved_by uuid,
+  warehouse_location text DEFAULT 'MAIN'::text,
   created_at timestamp with time zone DEFAULT now(),
+  adj_type text CHECK (adj_type = ANY (ARRAY['ADD'::text, 'REDUCE'::text, 'IN'::text, 'OUT'::text])),
+  warehouse_id uuid,
   CONSTRAINT stock_adjustments_pkey PRIMARY KEY (id),
-  CONSTRAINT stock_adjustments_material_id_fkey FOREIGN KEY (material_id) REFERENCES public.raw_material_master(id)
+  CONSTRAINT stock_adjustments_warehouse_id_fkey FOREIGN KEY (warehouse_id) REFERENCES public.warehouses_master(id),
+  CONSTRAINT stock_adjustments_roll_material_id_fkey FOREIGN KEY (roll_material_id) REFERENCES public.raw_material_roll_master(id),
+  CONSTRAINT stock_adjustments_packaging_material_id_fkey FOREIGN KEY (packaging_material_id) REFERENCES public.packaging_material_master(id)
+);
+CREATE TABLE public.stock_alert_log (
+  id uuid DEFAULT uuid_generate_v4(),
+  material_type text,
+  material_id uuid,
+  warehouse_location text,
+  available_qty numeric,
+  alert_status text,
+  checked_at timestamp with time zone DEFAULT now()
 );
 CREATE TABLE public.stock_movements (
   id character varying NOT NULL DEFAULT gen_random_uuid(),

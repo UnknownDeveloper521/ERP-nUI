@@ -88,7 +88,7 @@ export const MODULES_LIST = [
 export const ACTIONS_LIST = ["View", "Create", "Edit", "Delete", "Approve"] as const;
 
 // Generate permissions
-const DEFAULT_PERMISSIONS: Permission[] = MODULES_LIST.flatMap(module => 
+const DEFAULT_PERMISSIONS: Permission[] = MODULES_LIST.flatMap(module =>
   ACTIONS_LIST.map(action => ({
     id: `${module.toLowerCase()}_${action.toLowerCase()}`,
     name: `${action} ${module}`,
@@ -100,7 +100,7 @@ const DEFAULT_PERMISSIONS: Permission[] = MODULES_LIST.flatMap(module =>
 const DEFAULT_ROLES: Role[] = ["Admin", "Manager", "Operator", "Accountant", "Supervisor", "Quality Control"];
 
 // Helper to get all permissions for a module
-const getModulePermissions = (module: string, actions: string[]) => 
+const getModulePermissions = (module: string, actions: string[]) =>
   actions.map(action => `${module.toLowerCase()}_${action.toLowerCase()}`);
 
 const DEFAULT_ROLE_PERMISSIONS: RolePermissions = {
@@ -217,26 +217,76 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     localStorage.setItem('attendance', JSON.stringify(attendance));
   }, [attendance]);
 
-  const upsertLocalUserFromEmail = (email: string, supabaseId?: string, role?: Role) => {
-    const existing = users.find(u => u.email.toLowerCase() === email.toLowerCase());
-    if (existing) {
-      const updated = { ...existing, supabaseId, role: role ?? existing.role };
-      setUsers(prev => prev.map(u => u.id === existing.id ? updated : u));
-      return updated;
-    }
+  // Deduplicate users on mount
+  useEffect(() => {
+    setUsers(prev => {
+      const unique = new Map();
+      prev.forEach(u => {
+        if (!unique.has(u.email.toLowerCase())) {
+          unique.set(u.email.toLowerCase(), u);
+        }
+      });
+      const uniqueUsers = Array.from(unique.values());
+      if (uniqueUsers.length !== prev.length) {
+        return uniqueUsers; // Update only if duplicates found
+      }
+      return prev;
+    });
+  }, []);
 
-    const newUser: User = {
-      id: Math.max(...users.map(u => u.id), 0) + 1,
-      supabaseId,
-      name: email.split("@")[0] || "User",
-      email,
-      role: role ?? DEFAULT_ROLE,
-      department: "General",
-      status: "Active",
-      avatar: `https://api.dicebear.com/7.x/avataaars/svg?seed=${email}`,
-    };
-    setUsers(prev => [...prev, newUser]);
-    return newUser;
+  const upsertLocalUserFromEmail = (email: string, supabaseId?: string, role?: Role) => {
+    let resultingUser: User | null = null;
+
+    setUsers(prev => {
+      const existingIndex = prev.findIndex(u => u.email.toLowerCase() === email.toLowerCase());
+
+      if (existingIndex >= 0) {
+        const existing = prev[existingIndex];
+        const updated = { ...existing, supabaseId, role: role ?? existing.role };
+        resultingUser = updated;
+        const newUsers = [...prev];
+        newUsers[existingIndex] = updated;
+        return newUsers;
+      }
+
+      const newId = Math.max(...prev.map(u => u.id), 0) + 1;
+      const newUser: User = {
+        id: newId,
+        supabaseId,
+        name: email.split("@")[0] || "User",
+        email,
+        role: role ?? DEFAULT_ROLE,
+        department: "General",
+        status: "Active",
+        avatar: `https://api.dicebear.com/7.x/avataaars/svg?seed=${email}`,
+      };
+      resultingUser = newUser;
+      return [...prev, newUser];
+    });
+
+    // Note: resultingUser might be slightly technically stale if we just used 'prev',
+    // but synchronous execution here catches the object we intended to create.
+    // However, since setUsers is async, we can't return the *committed* state.
+    // But for the purpose of 'setUser(hydrated)' immediately after, returning the object is fine.
+
+    // Exception fallback if something weird happens (should be impossible in synchronous block above)
+    if (!resultingUser) {
+      // Fallback reconstruction if needed, but the block above guarantees assignment.
+      // We re-construct temp just for return value if needed, duplicate of above logic used purely for return
+      // This is a trade-off. Correct use should be refactoring login flow to not depend on return, 
+      // but minimal change fix:
+      const tempId = Math.max(...users.map(u => u.id), 0) + 1; // Unreliable ID, but object structure ok
+      return {
+        id: tempId,
+        supabaseId,
+        name: email.split("@")[0] || "User",
+        email,
+        role: role ?? DEFAULT_ROLE,
+        department: "General",
+        status: "Active"
+      } as User;
+    }
+    return resultingUser;
   };
 
   const getDbRoleForUser = async (supabaseUserId: string): Promise<Role> => {
@@ -390,13 +440,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const today = new Date().toISOString().split("T")[0];
     const empId = `EMP${String(user.id).padStart(3, "0")}`;
     const existingRecord = attendance.find(a => a.employeeId === empId && a.date === today);
-    
+
     const now = new Date();
     const checkInTime = `${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}`;
-    
+
     if (existingRecord) {
-      setAttendance(attendance.map(a => 
-        a.id === existingRecord.id 
+      setAttendance(attendance.map(a =>
+        a.id === existingRecord.id
           ? { ...a, checkIn: checkInTime }
           : a
       ));
@@ -420,19 +470,19 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const today = new Date().toISOString().split("T")[0];
     const empId = `EMP${String(user.id).padStart(3, "0")}`;
     const record = attendance.find(a => a.employeeId === empId && a.date === today);
-    
+
     if (!record) return;
-    
+
     const now = new Date();
     const checkOutTime = `${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}`;
-    
+
     const [checkInHour, checkInMin] = record.checkIn.split(":").map(Number);
     const [checkOutHour, checkOutMin] = checkOutTime.split(":").map(Number);
     const totalMinutes = (checkOutHour * 60 + checkOutMin) - (checkInHour * 60 + checkInMin);
     const hours = parseFloat((totalMinutes / 60).toFixed(2));
-    
-    setAttendance(attendance.map(a => 
-      a.id === record.id 
+
+    setAttendance(attendance.map(a =>
+      a.id === record.id
         ? { ...a, checkOut: checkOutTime, hours }
         : a
     ));
