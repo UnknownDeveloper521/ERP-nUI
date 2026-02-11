@@ -100,7 +100,12 @@ app.use((req, res, next) => {
     listenOptions.reusePort = true;
   }
 
-  httpServer.listen(listenOptions, () => {
-    log(`serving on port ${port}`);
-  });
+  // Only listen to port if NOT running on Vercel (or similar environment where we export the app)
+  if (!process.env.VERCEL) {
+    httpServer.listen(listenOptions, () => {
+      log(`serving on port ${port}`);
+    });
+  }
 })();
+
+export default app;
