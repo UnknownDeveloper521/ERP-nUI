@@ -8,7 +8,6 @@ import NotFound from "@/pages/not-found";
 import Login from "@/pages/Login";
 import Register from "@/pages/Register";
 import ProtectedRoute from "@/components/auth/ProtectedRoute";
-import AdminRoute from "@/components/auth/AdminRoute";
 import Dashboard from "@/pages/Dashboard";
 import HRMS from "@/pages/HRMS";
 import Customers from "@/pages/Customers";
@@ -17,6 +16,12 @@ import LogisticsDashboard from "@/pages/logistics/LogisticsDashboard";
 import NewTrip from "@/pages/logistics/NewTrip";
 import Weighment from "@/pages/logistics/Weighment";
 import TripHistory from "@/pages/logistics/TripHistory";
+
+import SuperAdminLogin from "@/pages/super-admin/Login";
+import SuperAdminLayout from "@/components/layout/SuperAdminLayout";
+import SuperAdminDashboard from "@/pages/super-admin/Dashboard";
+import TenantManagement from "@/pages/super-admin/TenantManagement";
+import CompanyManagement from "@/pages/super-admin/CompanyManagement";
 
 import Inventory from "@/pages/Inventory";
 import Products from "@/pages/Products";
@@ -30,12 +35,12 @@ import PerformanceDashboard from "@/pages/PerformanceDashboard";
 
 import InternalChat from "@/pages/InternalChat";
 
-import Departments from "@/pages/hrms/Departments";
-import Recruitment from "@/pages/hrms/Recruitment";
-import Shifts from "@/pages/hrms/Shifts";
 import ESS from "@/pages/hrms/ESS";
 import HRDashboard from "@/pages/hrms/HRDashboard";
-import Payroll from "@/pages/hrms/Payroll";
+import CoreHR from "@/pages/hrms/CoreHR";
+import AttendancePage from "@/pages/hrms/Attendance";
+import LeaveManagement from "@/pages/hrms/LeaveManagement";
+import PayrollManagement from "@/pages/hrms/PayrollManagement";
 
 import InventoryDashboard from "@/pages/inventory/InventoryDashboard";
 import RawMaterialReceipt from "@/pages/inventory/RawMaterialReceipt";
@@ -44,8 +49,6 @@ import RMLedger from "@/pages/inventory/RMLedger";
 import FGStock from "@/pages/inventory/FGStock";
 import StockAdjustment from "@/pages/inventory/StockAdjustment";
 import AlertsThresholds from "@/pages/inventory/AlertsThresholds";
-
-import MasterData from "@/pages/master/MasterData";
 
 import ProductionDashboard from "@/pages/production/ProductionDashboard";
 import ProductionEntry from "@/pages/production/ProductionEntry";
@@ -61,6 +64,13 @@ import DispatchNote from "@/pages/sales-invoicing/DispatchNote";
 import Invoice from "@/pages/sales-invoicing/Invoice";
 import PurchaseOrders from "@/pages/sales-invoicing/PurchaseOrders";
 import SalesReports from "@/pages/sales-invoicing/SalesReports";
+import HRMSMasters from "@/pages/masters/HRMSMasters";
+
+import HRSetupDashboard from "@/pages/hr-setup/HRSetupDashboard";
+import EmployeeSalaryDetails from "@/pages/hr-setup/EmployeeSalaryDetails";
+import SalaryComponent from "@/pages/hr-setup/SalaryComponent";
+import SalaryStructure from "@/pages/hr-setup/SalaryStructure";
+import PayPeriod from "@/pages/hr-setup/PayPeriod";
 
 // Placeholder pages for other modules
 const PlaceholderPage = ({ title }: { title: string }) => (
@@ -80,7 +90,31 @@ function Router() {
     <Switch>
       <Route path="/login" component={Login} />
       <Route path="/register" component={Register} />
-      
+
+      {/* Super Admin Routes */}
+      <Route path="/super-admin/login" component={SuperAdminLogin} />
+      <Route path="/super-admin">
+        {() => (
+          <SuperAdminLayout>
+            <SuperAdminDashboard />
+          </SuperAdminLayout>
+        )}
+      </Route>
+      <Route path="/super-admin/tenants">
+        {() => (
+          <SuperAdminLayout>
+            <TenantManagement />
+          </SuperAdminLayout>
+        )}
+      </Route>
+      <Route path="/super-admin/companies">
+        {() => (
+          <SuperAdminLayout>
+            <CompanyManagement />
+          </SuperAdminLayout>
+        )}
+      </Route>
+
       {/* HRMS Routes */}
       <Route path="/hrms">
         {() => (
@@ -91,17 +125,131 @@ function Router() {
           </ProtectedRoute>
         )}
       </Route>
-      
-      {/* HRMS Sub-modules */}
-      <Route path="/hrms/management">
+
+      <Route path="/hrms/core-hr/employees/new">
         {() => (
           <ProtectedRoute>
             <MainLayout>
-              <HRMS />
+              <CoreHR />
             </MainLayout>
           </ProtectedRoute>
         )}
       </Route>
+
+      <Route path="/hrms/core-hr/employees/:id">
+        {() => (
+          <ProtectedRoute>
+            <MainLayout>
+              <CoreHR />
+            </MainLayout>
+          </ProtectedRoute>
+        )}
+      </Route>
+
+      <Route path="/hrms/core-hr">
+        {() => (
+          <ProtectedRoute>
+            <MainLayout>
+              <CoreHR />
+            </MainLayout>
+          </ProtectedRoute>
+        )}
+      </Route>
+
+      <Route path="/hrms/leave-management">
+        {() => (
+          <ProtectedRoute>
+            <MainLayout>
+              <LeaveManagement />
+            </MainLayout>
+          </ProtectedRoute>
+        )}
+      </Route>
+
+      <Route path="/hrms/leave-management/dashboard">
+        {() => (
+          <ProtectedRoute>
+            <MainLayout>
+              <LeaveManagement />
+            </MainLayout>
+          </ProtectedRoute>
+        )}
+      </Route>
+
+      <Route path="/hrms/leave-management/apply">
+        {() => (
+          <ProtectedRoute>
+            <MainLayout>
+              <LeaveManagement />
+            </MainLayout>
+          </ProtectedRoute>
+        )}
+      </Route>
+
+      <Route path="/hrms/leave-management/management">
+        {() => (
+          <ProtectedRoute>
+            <MainLayout>
+              <LeaveManagement />
+            </MainLayout>
+          </ProtectedRoute>
+        )}
+      </Route>
+
+      <Route path="/hrms/leave-management/calendar">
+        {() => (
+          <ProtectedRoute>
+            <MainLayout>
+              <LeaveManagement />
+            </MainLayout>
+          </ProtectedRoute>
+        )}
+      </Route>
+
+      <Route path="/leave-management/apply">
+        {() => (
+          <ProtectedRoute>
+            <MainLayout>
+              <LeaveManagement />
+            </MainLayout>
+          </ProtectedRoute>
+        )}
+      </Route>
+
+      {/* Payroll Management - Main page (Run Payroll tab) */}
+      <Route path="/hrms/payroll-management">
+        {() => (
+          <ProtectedRoute>
+            <MainLayout>
+              <PayrollManagement />
+            </MainLayout>
+          </ProtectedRoute>
+        )}
+      </Route>
+
+      {/* Payroll Management - Payslips Tab */}
+      <Route path="/hrms/payroll-management/payslips">
+        {() => (
+          <ProtectedRoute>
+            <MainLayout>
+              <PayrollManagement />
+            </MainLayout>
+          </ProtectedRoute>
+        )}
+      </Route>
+
+      {/* Payroll Management - Employee Form */}
+      <Route path="/hrms/payroll-management/:employeeId">
+        {() => (
+          <ProtectedRoute>
+            <MainLayout>
+              <PayrollManagement />
+            </MainLayout>
+          </ProtectedRoute>
+        )}
+      </Route>
+
+      {/* HRMS Sub-modules */}
       <Route path="/hrms/employees">
         {() => (
           <ProtectedRoute>
@@ -111,56 +259,11 @@ function Router() {
           </ProtectedRoute>
         )}
       </Route>
-      <Route path="/hrms/roles">
-        {() => (
-          <ProtectedRoute>
-            <MainLayout>
-              <UsersRoles />
-            </MainLayout>
-          </ProtectedRoute>
-        )}
-      </Route>
       <Route path="/hrms/attendance">
         {() => (
           <ProtectedRoute>
             <MainLayout>
-              <HRMS />
-            </MainLayout>
-          </ProtectedRoute>
-        )}
-      </Route>
-      <Route path="/hrms/payroll">
-        {() => (
-          <ProtectedRoute>
-            <MainLayout>
-              <Payroll />
-            </MainLayout>
-          </ProtectedRoute>
-        )}
-      </Route>
-      <Route path="/hrms/departments">
-        {() => (
-          <ProtectedRoute>
-            <MainLayout>
-              <Departments />
-            </MainLayout>
-          </ProtectedRoute>
-        )}
-      </Route>
-      <Route path="/hrms/recruitment">
-        {() => (
-          <ProtectedRoute>
-            <MainLayout>
-               <Recruitment />
-            </MainLayout>
-          </ProtectedRoute>
-        )}
-      </Route>
-      <Route path="/hrms/shifts">
-        {() => (
-          <ProtectedRoute>
-            <MainLayout>
-               <Shifts />
+              <AttendancePage />
             </MainLayout>
           </ProtectedRoute>
         )}
@@ -169,7 +272,7 @@ function Router() {
         {() => (
           <ProtectedRoute>
             <MainLayout>
-               <ESS />
+              <ESS />
             </MainLayout>
           </ProtectedRoute>
         )}
@@ -246,16 +349,6 @@ function Router() {
               <AlertsThresholds />
             </MainLayout>
           </ProtectedRoute>
-        )}
-      </Route>
-
-      <Route path="/master">
-        {() => (
-          <AdminRoute>
-            <MainLayout>
-              <MasterData />
-            </MainLayout>
-          </AdminRoute>
         )}
       </Route>
 
@@ -407,7 +500,7 @@ function Router() {
           </ProtectedRoute>
         )}
       </Route>
-      
+
       <Route path="/crm">
         {() => (
           <ProtectedRoute>
@@ -417,7 +510,7 @@ function Router() {
           </ProtectedRoute>
         )}
       </Route>
-      
+
       <Route path="/accounting">
         {() => (
           <ProtectedRoute>
@@ -438,7 +531,7 @@ function Router() {
           </ProtectedRoute>
         )}
       </Route>
-      
+
       <Route path="/logistics/new-trip">
         {() => (
           <ProtectedRoute>
@@ -474,6 +567,124 @@ function Router() {
           <ProtectedRoute>
             <MainLayout>
               <UsersRoles />
+            </MainLayout>
+          </ProtectedRoute>
+        )}
+      </Route>
+
+      {/* HR Setup Routes */}
+      <Route path="/hr-setup/employee-salary">
+        {() => (
+          <ProtectedRoute>
+            <MainLayout>
+              <EmployeeSalaryDetails />
+            </MainLayout>
+          </ProtectedRoute>
+        )}
+      </Route>
+      {/* Route for creating a new Employee Salary Assignment */}
+      <Route path="/hr-setup/employee-salary/new">
+        {() => (
+          <ProtectedRoute>
+            <MainLayout>
+              <EmployeeSalaryDetails />
+            </MainLayout>
+          </ProtectedRoute>
+        )}
+      </Route>
+      {/* Route for editing an existing Employee Salary Assignment */}
+      <Route path="/hr-setup/employee-salary/:id">
+        {() => (
+          <ProtectedRoute>
+            <MainLayout>
+              <EmployeeSalaryDetails />
+            </MainLayout>
+          </ProtectedRoute>
+        )}
+      </Route>
+      <Route path="/hr-setup/salary-component">
+        {() => (
+          <ProtectedRoute>
+            <MainLayout>
+              <SalaryComponent />
+            </MainLayout>
+          </ProtectedRoute>
+        )}
+      </Route>
+      {/* Route for Salary Component Tabs (earning, deduction, reimbursement) */}
+      <Route path="/hr-setup/salary-component/:tab">
+        {() => (
+          <ProtectedRoute>
+            <MainLayout>
+              <SalaryComponent />
+            </MainLayout>
+          </ProtectedRoute>
+        )}
+      </Route>
+      {/* Route for adding a new Salary Component within a specific tab */}
+      <Route path="/hr-setup/salary-component/:tab/new">
+        {() => (
+          <ProtectedRoute>
+            <MainLayout>
+              <SalaryComponent />
+            </MainLayout>
+          </ProtectedRoute>
+        )}
+      </Route>
+      {/* Route for editing a Salary Component */}
+      <Route path="/hr-setup/salary-component/:tab/:id">
+        {() => (
+          <ProtectedRoute>
+            <MainLayout>
+              <SalaryComponent />
+            </MainLayout>
+          </ProtectedRoute>
+        )}
+      </Route>
+      <Route path="/hr-setup/salary-structure">
+        {() => (
+          <ProtectedRoute>
+            <MainLayout>
+              <SalaryStructure />
+            </MainLayout>
+          </ProtectedRoute>
+        )}
+      </Route>
+      {/* Route for creating a new Salary Structure */}
+      <Route path="/hr-setup/salary-structure/new">
+        {() => (
+          <ProtectedRoute>
+            <MainLayout>
+              <SalaryStructure />
+            </MainLayout>
+          </ProtectedRoute>
+        )}
+      </Route>
+      {/* Route for editing an existing Salary Structure */}
+      <Route path="/hr-setup/salary-structure/:id">
+        {() => (
+          <ProtectedRoute>
+            <MainLayout>
+              <SalaryStructure />
+            </MainLayout>
+          </ProtectedRoute>
+        )}
+      </Route>
+
+      <Route path="/hr-setup/pay-period">
+        {() => (
+          <ProtectedRoute>
+            <MainLayout>
+              <PayPeriod />
+            </MainLayout>
+          </ProtectedRoute>
+        )}
+      </Route>
+      <Route path="/masters/hrms/:tab?/:type?">
+        {() => (
+          <ProtectedRoute>
+            <MainLayout>
+              <HRMSMasters />
             </MainLayout>
           </ProtectedRoute>
         )}

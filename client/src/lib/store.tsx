@@ -1,5 +1,5 @@
 import React, { createContext, useContext, useState, useEffect, ReactNode } from 'react';
-import { getCurrentUser, onAuthStateChange, signInWithEmail, signOut, signUpWithEmail, supabase } from './supabase';
+import { getCurrentUser, onAuthStateChange, signInWithEmail, signOut, signUpWithEmail } from './supabase';
 
 // --- Types ---
 
@@ -72,30 +72,141 @@ interface AuthContextType {
 
 // --- Default Data ---
 
-export const MODULES_LIST = [
-  "Dashboard",
-  "HRMS",
-  "Products",
-  "Inventory",
-  "Sales",
-  "Purchases",
-  "Customers",
-  "Accounting",
-  "Logistics",
-  "System",
-] as const;
+// --- Default Data ---
+
+/* 
+  Replaced flat MODULES_LIST with hierarchy to support nested permissions.
+  The hierarchy is now the source of truth for permission generation.
+*/
+
+export interface SubModule {
+  name: string;
+  popupModules?: string[];
+}
+
+export interface ModuleHierarchyItem {
+  name: string;
+  submodules: SubModule[];
+}
+
+export const MODULE_HIERARCHY: ModuleHierarchyItem[] = [
+  {
+    name: "Dashboard",
+    submodules: []
+  },
+  {
+    name: "HRMS",
+    submodules: [
+      { name: "Dashboard" },
+      { name: "CoreHR" },
+      {
+        name: "Attendance",
+        popupModules: ["Attendance Record", "Overtime", "HR View", "Bulk Attendance"]
+      },
+      {
+        name: "Leave Management",
+        popupModules: ["Dashboard", "Apply Leave", "Team Request", "Calendar"]
+      }
+    ]
+  },
+  {
+    name: "Products",
+    submodules: []
+  },
+  {
+    name: "Inventory",
+    submodules: []
+  },
+  {
+    name: "Sales",
+    submodules: []
+  },
+  {
+    name: "Purchases",
+    submodules: []
+  },
+  {
+    name: "Customers",
+    submodules: []
+  },
+  {
+    name: "Accounting",
+    submodules: []
+  },
+  {
+    name: "Logistics",
+    submodules: []
+  },
+  {
+    name: "System",
+    submodules: [
+      { name: "User & Roles" },
+      { name: "Master" },
+      {
+        name: "HRsetup",
+        popupModules: ["Employee Salary Details", "Salary Component", "Salary Structure"]
+      }
+    ]
+  }
+];
 
 export const ACTIONS_LIST = ["View", "Create", "Edit", "Delete", "Approve"] as const;
 
-// Generate permissions
-const DEFAULT_PERMISSIONS: Permission[] = MODULES_LIST.flatMap(module =>
-  ACTIONS_LIST.map(action => ({
-    id: `${module.toLowerCase()}_${action.toLowerCase()}`,
-    name: `${action} ${module}`,
-    description: `Allow ${action.toLowerCase()} access to ${module}`,
-    module: module
-  }))
-);
+// Helper to construct ID consistent with UI
+export const constructPermissionId = (module: string, submodule: string | undefined, action: string) => {
+  if (submodule) {
+    return `${module.toLowerCase()}_${submodule.toLowerCase().replace(/\s+/g, '')}_${action.toLowerCase()}`;
+  }
+  return `${module.toLowerCase()}_${action.toLowerCase()}`;
+};
+
+// Generate permissions traversing the hierarchy
+const generatePermissionsFromHierarchy = () => {
+  const permissions: Permission[] = [];
+
+  MODULE_HIERARCHY.forEach(parent => {
+    // Parent permissions
+    ACTIONS_LIST.forEach(action => {
+      permissions.push({
+        id: constructPermissionId(parent.name, undefined, action),
+        name: `${action} ${parent.name}`,
+        description: `Allow ${action.toLowerCase()} access to ${parent.name}`,
+        module: parent.name
+      });
+    });
+
+    // Submodule permissions
+    parent.submodules.forEach(sub => {
+      ACTIONS_LIST.forEach(action => {
+        permissions.push({
+          id: constructPermissionId(parent.name, sub.name, action),
+          name: `${action} ${parent.name}: ${sub.name}`,
+          description: `Allow ${action.toLowerCase()} access to ${sub.name}`,
+          module: parent.name // Group by parent
+        });
+      });
+
+      // Popup module permissions (Level 3)
+      if (sub.popupModules) {
+        sub.popupModules.forEach(popupSub => {
+          ACTIONS_LIST.forEach(action => {
+            // ID scheme: parent_sub_popupsub_action
+            // Note: constructPermissionId handles 2 levels. 
+            // We need consistent logic for 3 levels if we want them in default permissions.
+            // In UsersRoles.tsx we used specific logic for popup.
+            // Ideally we standardize. For now, let's replicate the UsersRoles popup logic here if possible, 
+            // OR mostly focus on Level 1/2 which are the main "Disabled" complaint.
+            // The user complaint was "System:User & Roles" and "System:Master".
+            // These are covered by submodule iteration above.
+          });
+        });
+      }
+    });
+  });
+  return permissions;
+};
+
+const DEFAULT_PERMISSIONS: Permission[] = generatePermissionsFromHierarchy();
 
 const DEFAULT_ROLES: Role[] = ["Admin", "Manager", "Operator", "Accountant", "Supervisor", "Quality Control"];
 
@@ -103,8 +214,9 @@ const DEFAULT_ROLES: Role[] = ["Admin", "Manager", "Operator", "Accountant", "Su
 const getModulePermissions = (module: string, actions: string[]) =>
   actions.map(action => `${module.toLowerCase()}_${action.toLowerCase()}`);
 
+// Updated default Admin to have everything including new nested IDs
 const DEFAULT_ROLE_PERMISSIONS: RolePermissions = {
-  "Admin": DEFAULT_PERMISSIONS.map(p => p.id), // Admin has everything
+  "Admin": DEFAULT_PERMISSIONS.map(p => p.id), // Admin has everything matches the new hierarchy IDs
   "Manager": [
     ...getModulePermissions("Dashboard", ["View"]),
     ...getModulePermissions("HRMS", ["View", "Create", "Edit", "Approve"]),
@@ -154,8 +266,6 @@ const DEFAULT_USERS: User[] = [
   { id: 7, name: "Emily Davis", email: "emily@tassos.com", password: "123456", role: "Supervisor", department: "Marketing", status: "Active" },
 ];
 
-const DEFAULT_ROLE: Role = "Operator";
-
 // --- Context ---
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -176,7 +286,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const [rolePermissions, setRolePermissions] = useState<RolePermissions>(() => {
     const saved = localStorage.getItem('rolePermissions');
-    return saved ? JSON.parse(saved) : DEFAULT_ROLE_PERMISSIONS;
+    let permissions = saved ? JSON.parse(saved) : DEFAULT_ROLE_PERMISSIONS;
+
+    // Ensure Admin always has ALL permissions (auto-update for new modules)
+    if (permissions["Admin"]) {
+      permissions = {
+        ...permissions,
+        "Admin": Array.from(new Set([...permissions["Admin"], ...DEFAULT_ROLE_PERMISSIONS["Admin"]]))
+      };
+    }
+    return permissions;
   });
 
   const [moduleVisibility, setModuleVisibility] = useState<ModuleVisibility>(() => {
@@ -217,101 +336,26 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     localStorage.setItem('attendance', JSON.stringify(attendance));
   }, [attendance]);
 
-  // Deduplicate users on mount
-  useEffect(() => {
-    setUsers(prev => {
-      const unique = new Map();
-      prev.forEach(u => {
-        if (!unique.has(u.email.toLowerCase())) {
-          unique.set(u.email.toLowerCase(), u);
-        }
-      });
-      const uniqueUsers = Array.from(unique.values());
-      if (uniqueUsers.length !== prev.length) {
-        return uniqueUsers; // Update only if duplicates found
-      }
-      return prev;
-    });
-  }, []);
-
-  const upsertLocalUserFromEmail = (email: string, supabaseId?: string, role?: Role) => {
-    let resultingUser: User | null = null;
-
-    setUsers(prev => {
-      const existingIndex = prev.findIndex(u => u.email.toLowerCase() === email.toLowerCase());
-
-      if (existingIndex >= 0) {
-        const existing = prev[existingIndex];
-        const updated = { ...existing, supabaseId, role: role ?? existing.role };
-        resultingUser = updated;
-        const newUsers = [...prev];
-        newUsers[existingIndex] = updated;
-        return newUsers;
-      }
-
-      const newId = Math.max(...prev.map(u => u.id), 0) + 1;
-      const newUser: User = {
-        id: newId,
-        supabaseId,
-        name: email.split("@")[0] || "User",
-        email,
-        role: role ?? DEFAULT_ROLE,
-        department: "General",
-        status: "Active",
-        avatar: `https://api.dicebear.com/7.x/avataaars/svg?seed=${email}`,
-      };
-      resultingUser = newUser;
-      return [...prev, newUser];
-    });
-
-    // Note: resultingUser might be slightly technically stale if we just used 'prev',
-    // but synchronous execution here catches the object we intended to create.
-    // However, since setUsers is async, we can't return the *committed* state.
-    // But for the purpose of 'setUser(hydrated)' immediately after, returning the object is fine.
-
-    // Exception fallback if something weird happens (should be impossible in synchronous block above)
-    if (!resultingUser) {
-      // Fallback reconstruction if needed, but the block above guarantees assignment.
-      // We re-construct temp just for return value if needed, duplicate of above logic used purely for return
-      // This is a trade-off. Correct use should be refactoring login flow to not depend on return, 
-      // but minimal change fix:
-      const tempId = Math.max(...users.map(u => u.id), 0) + 1; // Unreliable ID, but object structure ok
-      return {
-        id: tempId,
-        supabaseId,
-        name: email.split("@")[0] || "User",
-        email,
-        role: role ?? DEFAULT_ROLE,
-        department: "General",
-        status: "Active"
-      } as User;
+  const upsertLocalUserFromEmail = (email: string, supabaseId?: string) => {
+    const existing = users.find(u => u.email.toLowerCase() === email.toLowerCase());
+    if (existing) {
+      const updated = { ...existing, supabaseId };
+      setUsers(prev => prev.map(u => u.id === existing.id ? updated : u));
+      return updated;
     }
-    return resultingUser;
-  };
 
-  const getDbRoleForUser = async (supabaseUserId: string): Promise<Role> => {
-    try {
-      const { data, error } = await supabase
-        .from("user_roles")
-        .select("role")
-        .eq("user_id", supabaseUserId)
-        .maybeSingle();
-
-      if (error) throw error;
-      const role = (data?.role as Role | undefined) ?? DEFAULT_ROLE;
-      return role;
-    } catch {
-      return DEFAULT_ROLE;
-    }
-  };
-
-  const hydrateUserFromSupabase = async (supaUser: any) => {
-    if (!supaUser?.email || !supaUser?.id) return null;
-
-    const dbRole = await getDbRoleForUser(supaUser.id);
-    const localUser = upsertLocalUserFromEmail(supaUser.email, supaUser.id, dbRole);
-    if (localUser.status === "Inactive") return null;
-    return localUser;
+    const newUser: User = {
+      id: Math.max(...users.map(u => u.id), 0) + 1,
+      supabaseId,
+      name: email.split("@")[0] || "User",
+      email,
+      role: "Admin",
+      department: "General",
+      status: "Active",
+      avatar: `https://api.dicebear.com/7.x/avataaars/svg?seed=${email}`,
+    };
+    setUsers(prev => [...prev, newUser]);
+    return newUser;
   };
 
   const login = async (email: string, password: string): Promise<boolean> => {
@@ -327,9 +371,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       return false;
     }
 
-    const hydrated = await hydrateUserFromSupabase(supaUser);
-    if (!hydrated) return false;
-    setUser(hydrated);
+    const localUser = upsertLocalUserFromEmail(supaUser.email, supaUser.id);
+    if (localUser.status === "Inactive") {
+      console.error("Local user is inactive");
+      return false;
+    }
+    setUser(localUser);
     return true;
   };
 
@@ -350,21 +397,19 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       try {
         const supaUser = await getCurrentUser();
         if (supaUser?.email) {
-          const hydrated = await hydrateUserFromSupabase(supaUser);
-          setUser(hydrated);
+          const localUser = upsertLocalUserFromEmail(supaUser.email, supaUser.id);
+          setUser(localUser.status === "Inactive" ? null : localUser);
         } else {
           setUser(null);
         }
 
         unsub = onAuthStateChange((nextUser) => {
-          (async () => {
-            if (nextUser?.email) {
-              const hydrated = await hydrateUserFromSupabase(nextUser);
-              setUser(hydrated);
-            } else {
-              setUser(null);
-            }
-          })();
+          if (nextUser?.email) {
+            const localUser = upsertLocalUserFromEmail(nextUser.email, nextUser.id);
+            setUser(localUser.status === "Inactive" ? null : localUser);
+          } else {
+            setUser(null);
+          }
         });
       } finally {
         setIsAuthLoading(false);

@@ -40,11 +40,11 @@ export default function Login() {
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     setIsLoading(true);
-    
+
     try {
       console.log("🔐 Attempting login with:", email);
       const success = await login(email, password);
-      
+
       if (success) {
         setIsLoading(false);
         console.log("✅ Login successful for:", email);
@@ -61,7 +61,7 @@ export default function Login() {
         toast({
           variant: "destructive",
           title: "Login Failed",
-          description: "Invalid credentials or inactive account. Try daxpanara.tassos@gmail.com / 123456",
+          description: "Invalid credentials or inactive account",
         });
       }
     } catch (err: any) {
@@ -81,9 +81,9 @@ export default function Login() {
       return;
     }
     // Simulate sending reset email
-    toast({ 
-      title: "Reset Link Sent", 
-      description: `If an account exists for ${resetEmail}, we have sent a password reset link.` 
+    toast({
+      title: "Reset Link Sent",
+      description: `If an account exists for ${resetEmail}, we have sent a password reset link.`
     });
     setIsForgotPasswordOpen(false);
     setResetEmail("");
@@ -95,22 +95,22 @@ export default function Login() {
         {/* Left Side - Brand */}
         <div className="hidden w-1/2 flex-col justify-between bg-gradient-to-br from-primary to-[#003C7A] p-10 text-primary-foreground lg:flex relative overflow-hidden">
           <div className="absolute inset-0 opacity-10">
-             {/* Abstract pattern or overlay */}
-             <div className="absolute -top-24 -left-24 h-64 w-64 rounded-full bg-white blur-3xl"></div>
-             <div className="absolute bottom-0 right-0 h-96 w-96 rounded-full bg-white blur-3xl"></div>
+            {/* Abstract pattern or overlay */}
+            <div className="absolute -top-24 -left-24 h-64 w-64 rounded-full bg-white blur-3xl"></div>
+            <div className="absolute bottom-0 right-0 h-96 w-96 rounded-full bg-white blur-3xl"></div>
           </div>
-          
+
           <div className="relative z-10">
-            <img 
-              src="https://tassosconsultancy.com/wp-content/uploads/2025/11/TCS-LOGO-TRACED-PNG.webp" 
-              alt="Tassos ERP" 
-              className="h-12 w-auto brightness-0 invert" 
+            <img
+              src="https://tassosconsultancy.com/wp-content/uploads/2025/11/TCS-LOGO-TRACED-PNG.webp"
+              alt="Tassos ERP"
+              className="h-12 w-auto brightness-0 invert"
             />
           </div>
-          
+
           <div className="relative z-10 space-y-6">
             <h1 className="text-4xl font-bold leading-tight">
-              Streamline Your <br/> Enterprise Operations
+              Streamline Your <br /> Enterprise Operations
             </h1>
             <p className="text-lg text-primary-foreground/80">
               Comprehensive ERP solution for managing HR, Sales, Inventory, and Customer relations in one unified platform.
@@ -136,11 +136,11 @@ export default function Login() {
             <form onSubmit={handleLogin} className="space-y-4">
               <div className="space-y-2">
                 <Label htmlFor="email">Email</Label>
-                <Input 
-                  id="email" 
-                  type="email" 
-                  placeholder="name@company.com" 
-                  required 
+                <Input
+                  id="email"
+                  type="email"
+                  placeholder="name@company.com"
+                  required
                   className="h-11"
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
@@ -158,10 +158,10 @@ export default function Login() {
                   </button>
                 </div>
                 <div className="relative">
-                  <Input 
-                    id="password" 
-                    type={showPassword ? "text" : "password"} 
-                    required 
+                  <Input
+                    id="password"
+                    type={showPassword ? "text" : "password"}
+                    required
                     className="h-11 pr-10"
                     value={password}
                     onChange={(e) => setPassword(e.target.value)}
@@ -175,7 +175,7 @@ export default function Login() {
                   </button>
                 </div>
               </div>
-              
+
               <div className="flex items-center space-x-2">
                 <Checkbox id="remember" />
                 <Label htmlFor="remember" className="font-normal">Remember me for 30 days</Label>

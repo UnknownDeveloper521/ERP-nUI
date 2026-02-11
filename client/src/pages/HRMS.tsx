@@ -1,10 +1,10 @@
 import { useState, useEffect } from "react";
-import { 
-  Users, 
-  UserPlus, 
-  FileText, 
-  Award, 
-  Calendar, 
+import {
+  Users,
+  UserPlus,
+  FileText,
+  Award,
+  Calendar,
   Search,
   Filter,
   MoreHorizontal,
@@ -148,13 +148,13 @@ export default function HRMS() {
   const [activeTab, setActiveTab] = useState("employees");
   const [employees, setEmployees] = useState(initialEmployees);
   const [attendance, setAttendance] = useState(initialAttendance);
-  
+
   // Shifts State with Persistence
   const [shifts, setShifts] = useState<Shift[]>(() => {
     const saved = localStorage.getItem("hrms_shifts");
     return saved ? JSON.parse(saved) : defaultShifts;
   });
-  
+
   // Holidays State with Persistence
   const [holidays, setHolidays] = useState<Holiday[]>(() => {
     const saved = localStorage.getItem("hrms_holidays");
@@ -166,13 +166,13 @@ export default function HRMS() {
   const [selectedEmployee, setSelectedEmployee] = useState<any>(null);
   const [isDetailOpen, setIsDetailOpen] = useState(false);
   const [isAddDialogOpen, setIsAddDialogOpen] = useState(false);
-  
+
   // Dialog States for Shifts & Holidays
   const [isShiftDialogOpen, setIsShiftDialogOpen] = useState(false);
   const [isHolidayDialogOpen, setIsHolidayDialogOpen] = useState(false);
   const [editingShift, setEditingShift] = useState<any>(null);
   const [editingHoliday, setEditingHoliday] = useState<any>(null);
-  
+
   // Quick Actions Dialog States
   const [isEditEmployeeOpen, setIsEditEmployeeOpen] = useState(false);
   const [isViewAttendanceOpen, setIsViewAttendanceOpen] = useState(false);
@@ -189,7 +189,7 @@ export default function HRMS() {
     basicSalary: "",
     hra: "",
   });
-  
+
   const [shiftForm, setShiftForm] = useState({
     name: "",
     start: "09:00",
@@ -214,7 +214,7 @@ export default function HRMS() {
     localStorage.setItem("hrms_holidays", JSON.stringify(holidays));
   }, [holidays]);
 
-  const filteredEmployees = employees.filter(employee => 
+  const filteredEmployees = employees.filter(employee =>
     employee.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
     employee.email.toLowerCase().includes(searchQuery.toLowerCase())
   );
@@ -277,7 +277,7 @@ export default function HRMS() {
       toast({ variant: "destructive", title: "Error", description: "Please fill required fields" });
       return;
     }
-    
+
     if (editingShift) {
       // Edit
       setShifts(shifts.map((s: Shift) => s.id === editingShift.id ? { ...s, ...shiftForm } : s));
@@ -338,7 +338,7 @@ export default function HRMS() {
       toast({ variant: "destructive", title: "Error", description: "Please fill required fields" });
       return;
     }
-    
+
     if (editingHoliday) {
       // Edit
       setHolidays(holidays.map((h: Holiday) => h.id === editingHoliday.id ? { ...h, ...holidayForm } : h));
@@ -419,21 +419,21 @@ export default function HRMS() {
               <div className="grid grid-cols-2 gap-4">
                 <div className="space-y-2">
                   <Label htmlFor="name">Name *</Label>
-                  <Input 
+                  <Input
                     id="name"
                     placeholder="Full Name"
                     value={newEmployee.name}
-                    onChange={(e) => setNewEmployee({...newEmployee, name: e.target.value})}
+                    onChange={(e) => setNewEmployee({ ...newEmployee, name: e.target.value })}
                   />
                 </div>
                 <div className="space-y-2">
                   <Label htmlFor="email">Email *</Label>
-                  <Input 
+                  <Input
                     id="email"
                     type="email"
                     placeholder="name@tassos.com"
                     value={newEmployee.email}
-                    onChange={(e) => setNewEmployee({...newEmployee, email: e.target.value})}
+                    onChange={(e) => setNewEmployee({ ...newEmployee, email: e.target.value })}
                   />
                 </div>
               </div>
@@ -441,20 +441,20 @@ export default function HRMS() {
               <div className="grid grid-cols-2 gap-4">
                 <div className="space-y-2">
                   <Label htmlFor="phone">Phone *</Label>
-                  <Input 
+                  <Input
                     id="phone"
                     placeholder="+1-234-567-8900"
                     value={newEmployee.phone}
-                    onChange={(e) => setNewEmployee({...newEmployee, phone: e.target.value})}
+                    onChange={(e) => setNewEmployee({ ...newEmployee, phone: e.target.value })}
                   />
                 </div>
                 <div className="space-y-2">
                   <Label htmlFor="location">Location *</Label>
-                  <Input 
+                  <Input
                     id="location"
                     placeholder="City, State"
                     value={newEmployee.location}
-                    onChange={(e) => setNewEmployee({...newEmployee, location: e.target.value})}
+                    onChange={(e) => setNewEmployee({ ...newEmployee, location: e.target.value })}
                   />
                 </div>
               </div>
@@ -462,7 +462,7 @@ export default function HRMS() {
               <div className="grid grid-cols-2 gap-4">
                 <div className="space-y-2">
                   <Label htmlFor="role">Role</Label>
-                  <Select value={newEmployee.role} onValueChange={(value) => setNewEmployee({...newEmployee, role: value})}>
+                  <Select value={newEmployee.role} onValueChange={(value) => setNewEmployee({ ...newEmployee, role: value })}>
                     <SelectTrigger>
                       <SelectValue />
                     </SelectTrigger>
@@ -478,7 +478,7 @@ export default function HRMS() {
                 </div>
                 <div className="space-y-2">
                   <Label htmlFor="department">Department</Label>
-                  <Select value={newEmployee.department} onValueChange={(value) => setNewEmployee({...newEmployee, department: value})}>
+                  <Select value={newEmployee.department} onValueChange={(value) => setNewEmployee({ ...newEmployee, department: value })}>
                     <SelectTrigger>
                       <SelectValue />
                     </SelectTrigger>
@@ -496,32 +496,32 @@ export default function HRMS() {
               <div className="grid grid-cols-3 gap-4">
                 <div className="space-y-2">
                   <Label htmlFor="grossSalary">Gross Salary *</Label>
-                  <Input 
+                  <Input
                     id="grossSalary"
                     type="number"
                     placeholder="85000"
                     value={newEmployee.grossSalary}
-                    onChange={(e) => setNewEmployee({...newEmployee, grossSalary: e.target.value})}
+                    onChange={(e) => setNewEmployee({ ...newEmployee, grossSalary: e.target.value })}
                   />
                 </div>
                 <div className="space-y-2">
                   <Label htmlFor="basicSalary">Basic Salary *</Label>
-                  <Input 
+                  <Input
                     id="basicSalary"
                     type="number"
                     placeholder="50000"
                     value={newEmployee.basicSalary}
-                    onChange={(e) => setNewEmployee({...newEmployee, basicSalary: e.target.value})}
+                    onChange={(e) => setNewEmployee({ ...newEmployee, basicSalary: e.target.value })}
                   />
                 </div>
                 <div className="space-y-2">
                   <Label htmlFor="hra">HRA</Label>
-                  <Input 
+                  <Input
                     id="hra"
                     type="number"
                     placeholder="10000"
                     value={newEmployee.hra}
-                    onChange={(e) => setNewEmployee({...newEmployee, hra: e.target.value})}
+                    onChange={(e) => setNewEmployee({ ...newEmployee, hra: e.target.value })}
                   />
                 </div>
               </div>
@@ -536,38 +536,38 @@ export default function HRMS() {
 
       <Tabs defaultValue="employees" className="w-full flex-1 flex flex-col" onValueChange={setActiveTab}>
         <TabsList className="w-full justify-start border-b bg-transparent p-0 h-auto rounded-none overflow-x-auto">
-          <TabsTrigger 
-            value="employees" 
+          <TabsTrigger
+            value="employees"
             className="rounded-none border-b-2 border-transparent data-[state=active]:border-primary data-[state=active]:bg-transparent px-4 py-3"
           >
             Employees
           </TabsTrigger>
-          <TabsTrigger 
-            value="biometric" 
+          <TabsTrigger
+            value="biometric"
             className="rounded-none border-b-2 border-transparent data-[state=active]:border-primary data-[state=active]:bg-transparent px-4 py-3 whitespace-nowrap"
           >
             Biometric / RFID
           </TabsTrigger>
-          <TabsTrigger 
-            value="checkin" 
+          <TabsTrigger
+            value="checkin"
             className="rounded-none border-b-2 border-transparent data-[state=active]:border-primary data-[state=active]:bg-transparent px-4 py-3 whitespace-nowrap"
           >
             Web & Mobile Check-in
           </TabsTrigger>
-          <TabsTrigger 
-            value="shifts" 
+          <TabsTrigger
+            value="shifts"
             className="rounded-none border-b-2 border-transparent data-[state=active]:border-primary data-[state=active]:bg-transparent px-4 py-3"
           >
             Shift Scheduling
           </TabsTrigger>
-          <TabsTrigger 
-            value="overtime" 
+          <TabsTrigger
+            value="overtime"
             className="rounded-none border-b-2 border-transparent data-[state=active]:border-primary data-[state=active]:bg-transparent px-4 py-3"
           >
             Overtime Calculation
           </TabsTrigger>
-          <TabsTrigger 
-            value="holidays" 
+          <TabsTrigger
+            value="holidays"
             className="rounded-none border-b-2 border-transparent data-[state=active]:border-primary data-[state=active]:bg-transparent px-4 py-3"
           >
             Holiday Calendar
@@ -627,8 +627,8 @@ export default function HRMS() {
                         </Badge>
                       </TableCell>
                       <TableCell className="text-right">
-                        <Button 
-                          variant="ghost" 
+                        <Button
+                          variant="ghost"
                           size="sm"
                           onClick={() => viewEmployeeDetail(employee)}
                         >
@@ -801,30 +801,30 @@ export default function HRMS() {
                 <div className="grid gap-4 py-4">
                   <div className="space-y-2">
                     <Label htmlFor="shift-name">Shift Name</Label>
-                    <Input 
-                      id="shift-name" 
-                      value={shiftForm.name} 
-                      onChange={(e) => setShiftForm({...shiftForm, name: e.target.value})}
-                      placeholder="e.g. Morning Shift" 
+                    <Input
+                      id="shift-name"
+                      value={shiftForm.name}
+                      onChange={(e) => setShiftForm({ ...shiftForm, name: e.target.value })}
+                      placeholder="e.g. Morning Shift"
                     />
                   </div>
                   <div className="grid grid-cols-2 gap-4">
                     <div className="space-y-2">
                       <Label htmlFor="shift-start">Start Time</Label>
-                      <Input 
-                        id="shift-start" 
+                      <Input
+                        id="shift-start"
                         type="time"
-                        value={shiftForm.start} 
-                        onChange={(e) => setShiftForm({...shiftForm, start: e.target.value})}
+                        value={shiftForm.start}
+                        onChange={(e) => setShiftForm({ ...shiftForm, start: e.target.value })}
                       />
                     </div>
                     <div className="space-y-2">
                       <Label htmlFor="shift-end">End Time</Label>
-                      <Input 
-                        id="shift-end" 
+                      <Input
+                        id="shift-end"
                         type="time"
-                        value={shiftForm.end} 
-                        onChange={(e) => setShiftForm({...shiftForm, end: e.target.value})}
+                        value={shiftForm.end}
+                        onChange={(e) => setShiftForm({ ...shiftForm, end: e.target.value })}
                       />
                     </div>
                   </div>
@@ -833,8 +833,8 @@ export default function HRMS() {
                     <div className="flex flex-wrap gap-3">
                       {["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"].map(day => (
                         <div key={day} className="flex items-center space-x-2">
-                          <Checkbox 
-                            id={`day-${day}`} 
+                          <Checkbox
+                            id={`day-${day}`}
                             checked={shiftForm.days.includes(day)}
                             onCheckedChange={() => toggleDay(day)}
                           />
@@ -911,7 +911,7 @@ export default function HRMS() {
                       const hourlyWage = calculateHourlyWage(empSalary);
                       const rateFactor = ot.otType === "weekday" ? OT_CONFIG.WEEKDAY_OT_RATE : (ot.otType === "holiday" ? OT_CONFIG.HOLIDAY_OT_RATE : OT_CONFIG.WEEKEND_OT_RATE);
                       const otAmount = calculateOTAmount(empSalary, ot.hours, ot.otType as any);
-                      
+
                       return (
                         <TableRow key={ot.id}>
                           <TableCell className="font-medium">{getEmployeeName(ot.employeeId)}</TableCell>
@@ -990,7 +990,7 @@ export default function HRMS() {
                 </TableBody>
               </Table>
             </Card>
-            
+
             {/* Holiday Add/Edit Dialog */}
             <Dialog open={isHolidayDialogOpen} onOpenChange={setIsHolidayDialogOpen}>
               <DialogContent className="sm:max-w-[400px]">
@@ -1000,25 +1000,25 @@ export default function HRMS() {
                 <div className="grid gap-4 py-4">
                   <div className="space-y-2">
                     <Label htmlFor="holiday-name">Holiday Name</Label>
-                    <Input 
-                      id="holiday-name" 
-                      value={holidayForm.name} 
-                      onChange={(e) => setHolidayForm({...holidayForm, name: e.target.value})}
-                      placeholder="e.g. Independence Day" 
+                    <Input
+                      id="holiday-name"
+                      value={holidayForm.name}
+                      onChange={(e) => setHolidayForm({ ...holidayForm, name: e.target.value })}
+                      placeholder="e.g. Independence Day"
                     />
                   </div>
                   <div className="space-y-2">
                     <Label htmlFor="holiday-date">Date</Label>
-                    <Input 
-                      id="holiday-date" 
+                    <Input
+                      id="holiday-date"
                       type="date"
-                      value={holidayForm.date} 
-                      onChange={(e) => setHolidayForm({...holidayForm, date: e.target.value})}
+                      value={holidayForm.date}
+                      onChange={(e) => setHolidayForm({ ...holidayForm, date: e.target.value })}
                     />
                   </div>
                   <div className="space-y-2">
                     <Label htmlFor="holiday-type">Type</Label>
-                    <Select value={holidayForm.type} onValueChange={(value) => setHolidayForm({...holidayForm, type: value})}>
+                    <Select value={holidayForm.type} onValueChange={(value) => setHolidayForm({ ...holidayForm, type: value })}>
                       <SelectTrigger>
                         <SelectValue />
                       </SelectTrigger>
@@ -1127,7 +1127,7 @@ export default function HRMS() {
                   <Button variant="outline" size="sm" onClick={() => setIsViewPayrollOpen(true)} data-testid="button-view-payroll">View Payroll</Button>
                   <Button variant="destructive" size="sm" onClick={() => {
                     if (confirm(`Deactivate ${selectedEmployee.name}?`)) {
-                      setEmployees(employees.map(e => e.id === selectedEmployee.id ? {...e, status: "Inactive"} : e));
+                      setEmployees(employees.map(e => e.id === selectedEmployee.id ? { ...e, status: "Inactive" } : e));
                       setIsDetailOpen(false);
                       toast({ title: "Deactivated", description: `${selectedEmployee.name} has been deactivated.`, className: "bg-red-50 border-red-200" });
                     }
@@ -1261,7 +1261,7 @@ export default function HRMS() {
                 <div className="text-xs font-semibold text-muted-foreground mb-1">Total Monthly Gross Salary</div>
                 <div className="text-3xl font-bold text-primary">${selectedEmployee.grossSalary.toLocaleString()}</div>
               </div>
-              
+
               <div className="space-y-3">
                 <h4 className="font-semibold text-sm">Salary Breakdown</h4>
                 <div className="space-y-2 text-sm">

@@ -1,4 +1,23 @@
+/**
+ * ============================================================================
+ * MAIN LAYOUT COMPONENT
+ * ============================================================================
+ * 
+ * This is the main application layout wrapper that provides:
+ * - Fixed left sidebar with navigation
+ * - Top header with search, notifications, and user menu
+ * - Main content area with scrolling
+ * - Footer at bottom
+ * 
+ * LAYOUT STRUCTURE:
+ * - Desktop: Sidebar (left) + Header (top) + Content (center) + Footer (bottom)
+ * - Mobile: Collapsible sidebar (sheet) + Header + Content + Footer
+ * 
+ * ============================================================================
+ */
+
 import { ReactNode, useState } from "react";
+import * as React from "react";
 import { Link, useLocation } from "wouter";
 import { useAuth, MODULES_LIST } from "@/lib/store";
 import {
@@ -24,6 +43,7 @@ import {
   CheckCircle,
   AlertCircle,
   Info,
+  Database,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
@@ -46,6 +66,15 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import Footer from "./Footer";
 import { Badge } from "@/components/ui/badge";
 
+// ============================================================================
+// TYPE DEFINITIONS
+// ============================================================================
+
+/**
+ * Notification data structure
+ * PURPOSE: Represents a single notification item
+ * KEEP: Essential for notification feature
+ */
 interface Notification {
   id: string;
   title: string;
@@ -55,35 +84,63 @@ interface Notification {
   read: boolean;
 }
 
+/**
+ * Sidebar component props
+ * PURPOSE: Allows passing custom className for styling
+ * KEEP: Essential for component flexibility
+ */
 interface SidebarProps {
   className?: string;
 }
 
+/**
+ * ============================================================================
+ * SIDEBAR COMPONENT
+ * ============================================================================
+ * 
+ * PURPOSE: Left navigation sidebar with module links
+ * 
+ * FEATURES:
+ * - Hierarchical navigation (Core, Optional, System modules)
+ * - Collapsible sub-menus for modules with sub-items
+ * - Active state highlighting
+ * - Role-based module visibility
+ * - User profile display at bottom
+ * 
+ * KEEP: Essential for application navigation
+ * ============================================================================
+ */
 const Sidebar = ({ className }: SidebarProps) => {
   const [location] = useLocation();
-  const { isModuleVisible, user } = useAuth();
+  const { isModuleVisible } = useAuth();
 
+  // ==========================================================================
+  // MODULE CONFIGURATION
+  // ==========================================================================
+  // PURPOSE: Defines all available modules, their icons, paths, and sub-items
+  // WHY NEEDED: Central configuration for navigation structure
+  // KEEP: Essential for navigation - modify when adding/removing modules
+  // ==========================================================================
   const moduleConfig: { [key: string]: { name: string; icon: any; path: string; subItems?: { name: string; path: string }[] } } = {
     "Dashboard": { name: "Dashboard", icon: LayoutDashboard, path: "/" },
     "Chat": { name: "Chat", icon: MessageSquare, path: "/chat" },
-    "HRMS": { 
-      name: "HRMS & Payroll", 
-      icon: Users, 
+    "HRMS": {
+      name: "HRMS & Payroll",
+      icon: Users,
       path: "/hrms",
       subItems: [
         { name: "Dashboard", path: "/hrms" },
-        { name: "Mgmt & Attendance", path: "/hrms/management" },
-        { name: "User Roles (RBAC)", path: "/hrms/roles" },
-        { name: "Payroll Management", path: "/hrms/payroll" },
-        { name: "Dept & Designations", path: "/hrms/departments" },
-        { name: "Recruitment (ATS)", path: "/hrms/recruitment" },
+        { name: "Core HR", path: "/hrms/core-hr" },
+        { name: "Attendance", path: "/hrms/attendance" },
+        { name: "Leave Management", path: "/hrms/leave-management" },
+        { name: "Payroll Management", path: "/hrms/payroll-management" },
         { name: "Self Service (ESS)", path: "/hrms/ess" },
       ]
     },
     "Products": { name: "Products & Items", icon: Box, path: "/products" },
-    "Inventory": { 
-      name: "Inventory", 
-      icon: Package, 
+    "Inventory": {
+      name: "Inventory",
+      icon: Package,
       path: "/inventory",
       subItems: [
         { name: "Dashboard", path: "/inventory" },
@@ -109,9 +166,9 @@ const Sidebar = ({ className }: SidebarProps) => {
         { name: "Shift Summary", path: "/production/shifts" },
       ]
     },
-    "Sales": { 
-      name: "Sales & Invoicing", 
-      icon: ShoppingCart, 
+    "Sales": {
+      name: "Sales & Invoicing",
+      icon: ShoppingCart,
       path: "/sales-invoicing",
       subItems: [
         { name: "Dashboard", path: "/sales-invoicing" },
@@ -127,12 +184,44 @@ const Sidebar = ({ className }: SidebarProps) => {
     "Accounting": { name: "Accounting", icon: FileText, path: "/accounting" },
     "Logistics": { name: "Logistics", icon: Truck, path: "/logistics" },
     "System": { name: "Users & Roles", icon: Settings, path: "/settings" },
+    "HRSetup": {
+      name: "HR Setup",
+      icon: Settings,
+      path: "/hr-setup/employee-salary",
+      subItems: [
+        { name: "Employee Salary Details", path: "/hr-setup/employee-salary" },
+        { name: "Salary Component", path: "/hr-setup/salary-component" },
+        { name: "Salary Structure", path: "/hr-setup/salary-structure" },
+        { name: "Pay Period", path: "/hr-setup/pay-period" },
+      ]
+    },
+    "Masters": {
+      name: "Masters",
+      icon: Database, // Make sure to import this from lucide-react in the next step 
+      path: "/masters",
+      subItems: [
+        { name: "HRMS", path: "/masters/hrms" },
+      ]
+    },
   };
 
+  // ==========================================================================
+  // MODULE CATEGORIZATION
+  // ==========================================================================
+  // PURPOSE: Groups modules into categories for sidebar organization
+  // WHY NEEDED: Creates logical grouping in sidebar (Core, Optional, System)
+  // KEEP: Essential for sidebar structure
+  // ==========================================================================
   const coreModules = ["Dashboard", "Chat", "HRMS", "Products", "Inventory", "Production", "Sales", "Purchases", "Customers"];
   const optionalModules = ["Accounting", "Logistics"];
-  const systemModules = ["System"];
-
+  const systemModules = ["System", "HRSetup", "Masters"];
+  // ==========================================================================
+  // ROLE-BASED FILTERING
+  // ==========================================================================
+  // PURPOSE: Filters modules based on user permissions
+  // WHY NEEDED: Users should only see modules they have access to
+  // KEEP: Essential for security and role-based access control
+  // ==========================================================================
   const filterVisibleModules = (modules: string[]) => {
     return modules.filter(mod => isModuleVisible(mod)).map(mod => moduleConfig[mod]).filter(Boolean);
   };
@@ -141,33 +230,22 @@ const Sidebar = ({ className }: SidebarProps) => {
   const visibleOptionalModules = filterVisibleModules(optionalModules);
   const visibleSystemModules = filterVisibleModules(systemModules);
 
+  // ==========================================================================
+  // MENU STRUCTURE
+  // ==========================================================================
+  // PURPOSE: Builds final menu structure with visible modules grouped by category
+  // WHY NEEDED: Creates the hierarchical menu structure for rendering
+  // KEEP: Essential for sidebar menu rendering
+  // ==========================================================================
   const menuItems = [
     ...(visibleCoreModules.length > 0 ? [{ title: "Core Modules", items: visibleCoreModules }] : []),
     ...(visibleOptionalModules.length > 0 ? [{ title: "Optional Modules", items: visibleOptionalModules }] : []),
-    ...(visibleSystemModules.length > 0
-      ? [
-          {
-            title: "System",
-            items: [
-              ...(user?.role === "Admin"
-                ? [{ name: "Master Data", icon: Settings, path: "/master" }]
-                : []),
-              ...visibleSystemModules,
-              { name: "My Account", icon: Users, path: "/my-account" },
-            ],
-          },
-        ]
-      : [
-          {
-            title: "System",
-            items: [
-              ...(user?.role === "Admin"
-                ? [{ name: "Master Data", icon: Settings, path: "/master" }]
-                : []),
-              { name: "My Account", icon: Users, path: "/my-account" },
-            ],
-          },
-        ]),
+    ...(visibleSystemModules.length > 0 ? [{
+      title: "System", items: [
+        ...visibleSystemModules,
+        { name: "My Account", icon: Users, path: "/my-account" }
+      ]
+    }] : [{ title: "System", items: [{ name: "My Account", icon: Users, path: "/my-account" }] }]),
   ];
 
   return (
@@ -192,18 +270,17 @@ const Sidebar = ({ className }: SidebarProps) => {
                   const isActive = location === item.path;
                   const hasSubItems = 'subItems' in item && item.subItems;
                   const isSubItemActive = hasSubItems && item.subItems?.some(sub => location === sub.path);
-                  
+
                   if (hasSubItems) {
                     return (
                       <Collapsible key={item.path} defaultOpen={isActive || isSubItemActive} className="w-full">
-                         <CollapsibleTrigger asChild>
+                        <CollapsibleTrigger asChild>
                           <Button
                             variant={(isActive || isSubItemActive) ? "secondary" : "ghost"}
-                            className={`w-full justify-between gap-3 rounded-lg transition-all ${
-                              (isActive || isSubItemActive)
-                                ? "bg-sidebar-primary text-sidebar-primary-foreground"
-                                : "text-sidebar-foreground hover:bg-sidebar-accent/20"
-                            }`}
+                            className={`w-full justify-between gap-3 rounded-lg transition-all ${(isActive || isSubItemActive)
+                              ? "bg-sidebar-primary text-sidebar-primary-foreground"
+                              : "text-sidebar-foreground hover:bg-sidebar-accent/20"
+                              }`}
                           >
                             <div className="flex items-center gap-3">
                               <item.icon className="h-4 w-4" />
@@ -218,13 +295,12 @@ const Sidebar = ({ className }: SidebarProps) => {
                             return (
                               <Link key={subItem.path} href={subItem.path}>
                                 <Button
-                                  variant="ghost" 
+                                  variant="ghost"
                                   size="sm"
-                                  className={`w-full justify-start h-9 text-sm font-normal pl-8 ${
-                                    isSubActive 
-                                      ? "text-sidebar-primary-foreground font-medium bg-sidebar-primary/10" 
-                                      : "text-sidebar-foreground/70 hover:text-sidebar-foreground hover:bg-sidebar-accent/10"
-                                  }`}
+                                  className={`w-full justify-start h-9 text-sm font-normal pl-8 ${isSubActive
+                                    ? "text-sidebar-primary-foreground font-medium bg-sidebar-primary/10"
+                                    : "text-sidebar-foreground/70 hover:text-sidebar-foreground hover:bg-sidebar-accent/10"
+                                    }`}
                                 >
                                   {subItem.name}
                                 </Button>
@@ -240,11 +316,10 @@ const Sidebar = ({ className }: SidebarProps) => {
                     <Link key={item.path} href={item.path}>
                       <Button
                         variant={isActive ? "default" : "ghost"}
-                        className={`w-full justify-start gap-3 rounded-lg transition-all ${
-                          isActive
-                            ? "bg-sidebar-primary text-sidebar-primary-foreground border-b-2 border-b-sidebar-accent"
-                            : "text-sidebar-foreground hover:bg-sidebar-accent/20"
-                        }`}
+                        className={`w-full justify-start gap-3 rounded-lg transition-all ${isActive
+                          ? "bg-sidebar-primary text-sidebar-primary-foreground border-b-2 border-b-sidebar-accent"
+                          : "text-sidebar-foreground hover:bg-sidebar-accent/20"
+                          }`}
                       >
                         <item.icon className="h-4 w-4" />
                         <span className="truncate">{item.name}</span>
@@ -261,17 +336,11 @@ const Sidebar = ({ className }: SidebarProps) => {
         <div className="flex items-center gap-3 rounded-lg bg-sidebar-accent/20 p-3">
           <Avatar className="h-9 w-9 rounded-md">
             <AvatarImage src="https://github.com/shadcn.png" />
-            <AvatarFallback>
-              {(user?.name || "User").slice(0, 2).toUpperCase()}
-            </AvatarFallback>
+            <AvatarFallback>AD</AvatarFallback>
           </Avatar>
           <div className="flex flex-col overflow-hidden">
-            <span className="truncate text-sm font-medium text-sidebar-foreground">
-              {user?.name || "User"}
-            </span>
-            <span className="truncate text-xs text-sidebar-foreground/70">
-              {user?.email || ""}
-            </span>
+            <span className="truncate text-sm font-medium text-sidebar-foreground">Admin User</span>
+            <span className="truncate text-xs text-sidebar-foreground/70">admin@tassos.com</span>
           </div>
         </div>
       </div>
@@ -279,10 +348,44 @@ const Sidebar = ({ className }: SidebarProps) => {
   );
 };
 
+/**
+ * ============================================================================
+ * MAIN LAYOUT COMPONENT
+ * ============================================================================
+ * 
+ * PURPOSE: Wraps all application pages with consistent layout
+ * 
+ * FEATURES:
+ * - Responsive design (desktop sidebar, mobile sheet)
+ * - Global search functionality
+ * - Notification system
+ * - User profile menu
+ * - Logout functionality
+ * 
+ * KEEP: Essential for application structure
+ * ============================================================================
+ */
 export default function MainLayout({ children }: { children: ReactNode }) {
   const [, setLocation] = useLocation();
   const { logout } = useAuth();
+
+  // ==========================================================================
+  // SEARCH STATE
+  // ==========================================================================
+  // PURPOSE: Stores search query for module/record search
+  // WHY NEEDED: Allows users to quickly find and navigate to modules
+  // KEEP: Essential for search functionality
+  // ==========================================================================
   const [searchQuery, setSearchQuery] = useState("");
+
+  // ==========================================================================
+  // NOTIFICATION STATE
+  // ==========================================================================
+  // PURPOSE: Stores notification data and manages notification panel
+  // WHY NEEDED: Displays system notifications to users
+  // NOTE: In production, this will be replaced with real-time notifications from backend
+  // KEEP: Essential for notification feature (replace with API later)
+  // ==========================================================================
   const [notifications, setNotifications] = useState<Notification[]>([
     { id: "1", title: "Order Confirmed", message: "Order #ORD-2024-891 has been confirmed", type: "success", timestamp: "2 mins ago", read: false },
     { id: "2", title: "Low Stock Alert", message: "White Sugar S-30 stock is below reorder level", type: "warning", timestamp: "15 mins ago", read: false },
@@ -293,6 +396,70 @@ export default function MainLayout({ children }: { children: ReactNode }) {
 
   const unreadCount = notifications.filter(n => !n.read).length;
 
+  // ==========================================================================
+  // WHITE CARET FIX FOR SEARCH INPUT
+  // ==========================================================================
+  // PURPOSE: Forces search input caret to be white (visible on blue background)
+  // WHY NEEDED: Default caret color is black, invisible on dark blue header
+  // HOW IT WORKS: Uses JavaScript to override CSS and maintain white caret
+  // KEEP: Essential for search input usability
+  // NOTE: This is a workaround - ideally should be fixed in CSS
+  // ==========================================================================
+  React.useEffect(() => {
+    const forceWhiteCaret = () => {
+      const searchInputs = document.querySelectorAll('input[type="search"], input[placeholder*="Search"]');
+      searchInputs.forEach((input: any) => {
+        if (input) {
+          input.style.caretColor = '#ffffff';
+          input.style.setProperty('caret-color', '#ffffff', 'important');
+          input.style.setProperty('-webkit-caret-color', '#ffffff', 'important');
+          input.style.color = '#ffffff';
+          input.style.setProperty('color', '#ffffff', 'important');
+
+          // Add event listeners to maintain white caret
+          input.addEventListener('focus', () => {
+            input.style.caretColor = '#ffffff';
+            input.style.setProperty('caret-color', '#ffffff', 'important');
+            input.style.setProperty('-webkit-caret-color', '#ffffff', 'important');
+          });
+
+          input.addEventListener('click', () => {
+            input.style.caretColor = '#ffffff';
+            input.style.setProperty('caret-color', '#ffffff', 'important');
+            input.style.setProperty('-webkit-caret-color', '#ffffff', 'important');
+          });
+
+          input.addEventListener('input', () => {
+            input.style.caretColor = '#ffffff';
+            input.style.setProperty('caret-color', '#ffffff', 'important');
+            input.style.setProperty('-webkit-caret-color', '#ffffff', 'important');
+          });
+        }
+      });
+    };
+
+    // Run immediately and with delays to catch dynamically loaded inputs
+    forceWhiteCaret();
+
+    // Run after a delay to catch dynamically loaded inputs
+    setTimeout(forceWhiteCaret, 100);
+    setTimeout(forceWhiteCaret, 500);
+    setTimeout(forceWhiteCaret, 1000);
+
+    // Set up observer for new inputs
+    const observer = new MutationObserver(forceWhiteCaret);
+    observer.observe(document.body, { childList: true, subtree: true });
+
+    return () => observer.disconnect();
+  }, []);
+
+  // ==========================================================================
+  // NOTIFICATION HANDLERS
+  // ==========================================================================
+  // PURPOSE: Functions to manage notification state (mark read, clear, etc.)
+  // WHY NEEDED: User interactions with notification panel
+  // KEEP: Essential for notification feature
+  // ==========================================================================
   const handleMarkAsRead = (id: string) => {
     setNotifications(notifications.map(n => n.id === id ? { ...n, read: true } : n));
   };
@@ -309,11 +476,26 @@ export default function MainLayout({ children }: { children: ReactNode }) {
     setNotifications([]);
   };
 
+  // ==========================================================================
+  // LOGOUT HANDLER
+  // ==========================================================================
+  // PURPOSE: Logs out user and redirects to login page
+  // WHY NEEDED: User needs ability to log out
+  // KEEP: Essential for authentication flow
+  // ==========================================================================
   const handleLogout = async () => {
     logout();
     setLocation("/login");
   };
 
+  // ==========================================================================
+  // MODULE SEARCH DATA
+  // ==========================================================================
+  // PURPOSE: List of searchable modules for quick navigation
+  // WHY NEEDED: Powers the search functionality in header
+  // NOTE: Should match moduleConfig in Sidebar
+  // KEEP: Essential for search feature
+  // ==========================================================================
   const modules = [
     { name: "Dashboard", path: "/" },
     { name: "HRMS", path: "/hrms" },
@@ -330,23 +512,57 @@ export default function MainLayout({ children }: { children: ReactNode }) {
     { name: "My Account", path: "/my-account" },
   ];
 
+  // ==========================================================================
+  // SEARCH FILTERING
+  // ==========================================================================
+  // PURPOSE: Filters modules based on search query
+  // WHY NEEDED: Shows matching modules in dropdown as user types
+  // KEEP: Essential for search functionality
+  // ==========================================================================
   const filteredModules = searchQuery
     ? modules.filter((m) =>
-        m.name.toLowerCase().includes(searchQuery.toLowerCase())
-      )
+      m.name.toLowerCase().includes(searchQuery.toLowerCase())
+    )
     : [];
 
   return (
     <div className="erp-layout flex h-screen w-full overflow-hidden bg-background">
-      {/* FIXED LEFT SIDEBAR - Dark Blue #003C7A */}
+      {/* ====================================================================
+           FIXED LEFT SIDEBAR - Desktop Only
+           ====================================================================
+           PURPOSE: Navigation sidebar visible on desktop (lg breakpoint+)
+           WHY HIDDEN ON MOBILE: Mobile uses Sheet (slide-out) instead
+           KEEP: Essential for desktop navigation
+           ==================================================================== */}
       <div className="hidden lg:flex w-64 flex-shrink-0 bg-sidebar border-none">
         <Sidebar />
       </div>
 
-      {/* MAIN CONTENT AREA */}
+      {/* ====================================================================
+           MAIN CONTENT AREA
+           ====================================================================
+           PURPOSE: Contains header, page content, and footer
+           LAYOUT: Flexbox column with header/footer fixed, content scrollable
+           KEEP: Essential for page structure
+           ==================================================================== */}
       <div className="main-layout flex flex-col flex-1 h-screen overflow-hidden">
-        {/* FIXED TOP NAVBAR - Blue #0056B8 */}
+        {/* ==================================================================
+             FIXED TOP NAVBAR
+             ==================================================================
+             PURPOSE: Global header with search, notifications, user menu
+             FEATURES:
+             - Mobile: Hamburger menu to open sidebar sheet
+             - Desktop: Search bar, notifications, user profile
+             KEEP: Essential for global navigation and actions
+             ================================================================== */}
         <header className="topbar sticky top-0 z-10 flex h-16 items-center justify-between border-b bg-primary px-6 shadow-md flex-shrink-0">
+          {/* ================================================================
+               MOBILE MENU BUTTON & LOGO
+               ================================================================
+               PURPOSE: Shows hamburger menu and logo on mobile devices
+               WHY NEEDED: Mobile doesn't have fixed sidebar
+               KEEP: Essential for mobile navigation
+               ================================================================ */}
           <div className="flex items-center gap-4 lg:hidden">
             <Sheet>
               <SheetTrigger asChild>
@@ -365,6 +581,13 @@ export default function MainLayout({ children }: { children: ReactNode }) {
             />
           </div>
 
+          {/* ================================================================
+               SEARCH BAR
+               ================================================================
+               PURPOSE: Global search for modules and records
+               WHY HIDDEN ON MOBILE: Limited space on mobile header
+               KEEP: Essential for quick navigation
+               ================================================================ */}
           <div className="flex flex-1 items-center gap-4 px-4 md:px-8">
             <div className="relative w-full max-w-sm hidden md:block">
               <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-primary-foreground/70" />
@@ -375,6 +598,7 @@ export default function MainLayout({ children }: { children: ReactNode }) {
                 onChange={(e) => setSearchQuery(e.target.value)}
                 className="w-full rounded-lg bg-primary-foreground/20 pl-9 md:w-[300px] lg:w-[400px] text-primary-foreground placeholder:text-primary-foreground/50 border-primary-foreground/20"
               />
+              {/* Search Results Dropdown */}
               {searchQuery && filteredModules.length > 0 && (
                 <div className="absolute top-full left-0 mt-2 w-full bg-white border rounded-lg shadow-lg z-50">
                   {filteredModules.map((module) => (
@@ -392,7 +616,23 @@ export default function MainLayout({ children }: { children: ReactNode }) {
             </div>
           </div>
 
+          {/* ================================================================
+               HEADER RIGHT SECTION
+               ================================================================
+               PURPOSE: Notifications bell and user profile menu
+               KEEP: Essential for user interactions
+               ================================================================ */}
           <div className="flex items-center gap-4">
+            {/* ==============================================================
+                 NOTIFICATIONS DROPDOWN
+                 ==============================================================
+                 PURPOSE: Shows notification panel with unread count badge
+                 FEATURES:
+                 - Unread count badge
+                 - Mark as read/clear functionality
+                 - Different icons for success/warning/info
+                 KEEP: Essential for notification system
+                 ============================================================== */}
             <DropdownMenu open={isNotificationOpen} onOpenChange={setIsNotificationOpen}>
               <DropdownMenuTrigger asChild>
                 <Button variant="ghost" size="icon" className="relative text-primary-foreground hover:bg-primary-foreground/20" data-testid="button-notifications">
@@ -410,9 +650,9 @@ export default function MainLayout({ children }: { children: ReactNode }) {
                   <DropdownMenuLabel className="m-0">Notifications</DropdownMenuLabel>
                   <div className="flex gap-2">
                     {unreadCount > 0 && (
-                      <Button 
-                        variant="ghost" 
-                        size="sm" 
+                      <Button
+                        variant="ghost"
+                        size="sm"
                         className="text-xs h-7"
                         onClick={handleMarkAllAsRead}
                         data-testid="button-mark-all-read"
@@ -421,9 +661,9 @@ export default function MainLayout({ children }: { children: ReactNode }) {
                       </Button>
                     )}
                     {notifications.length > 0 && (
-                      <Button 
-                        variant="ghost" 
-                        size="sm" 
+                      <Button
+                        variant="ghost"
+                        size="sm"
                         className="text-xs h-7 text-destructive"
                         onClick={handleClearAll}
                         data-testid="button-clear-all"
@@ -433,7 +673,7 @@ export default function MainLayout({ children }: { children: ReactNode }) {
                     )}
                   </div>
                 </div>
-                
+
                 {notifications.length === 0 ? (
                   <div className="flex flex-col items-center justify-center py-8 text-muted-foreground">
                     <Bell className="h-8 w-8 mb-2 opacity-50" />
@@ -487,6 +727,13 @@ export default function MainLayout({ children }: { children: ReactNode }) {
                 )}
               </DropdownMenuContent>
             </DropdownMenu>
+
+            {/* ==============================================================
+                 USER PROFILE DROPDOWN
+                 ==============================================================
+                 PURPOSE: User menu with profile, settings, logout
+                 KEEP: Essential for user account management
+                 ============================================================== */}
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
                 <Button variant="ghost" className="gap-2 pl-0 hover:bg-primary-foreground/20 text-primary-foreground">
@@ -516,7 +763,7 @@ export default function MainLayout({ children }: { children: ReactNode }) {
                   </DropdownMenuItem>
                 </Link>
                 <DropdownMenuSeparator />
-                <DropdownMenuItem 
+                <DropdownMenuItem
                   className="text-destructive cursor-pointer"
                   onClick={handleLogout}
                 >
@@ -528,14 +775,25 @@ export default function MainLayout({ children }: { children: ReactNode }) {
           </div>
         </header>
 
-        {/* PAGE CONTENT - SCROLLS */}
+        {/* ==================================================================
+             PAGE CONTENT - SCROLLABLE AREA
+             ==================================================================
+             PURPOSE: Main content area where page components render
+             LAYOUT: Flexbox with overflow-auto for scrolling
+             KEEP: Essential for page content rendering
+             ================================================================== */}
         <main className="page-content flex-1 overflow-hidden bg-muted/30 p-6 flex flex-col min-h-0">
           <div className="flex-1 min-h-0 overflow-auto">
             {children}
           </div>
         </main>
 
-        {/* FOOTER - APPEARS AT END OF CONTENT */}
+        {/* ==================================================================
+             FOOTER - FIXED AT BOTTOM
+             ==================================================================
+             PURPOSE: Application footer with copyright, links, etc.
+             KEEP: Essential for footer content
+             ================================================================== */}
         <div className="flex-shrink-0">
           <Footer />
         </div>

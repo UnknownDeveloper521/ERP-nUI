@@ -8,10 +8,12 @@
   --radius-md: calc(var(--radius) - 2px);
   --radius-lg: var(--radius);
   --radius-xl: calc(var(--radius) + 4px);
-  
+
   /* Blue + Yellow Enterprise Theme */
-  --color-background: #FFFFFF; /* Pure white background */
-  --color-foreground: #333333; /* Dark grey text for readability */
+  --color-background: #FFFFFF;
+  /* Pure white background */
+  --color-foreground: #333333;
+  /* Dark grey text for readability */
 
   --color-card: #FFFFFF;
   --color-card-foreground: #333333;
@@ -19,17 +21,22 @@
   --color-popover: #FFFFFF;
   --color-popover-foreground: #333333;
 
-  --color-primary: #0056B8; /* Primary Blue */
+  --color-primary: #0056B8;
+  /* Primary Blue */
   --color-primary-foreground: #FFFFFF;
 
-  --color-secondary: #F5F5F5; /* Light grey background */
+  --color-secondary: #F5F5F5;
+  /* Light grey background */
   --color-secondary-foreground: #333333;
 
   --color-muted: #F5F5F5;
-  --color-muted-foreground: #666666; /* Soft grey text */
+  --color-muted-foreground: #666666;
+  /* Soft grey text */
 
-  --color-accent: #FFB800; /* Bright yellow accent */
-  --color-accent-foreground: #003C7A; /* Dark navy on yellow */
+  --color-accent: #FFB800;
+  /* Bright yellow accent */
+  --color-accent-foreground: #003C7A;
+  /* Dark navy on yellow */
 
   --color-destructive: #DC2626;
   --color-destructive-foreground: #FFFFFF;
@@ -38,17 +45,24 @@
   --color-input: #F5F5F5;
   --color-ring: #0056B8;
 
-  --color-chart-1: #0056B8; /* Primary Blue */
-  --color-chart-2: #4A8FE0; /* Light Blue */
-  --color-chart-3: #FFB800; /* Yellow */
-  --color-chart-4: #10B981; /* Green */
-  --color-chart-5: #8B5CF6; /* Purple */
+  --color-chart-1: #0056B8;
+  /* Primary Blue */
+  --color-chart-2: #4A8FE0;
+  /* Light Blue */
+  --color-chart-3: #FFB800;
+  /* Yellow */
+  --color-chart-4: #10B981;
+  /* Green */
+  --color-chart-5: #8B5CF6;
+  /* Purple */
 
-  --color-sidebar: #003C7A; /* Dark Navy Sidebar */
+  --color-sidebar: #003C7A;
+  /* Dark Navy Sidebar */
   --color-sidebar-foreground: #FFFFFF;
   --color-sidebar-primary: #0056B8;
   --color-sidebar-primary-foreground: #FFFFFF;
-  --color-sidebar-accent: #FFB800; /* Yellow accent on sidebar */
+  --color-sidebar-accent: #FFB800;
+  /* Yellow accent on sidebar */
   --color-sidebar-accent-foreground: #003C7A;
   --color-sidebar-border: #1E40AF;
   --color-sidebar-ring: #4A8FE0;
@@ -57,12 +71,781 @@
   --radius: 0.5rem;
 }
 
+@layer utilities {
+  /* Black caret color utility */
+  .caret-primary {
+    caret-color: #000000 !important;
+  }
+  
+  .caret-primary:focus {
+    caret-color: #000000 !important;
+  }
+  
+  /* Date picker dropdown fixes */
+  .date-picker-dropdown {
+    z-index: 9999 !important;
+  }
+  
+  /* Ensure calendar dropdowns are always visible */
+  [data-radix-select-content] {
+    z-index: 9999 !important;
+  }
+  
+  /* Fix for calendar month/year dropdowns */
+  .rdp-dropdown {
+    z-index: 9999 !important;
+  }
+
+  /* Custom date picker styles */
+  .date-picker-grid {
+    display: grid;
+    gap: 0.25rem;
+  }
+  
+  .date-picker-day {
+    @apply h-8 w-8 rounded-md text-sm font-normal transition-colors;
+  }
+  
+  .date-picker-day:hover {
+    @apply bg-accent text-accent-foreground;
+  }
+  
+  .date-picker-day.selected {
+    @apply bg-primary text-primary-foreground font-semibold;
+  }
+  
+  .date-picker-day.today {
+    @apply bg-accent text-accent-foreground font-semibold;
+  }
+  
+  .date-picker-day.outside-month {
+    @apply text-muted-foreground opacity-50;
+  }
+}
+
 @layer base {
+  /* Explicit caret color fix for all input and textarea elements */
+  input,
+  textarea,
+  input[type="text"],
+  input[type="email"],
+  input[type="password"],
+  input[type="number"],
+  input[type="tel"],
+  input[type="url"],
+  input[type="search"] {
+    cursor: text !important;
+    caret-color: #000000 !important;
+  }
+
+  /* Focused state maintains black caret and text cursor */
+  input:focus,
+  textarea:focus,
+  input[type="text"]:focus,
+  input[type="email"]:focus,
+  input[type="password"]:focus,
+  input[type="number"]:focus,
+  input[type="tel"]:focus,
+  input[type="url"]:focus,
+  input[type="search"]:focus {
+    cursor: text !important;
+    caret-color: #000000 !important;
+  }
+
+  /* Hover state shows text cursor */
+  input:hover,
+  textarea:hover,
+  input[type="text"]:hover,
+  input[type="email"]:hover,
+  input[type="password"]:hover,
+  input[type="number"]:hover,
+  input[type="tel"]:hover,
+  input[type="url"]:hover,
+  input[type="search"]:hover {
+    cursor: text !important;
+  }
+
+  button,
+  [type="button"],
+  [type="submit"],
+  [role="button"],
+  select {
+    cursor: pointer;
+  }
+
   * {
     @apply border-border;
   }
+
   body {
     @apply font-sans antialiased bg-background text-foreground;
   }
 }
+
 /* Build timestamp: 1767681693 */
+
+/* Build timestamp: 1767681693 */
+
+/* ULTIMATE NUCLEAR OPTION - Force white caret with every possible method */
+* {
+  --caret-color: white;
+}
+
+input {
+  caret-color: var(--caret-color) !important;
+}
+
+input[type="search"] {
+  caret-color: #ffffff !important;
+  color: #ffffff !important;
+  --caret-color: #ffffff !important;
+}
+
+input[type="search"]:focus {
+  caret-color: #ffffff !important;
+  color: #ffffff !important;
+  --caret-color: #ffffff !important;
+}
+
+input[type="search"]:active {
+  caret-color: #ffffff !important;
+  color: #ffffff !important;
+  --caret-color: #ffffff !important;
+}
+
+input[placeholder*="Search"] {
+  caret-color: #ffffff !important;
+  color: #ffffff !important;
+  --caret-color: #ffffff !important;
+}
+
+input[placeholder*="Search"]:focus {
+  caret-color: #ffffff !important;
+  color: #ffffff !important;
+  --caret-color: #ffffff !important;
+}
+
+input[placeholder*="Search"]:active {
+  caret-color: #ffffff !important;
+  color: #ffffff !important;
+  --caret-color: #ffffff !important;
+}
+
+/* Target the exact header search input */
+.topbar input,
+header input,
+.relative input[type="search"] {
+  caret-color: #ffffff !important;
+  color: #ffffff !important;
+  -webkit-text-fill-color: #ffffff !important;
+  --caret-color: #ffffff !important;
+}
+
+.topbar input:focus,
+header input:focus,
+.relative input[type="search"]:focus {
+  caret-color: #ffffff !important;
+  color: #ffffff !important;
+  -webkit-text-fill-color: #ffffff !important;
+  --caret-color: #ffffff !important;
+}
+
+/* Override ALL possible inline styles */
+input[style] {
+  caret-color: #ffffff !important;
+  --caret-color: #ffffff !important;
+}
+
+input[style]:focus {
+  caret-color: #ffffff !important;
+  --caret-color: #ffffff !important;
+}
+
+/* Try different CSS properties */
+input[type="search"],
+input[placeholder*="Search"] {
+  caret: #ffffff !important;
+  text-decoration-color: #ffffff !important;
+  accent-color: #ffffff !important;
+}
+
+/* Browser-specific prefixes */
+input[type="search"],
+input[placeholder*="Search"] {
+  -webkit-caret-color: #ffffff !important;
+  -moz-caret-color: #ffffff !important;
+  -ms-caret-color: #ffffff !important;
+  -o-caret-color: #ffffff !important;
+}
+
+/* Header search input text color fix for dark blue background - HIGHEST PRIORITY */
+.topbar input[type="search"],
+.topbar .relative input[type="search"],
+header input[type="search"],
+input[type="search"][class*="text-primary-foreground"],
+input[class*="bg-primary-foreground"],
+input[placeholder*="Search modules"] {
+  color: #ffffff !important;
+  caret-color: #ffffff !important;
+  -webkit-text-fill-color: #ffffff !important;
+  -webkit-caret-color: #ffffff !important;
+}
+
+.topbar input[type="search"]::placeholder,
+.topbar .relative input[type="search"]::placeholder,
+header input[type="search"]::placeholder,
+input[type="search"][class*="text-primary-foreground"]::placeholder,
+input[class*="bg-primary-foreground"]::placeholder,
+input[placeholder*="Search modules"]::placeholder {
+  color: rgba(255, 255, 255, 0.7) !important;
+  -webkit-text-fill-color: rgba(255, 255, 255, 0.7) !important;
+}
+
+.topbar input[type="search"]:focus,
+.topbar .relative input[type="search"]:focus,
+header input[type="search"]:focus,
+input[type="search"][class*="text-primary-foreground"]:focus,
+input[class*="bg-primary-foreground"]:focus,
+input[placeholder*="Search modules"]:focus {
+  color: #ffffff !important;
+  caret-color: #ffffff !important;
+  -webkit-text-fill-color: #ffffff !important;
+  -webkit-caret-color: #ffffff !important;
+}
+
+.topbar input[type="search"]:active,
+.topbar .relative input[type="search"]:active,
+header input[type="search"]:active,
+input[type="search"][class*="text-primary-foreground"]:active,
+input[class*="bg-primary-foreground"]:active,
+input[placeholder*="Search modules"]:active {
+  color: #ffffff !important;
+  caret-color: #ffffff !important;
+  -webkit-text-fill-color: #ffffff !important;
+  -webkit-caret-color: #ffffff !important;
+}
+
+/* Search inputs with white text styling */
+input[placeholder*="Search"],
+input[type="search"],
+.search-input,
+.relative input[placeholder*="Search"] {
+  color: #ffffff !important;
+  caret-color: #ffffff !important;
+  background-color: rgba(255, 255, 255, 0.1) !important;
+  border-color: rgba(255, 255, 255, 0.2) !important;
+  -webkit-caret-color: #ffffff !important;
+}
+
+input[placeholder*="Search"]::placeholder,
+input[type="search"]::placeholder,
+.search-input::placeholder,
+.relative input[placeholder*="Search"]::placeholder {
+  color: rgba(255, 255, 255, 0.7) !important;
+}
+
+input[placeholder*="Search"]:focus,
+input[type="search"]:focus,
+.search-input:focus,
+.relative input[placeholder*="Search"]:focus {
+  color: #ffffff !important;
+  caret-color: #ffffff !important;
+  background-color: rgba(255, 255, 255, 0.15) !important;
+  border-color: rgba(255, 255, 255, 0.3) !important;
+  -webkit-caret-color: #ffffff !important;
+}
+
+input[placeholder*="Search"]:active,
+input[type="search"]:active,
+.search-input:active,
+.relative input[placeholder*="Search"]:active {
+  color: #ffffff !important;
+  caret-color: #ffffff !important;
+  -webkit-caret-color: #ffffff !important;
+}
+
+input[placeholder*="Search"]:hover,
+input[type="search"]:hover,
+.search-input:hover,
+.relative input[placeholder*="Search"]:hover {
+  background-color: rgba(255, 255, 255, 0.12) !important;
+  border-color: rgba(255, 255, 255, 0.25) !important;
+}
+
+/* Override any inline styles for header search */
+input[style*="color: rgb(51, 51, 51)"],
+input[style*="-webkit-text-fill-color: rgb(51, 51, 51)"],
+input[style*="caret-color: rgb(0, 0, 0)"] {
+  color: #ffffff !important;
+  -webkit-text-fill-color: #ffffff !important;
+  caret-color: #ffffff !important;
+  -webkit-caret-color: #ffffff !important;
+}
+
+/* Force white caret for all search inputs */
+input[type="search"],
+input[placeholder*="Search"],
+input[placeholder*="search"] {
+  caret-color: #ffffff !important;
+  -webkit-caret-color: #ffffff !important;
+}
+
+input[type="search"]:focus,
+input[placeholder*="Search"]:focus,
+input[placeholder*="search"]:focus {
+  caret-color: #ffffff !important;
+  -webkit-caret-color: #ffffff !important;
+}
+
+input[type="search"]:active,
+input[placeholder*="Search"]:active,
+input[placeholder*="search"]:active {
+  caret-color: #ffffff !important;
+  -webkit-caret-color: #ffffff !important;
+}
+
+/* Simple fallback approach - use system cursors that should be visible */
+input,
+textarea {
+  cursor: crosshair !important; /* This should definitely be visible and black */
+  caret-color: #000000 !important;
+}
+
+input:hover,
+textarea:hover {
+  cursor: crosshair !important; /* Crosshair should be clearly visible */
+}
+
+input:focus,
+textarea:focus {
+  cursor: text !important; /* When focused, try text cursor */
+  caret-color: #000000 !important;
+}
+
+/* Alternative cursors for testing */
+input.test-cursor {
+  cursor: pointer !important; /* Hand cursor - should be visible */
+}
+
+input.test-cursor:hover {
+  cursor: help !important; /* Question mark cursor - should be visible */
+}
+
+/* I-beam cursor visibility fix - Use system cursors */
+html input,
+html textarea,
+body input,
+body textarea,
+div input,
+div textarea,
+form input,
+form textarea {
+  cursor: crosshair !important;
+  caret-color: #000000 !important;
+  -webkit-text-fill-color: #333333 !important;
+  color: #333333 !important;
+}
+
+html input:hover,
+html textarea:hover,
+body input:hover,
+body textarea:hover,
+div input:hover,
+div textarea:hover,
+form input:hover,
+form textarea:hover {
+  cursor: crosshair !important;
+}
+
+html input:focus,
+html textarea:focus,
+body input:focus,
+body textarea:focus,
+div input:focus,
+div textarea:focus,
+form input:focus,
+form textarea:focus {
+  cursor: text !important;
+  caret-color: #000000 !important;
+  -webkit-text-fill-color: #333333 !important;
+  color: #333333 !important;
+}
+
+/* Target specific component classes */
+input.flex,
+textarea.flex,
+input[class*="border-input"],
+textarea[class*="border-input"],
+input[class*="bg-background"],
+textarea[class*="bg-background"],
+input[class*="bg-transparent"],
+textarea[class*="bg-transparent"] {
+  cursor: crosshair !important;
+  caret-color: #000000 !important;
+}
+
+input.flex:hover,
+textarea.flex:hover,
+input[class*="border-input"]:hover,
+textarea[class*="border-input"]:hover,
+input[class*="bg-background"]:hover,
+textarea[class*="bg-background"]:hover,
+input[class*="bg-transparent"]:hover,
+textarea[class*="bg-transparent"]:hover {
+  cursor: crosshair !important;
+}
+
+input.flex:focus,
+textarea.flex:focus,
+input[class*="border-input"]:focus,
+textarea[class*="border-input"]:focus,
+input[class*="bg-background"]:focus,
+textarea[class*="bg-background"]:focus,
+input[class*="bg-transparent"]:focus,
+textarea[class*="bg-transparent"]:focus {
+  cursor: text !important;
+  caret-color: #000000 !important;
+}
+
+/* Override header search input cursor and caret to be white */
+.topbar input[type="search"],
+.topbar .relative input[type="search"],
+header input[type="search"] {
+  cursor: text !important;
+  caret-color: #ffffff !important;
+  -webkit-caret-color: #ffffff !important;
+}
+
+.topbar input[type="search"]:hover,
+.topbar .relative input[type="search"]:hover,
+header input[type="search"]:hover {
+  cursor: text !important;
+}
+
+.topbar input[type="search"]:focus,
+.topbar .relative input[type="search"]:focus,
+header input[type="search"]:focus {
+  cursor: text !important;
+  caret-color: #ffffff !important;
+  -webkit-caret-color: #ffffff !important;
+}
+
+.topbar input[type="search"]:active,
+.topbar .relative input[type="search"]:active,
+header input[type="search"]:active {
+  cursor: text !important;
+  caret-color: #ffffff !important;
+  -webkit-caret-color: #ffffff !important;
+}
+
+/* Override search input cursor and caret to be white */
+input[placeholder*="Search"],
+input[type="search"],
+.search-input,
+.relative input[placeholder*="Search"] {
+  cursor: text !important;
+  caret-color: #ffffff !important;
+  -webkit-caret-color: #ffffff !important;
+}
+
+input[placeholder*="Search"]:hover,
+input[type="search"]:hover,
+.search-input:hover,
+.relative input[placeholder*="Search"]:hover {
+  cursor: text !important;
+}
+
+input[placeholder*="Search"]:focus,
+input[type="search"]:focus,
+.search-input:focus,
+.relative input[placeholder*="Search"]:focus {
+  cursor: text !important;
+  caret-color: #ffffff !important;
+  -webkit-caret-color: #ffffff !important;
+}
+
+input[placeholder*="Search"]:active,
+input[type="search"]:active,
+.search-input:active,
+.relative input[placeholder*="Search"]:active {
+  cursor: text !important;
+  caret-color: #ffffff !important;
+  -webkit-caret-color: #ffffff !important;
+}
+
+/* Nuclear option - target everything */
+* {
+  caret-color: inherit;
+}
+
+input,
+textarea {
+  cursor: crosshair !important;
+  caret-color: #000000 !important;
+}
+
+input:hover,
+textarea:hover {
+  cursor: crosshair !important;
+}
+
+input:focus,
+textarea:focus {
+  cursor: text !important;
+}
+
+/* Search input border visibility fix for CoreHR module */
+input[placeholder*="Search employees"],
+input[placeholder*="Search"],
+input[type="search"] {
+  border: 1px solid rgba(229, 231, 235, 1) !important; /* Default visible border */
+  border-color: #E5E7EB !important; /* Light gray border */
+  caret-color: #000000 !important; /* Black caret for search inputs */
+  color: #333333 !important; /* Dark text color */
+  -webkit-text-fill-color: #333333 !important; /* Override webkit fill */
+  -webkit-caret-color: #000000 !important; /* Webkit caret */
+  -moz-caret-color: #000000 !important; /* Firefox caret */
+  -ms-caret-color: #000000 !important; /* IE/Edge caret */
+  -o-caret-color: #000000 !important; /* Opera caret */
+}
+
+input[placeholder*="Search employees"]:hover,
+input[placeholder*="Search"]:hover,
+input[type="search"]:hover {
+  border-color: #D1D5DB !important; /* Slightly darker on hover */
+  caret-color: #000000 !important; /* Ensure caret stays black */
+  color: #333333 !important; /* Dark text on hover */
+  -webkit-text-fill-color: #333333 !important; /* Override webkit fill */
+  -webkit-caret-color: #000000 !important; /* Webkit caret */
+}
+
+input[placeholder*="Search employees"]:focus,
+input[placeholder*="Search"]:focus,
+input[type="search"]:focus {
+  border-color: #0056B8 !important; /* Primary blue on focus */
+  box-shadow: 0 0 0 2px rgba(0, 86, 184, 0.1) !important; /* Subtle focus ring */
+  caret-color: #000000 !important; /* Black caret on focus */
+  color: #333333 !important; /* Dark text on focus */
+  -webkit-text-fill-color: #333333 !important; /* Override webkit fill */
+  -webkit-caret-color: #000000 !important; /* Webkit caret */
+  -moz-caret-color: #000000 !important; /* Firefox caret */
+  -ms-caret-color: #000000 !important; /* IE/Edge caret */
+  -o-caret-color: #000000 !important; /* Opera caret */
+}
+
+input[placeholder*="Search employees"]:active,
+input[placeholder*="Search"]:active,
+input[type="search"]:active {
+  caret-color: #000000 !important; /* Black caret when active */
+  color: #333333 !important; /* Dark text when active */
+  -webkit-text-fill-color: #333333 !important; /* Override webkit fill */
+  -webkit-caret-color: #000000 !important; /* Webkit caret */
+  -moz-caret-color: #000000 !important; /* Firefox caret */
+  -ms-caret-color: #000000 !important; /* IE/Edge caret */
+  -o-caret-color: #000000 !important; /* Opera caret */
+}
+
+/* Specific targeting for CoreHR search input with maximum specificity */
+.relative input[placeholder*="Search employees"],
+div.relative input[placeholder*="Search employees"],
+div.relative > input[placeholder*="Search employees"] {
+  border: 1px solid #E5E7EB !important;
+  background-color: rgba(255, 255, 255, 0.8) !important;
+  caret-color: #000000 !important; /* Black caret */
+  color: #333333 !important; /* Dark text */
+  -webkit-text-fill-color: #333333 !important; /* Override webkit fill */
+  -webkit-caret-color: #000000 !important; /* Webkit caret */
+  -moz-caret-color: #000000 !important; /* Firefox caret */
+  -ms-caret-color: #000000 !important; /* IE/Edge caret */
+  -o-caret-color: #000000 !important; /* Opera caret */
+}
+
+.relative input[placeholder*="Search employees"]:hover,
+div.relative input[placeholder*="Search employees"]:hover,
+div.relative > input[placeholder*="Search employees"]:hover {
+  border-color: #D1D5DB !important;
+  background-color: rgba(255, 255, 255, 0.9) !important;
+  caret-color: #000000 !important; /* Black caret on hover */
+  color: #333333 !important; /* Dark text on hover */
+  -webkit-text-fill-color: #333333 !important; /* Override webkit fill */
+  -webkit-caret-color: #000000 !important; /* Webkit caret */
+}
+
+.relative input[placeholder*="Search employees"]:focus,
+div.relative input[placeholder*="Search employees"]:focus,
+div.relative > input[placeholder*="Search employees"]:focus {
+  border-color: #0056B8 !important;
+  background-color: #ffffff !important;
+  box-shadow: 0 0 0 2px rgba(0, 86, 184, 0.1) !important;
+  caret-color: #000000 !important; /* Black caret on focus */
+  color: #333333 !important; /* Dark text on focus */
+  -webkit-text-fill-color: #333333 !important; /* Override webkit fill */
+  -webkit-caret-color: #000000 !important; /* Webkit caret */
+  -moz-caret-color: #000000 !important; /* Firefox caret */
+  -ms-caret-color: #000000 !important; /* IE/Edge caret */
+  -o-caret-color: #000000 !important; /* Opera caret */
+}
+
+.relative input[placeholder*="Search employees"]:active,
+div.relative input[placeholder*="Search employees"]:active,
+div.relative > input[placeholder*="Search employees"]:active {
+  caret-color: #000000 !important; /* Black caret when active */
+  color: #333333 !important; /* Dark text when active */
+  -webkit-text-fill-color: #333333 !important; /* Override webkit fill */
+  -webkit-caret-color: #000000 !important; /* Webkit caret */
+  -moz-caret-color: #000000 !important; /* Firefox caret */
+  -ms-caret-color: #000000 !important; /* IE/Edge caret */
+  -o-caret-color: #000000 !important; /* Opera caret */
+}
+
+/* Override any inline styles that might be interfering - maximum specificity */
+input[placeholder*="Search employees"][style],
+input[placeholder*="Search"][style],
+input[type="search"][style],
+.relative input[placeholder*="Search employees"][style],
+div.relative input[placeholder*="Search employees"][style] {
+  caret-color: #000000 !important;
+  color: #333333 !important;
+  -webkit-text-fill-color: #333333 !important;
+  -webkit-caret-color: #000000 !important;
+  -moz-caret-color: #000000 !important;
+  -ms-caret-color: #000000 !important;
+  -o-caret-color: #000000 !important;
+}
+
+/* Browser-specific caret fixes for search inputs with ultra-high specificity */
+html body input[placeholder*="Search employees"],
+html body input[placeholder*="Search"],
+html body input[type="search"],
+html body .relative input[placeholder*="Search employees"] {
+  -webkit-caret-color: #000000 !important;
+  -moz-caret-color: #000000 !important;
+  -ms-caret-color: #000000 !important;
+  -o-caret-color: #000000 !important;
+  caret-color: #000000 !important;
+  color: #333333 !important;
+  -webkit-text-fill-color: #333333 !important;
+}
+
+/* Ultimate fallback class for search inputs */
+.search-input-caret-fix {
+  caret-color: #000000 !important;
+  color: #333333 !important;
+  -webkit-text-fill-color: #333333 !important;
+  -webkit-caret-color: #000000 !important;
+  -moz-caret-color: #000000 !important;
+  -ms-caret-color: #000000 !important;
+  -o-caret-color: #000000 !important;
+}
+
+.search-input-caret-fix:focus,
+.search-input-caret-fix:active,
+.search-input-caret-fix:hover {
+  caret-color: #000000 !important;
+  color: #333333 !important;
+  -webkit-text-fill-color: #333333 !important;
+  -webkit-caret-color: #000000 !important;
+  -moz-caret-color: #000000 !important;
+  -ms-caret-color: #000000 !important;
+  -o-caret-color: #000000 !important;
+}
+
+/* CoreHR module - Fix all input fields to have black text and caret */
+.space-y-6 input,
+.space-y-4 input,
+.space-y-2 input,
+.grid input,
+.bg-card input,
+input[class*="cursor-text"],
+input[readOnly],
+input:not([type="file"]):not([type="checkbox"]):not([type="radio"]) {
+  caret-color: #000000 !important;
+  color: #333333 !important;
+  -webkit-text-fill-color: #333333 !important;
+  -webkit-caret-color: #000000 !important;
+  -moz-caret-color: #000000 !important;
+  -ms-caret-color: #000000 !important;
+  -o-caret-color: #000000 !important;
+}
+
+.space-y-6 input:focus,
+.space-y-4 input:focus,
+.space-y-2 input:focus,
+.grid input:focus,
+.bg-card input:focus,
+input[class*="cursor-text"]:focus,
+input[readOnly]:focus,
+input:not([type="file"]):not([type="checkbox"]):not([type="radio"]):focus {
+  caret-color: #000000 !important;
+  color: #333333 !important;
+  -webkit-text-fill-color: #333333 !important;
+  -webkit-caret-color: #000000 !important;
+  -moz-caret-color: #000000 !important;
+  -ms-caret-color: #000000 !important;
+  -o-caret-color: #000000 !important;
+}
+
+.space-y-6 input:hover,
+.space-y-4 input:hover,
+.space-y-2 input:hover,
+.grid input:hover,
+.bg-card input:hover,
+input[class*="cursor-text"]:hover,
+input[readOnly]:hover,
+input:not([type="file"]):not([type="checkbox"]):not([type="radio"]):hover {
+  caret-color: #000000 !important;
+  color: #333333 !important;
+  -webkit-text-fill-color: #333333 !important;
+  -webkit-caret-color: #000000 !important;
+  -moz-caret-color: #000000 !important;
+  -ms-caret-color: #000000 !important;
+  -o-caret-color: #000000 !important;
+}
+
+.space-y-6 input:active,
+.space-y-4 input:active,
+.space-y-2 input:active,
+.grid input:active,
+.bg-card input:active,
+input[class*="cursor-text"]:active,
+input[readOnly]:active,
+input:not([type="file"]):not([type="checkbox"]):not([type="radio"]):active {
+  caret-color: #000000 !important;
+  color: #333333 !important;
+  -webkit-text-fill-color: #333333 !important;
+  -webkit-caret-color: #000000 !important;
+  -moz-caret-color: #000000 !important;
+  -ms-caret-color: #000000 !important;
+  -o-caret-color: #000000 !important;
+}
+
+/* Fix textarea fields as well */
+.space-y-6 textarea,
+.space-y-4 textarea,
+.space-y-2 textarea,
+.grid textarea,
+.bg-card textarea,
+textarea[class*="cursor-text"] {
+  caret-color: #000000 !important;
+  color: #333333 !important;
+  -webkit-text-fill-color: #333333 !important;
+  -webkit-caret-color: #000000 !important;
+  -moz-caret-color: #000000 !important;
+  -ms-caret-color: #000000 !important;
+  -o-caret-color: #000000 !important;
+}
+
+.space-y-6 textarea:focus,
+.space-y-4 textarea:focus,
+.space-y-2 textarea:focus,
+.grid textarea:focus,
+.bg-card textarea:focus,
+textarea[class*="cursor-text"]:focus {
+  caret-color: #000000 !important;
+  color: #333333 !important;
+  -webkit-text-fill-color: #333333 !important;
+  -webkit-caret-color: #000000 !important;
+  -moz-caret-color: #000000 !important;
+  -ms-caret-color: #000000 !important;
+  -o-caret-color: #000000 !important;
+}

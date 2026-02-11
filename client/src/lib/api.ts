@@ -1,21 +1,17 @@
 // API client for ERP system
-const API_BASE = '/api';
-
-import { getAccessToken } from "@/lib/supabase";
+const API_BASE = `${import.meta.env.VITE_BACKEND_URL}/api`;
 
 // Generic fetch wrapper
 async function apiRequest<T>(
   endpoint: string,
   options?: RequestInit
 ): Promise<T> {
-  const token = await getAccessToken();
   const response = await fetch(`${API_BASE}${endpoint}`, {
     headers: {
       'Content-Type': 'application/json',
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
       ...options?.headers,
     },
-    ...options,
+    ...options, 
   });
 
   if (!response.ok) {
@@ -151,49 +147,6 @@ export const stockMovementsApi = {
     method: 'POST',
     body: JSON.stringify(data),
   }),
-};
-
-export const inventoryThresholdsApi = {
-  getAll: () => apiRequest<any[]>('/thresholds'),
-  upsert: (data: any) =>
-    apiRequest<any>('/thresholds', {
-      method: 'POST',
-      body: JSON.stringify(data),
-    }),
-  delete: (id: string) =>
-    apiRequest<void>(`/thresholds/${id}`, {
-      method: 'DELETE',
-    }),
-};
-
-export const stockAlertsApi = {
-  getAll: () => apiRequest<any[]>('/stock-alerts'),
-};
-
-export const rawMaterialsApi = {
-  getAll: (materialType?: string) => {
-    const q = materialType ? `?material_type=${encodeURIComponent(materialType)}` : "";
-    return apiRequest<any[]>(`/raw-materials${q}`);
-  },
-};
-
-export const rawMaterialStockApi = {
-  getOne: (materialType: string, materialId: string, warehouseLocation: string, warehouseId?: string) => {
-    let q = `?material_type=${encodeURIComponent(materialType)}&material_id=${encodeURIComponent(materialId)}&warehouse_location=${encodeURIComponent(warehouseLocation)}`;
-    if (warehouseId) {
-      q += `&warehouse_id=${encodeURIComponent(warehouseId)}`;
-    }
-    return apiRequest<{ available_qty: number }>(`/raw-material-stock${q}`);
-  },
-};
-
-export const stockAdjustmentsApi = {
-  getAll: (limit = 50) => apiRequest<any[]>(`/stock-adjustments?limit=${encodeURIComponent(String(limit))}`),
-  create: (data: any) =>
-    apiRequest<any>("/stock-adjustments", {
-      method: "POST",
-      body: JSON.stringify(data),
-    }),
 };
 
 // ==================== CUSTOMERS & SUPPLIERS API ====================

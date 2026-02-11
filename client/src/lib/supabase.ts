@@ -1,12 +1,12 @@
 import { createClient } from "@supabase/supabase-js";
 
-// Correct Supabase project: lrrgtrhnkziwmpufnset
-const SUPABASE_URL = "https://lrrgtrhnkziwmpufnset.supabase.co";
-const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imxycmd0cmhua3ppd21wdWZuc2V0Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjcwODYzMjcsImV4cCI6MjA4MjY2MjMyN30.R6bf2h8y0Pi7MjD79OOdM5byGG1lLKK9n7epp0nB0_w";
+// Use environment variables from .env file
+const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL;
+const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY;
 
 console.log("🔗 Supabase URL:", SUPABASE_URL);
 console.log("🔑 Supabase Key loaded:", SUPABASE_ANON_KEY ? "Yes" : "No");
-console.log("🔄 Build v2");
+console.log("🔄 Build v3 - Using env variables");
 
 export const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 

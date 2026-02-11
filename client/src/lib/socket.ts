@@ -9,7 +9,7 @@ export function getSocket() {
 export function connectSocket(accessToken: string) {
   if (socket?.connected) return socket;
 
-  socket = io({
+  socket = io(import.meta.env.VITE_BACKEND_URL, {
     path: "/socket.io",
     transports: ["websocket"],
     auth: {

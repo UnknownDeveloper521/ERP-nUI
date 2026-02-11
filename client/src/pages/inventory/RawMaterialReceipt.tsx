@@ -34,54 +34,22 @@ import { Plus, Search, Pencil, Trash2, ArrowUpDown, Loader2 } from "lucide-react
 import { supabase } from "@/lib/supabase";
 import { useToast } from "@/hooks/use-toast";
 
-type MaterialType = "ROLL" | "PACKAGING";
-
-interface RollMaterial {
+interface RawMaterial {
   id: string;
+  material_code: string;
   name: string;
-  gsm: number | null;
-  ply: number | null;
-  width_mm: number | null;
-  grade: string | null;
-  product_id: string | null;
-  weight_kg: number;
-  vendor_id: string | null;
-  purchase_order_no: string | null;
-  lot_no: string | null;
-  container_no: string | null;
-  created_at: string;
-}
-
-interface PackagingMaterial {
-  id: string;
-  name: string;
-  packaging_type: string | null;
-  material: string | null;
-  product_id: string | null;
-  weight_per_unit: number | null;
-  batch_weight: number | null;
-  vendor_id: string | null;
-  purchase_order_no: string | null;
-  created_at: string;
-}
-
-interface Vendor {
-  id: string;
-  name: string;
-}
-
-interface Warehouse {
-  id: string;
-  name: string | null;
-  is_main: boolean;
+  uom: string;
+  material_type?: string;
+  gsm?: number;
+  ply?: number;
+  width_mm?: number;
+  grade?: string;
 }
 
 interface Receipt {
   id: string;
   receipt_no: string;
-  material_type: MaterialType | null;
-  roll_material_id: string | null;
-  packaging_material_id: string | null;
+  material_id: string;
   vendor_id?: string;
   purchase_order_no?: string;
   supplier_invoice_no?: string;
@@ -97,16 +65,11 @@ interface Receipt {
   qc_status: string;
   remarks?: string;
   created_at: string;
-  warehouse_id?: string;
-  raw_material_roll_master?: Pick<RollMaterial, "id" | "name" | "weight_kg">;
-  packaging_material_master?: Pick<PackagingMaterial, "id" | "name" | "weight_per_unit">;
-  warehouses_master?: Pick<Warehouse, "name">;
+  raw_material_master?: RawMaterial;
 }
 
 interface ReceiptFormData {
-  material_type: MaterialType;
-  roll_material_id: string;
-  packaging_material_id: string;
+  material_id: string;
   vendor_id: string;
   receipt_no: string;
   purchase_order_no: string;
@@ -118,21 +81,14 @@ interface ReceiptFormData {
   qc_passed_qty: string;
   rejected_qty: string;
   unit_cost: string;
-  unit_cost: string;
   warehouse_location: string;
-  warehouse_id: string;
   qc_status: string;
   remarks: string;
 }
 
-const NONE_VENDOR_VALUE = "__none__";
-const NONE_MATERIAL_VALUE = "__none__";
-
 const initialFormData: ReceiptFormData = {
-  material_type: "ROLL",
-  roll_material_id: "",
-  packaging_material_id: "",
-  vendor_id: NONE_VENDOR_VALUE,
+  material_id: "",
+  vendor_id: "",
   receipt_no: "",
   purchase_order_no: "",
   supplier_invoice_no: "",
@@ -143,8 +99,7 @@ const initialFormData: ReceiptFormData = {
   qc_passed_qty: "",
   rejected_qty: "0",
   unit_cost: "",
-  warehouse_location: "",
-  warehouse_id: "",
+  warehouse_location: "MAIN",
   qc_status: "Pending",
   remarks: "",
 };
@@ -152,10 +107,7 @@ const initialFormData: ReceiptFormData = {
 export default function RawMaterialReceipt() {
   const { toast } = useToast();
   const [receipts, setReceipts] = useState<Receipt[]>([]);
-  const [rollMaterials, setRollMaterials] = useState<RollMaterial[]>([]);
-  const [packagingMaterials, setPackagingMaterials] = useState<PackagingMaterial[]>([]);
-  const [vendors, setVendors] = useState<Vendor[]>([]);
-  const [warehouses, setWarehouses] = useState<Warehouse[]>([]);
+  const [materials, setMaterials] = useState<RawMaterial[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [dialogOpen, setDialogOpen] = useState(false);
@@ -170,10 +122,7 @@ export default function RawMaterialReceipt() {
 
   useEffect(() => {
     fetchReceipts();
-    fetchRollMaterials();
-    fetchPackagingMaterials();
-    fetchVendors();
-    fetchWarehouses();
+    fetchMaterials();
   }, []);
 
   const fetchReceipts = async () => {
@@ -183,9 +132,17 @@ export default function RawMaterialReceipt() {
         .from("raw_material_receipts")
         .select(`
           *,
-          raw_material_roll_master ( id, name, weight_kg ),
-          packaging_material_master ( id, name, weight_per_unit ),
-          warehouses_master ( name )
+          raw_material_master (
+            id,
+            material_code,
+            name,
+            uom,
+            material_type,
+            gsm,
+            ply,
+            width_mm,
+            grade
+          )
         `)
         .order("created_at", { ascending: false });
 
@@ -202,72 +159,18 @@ export default function RawMaterialReceipt() {
     }
   };
 
-  const fetchVendors = async () => {
+  const fetchMaterials = async () => {
     try {
       const { data, error } = await supabase
-        .from("vendors_master")
-        .select("id, name")
+        .from("raw_material_master")
+        .select("*")
         .order("name");
 
       if (error) throw error;
-      setVendors((data as any) || []);
+      setMaterials(data || []);
     } catch (error: any) {
       toast({
-        title: "Error loading vendors",
-        description: error.message,
-        variant: "destructive",
-      });
-    }
-  };
-
-  const fetchWarehouses = async () => {
-    try {
-      const { data, error } = await supabase
-        .from("warehouses_master")
-        .select("id, name, is_main")
-        .order("is_main", { ascending: false });
-
-      if (error) throw error;
-      setWarehouses((data as any) || []);
-    } catch (error: any) {
-      toast({
-        title: "Error loading warehouses",
-        description: error.message,
-        variant: "destructive",
-      });
-    }
-  };
-
-  const fetchRollMaterials = async () => {
-    try {
-      const { data, error } = await supabase
-        .from("raw_material_roll_master")
-        .select("*")
-        .order("created_at", { ascending: false });
-
-      if (error) throw error;
-      setRollMaterials((data as any) || []);
-    } catch (error: any) {
-      toast({
-        title: "Error loading roll materials",
-        description: error.message,
-        variant: "destructive",
-      });
-    }
-  };
-
-  const fetchPackagingMaterials = async () => {
-    try {
-      const { data, error } = await supabase
-        .from("packaging_material_master")
-        .select("*")
-        .order("created_at", { ascending: false });
-
-      if (error) throw error;
-      setPackagingMaterials((data as any) || []);
-    } catch (error: any) {
-      toast({
-        title: "Error loading packaging materials",
+        title: "Error loading materials",
         description: error.message,
         variant: "destructive",
       });
@@ -290,17 +193,15 @@ export default function RawMaterialReceipt() {
       receipt_no: generateReceiptNo(),
       received_date: new Date().toISOString().split("T")[0],
     });
-    setSelectedMaterialUom("KG");
+    setSelectedMaterialUom("");
     setDialogOpen(true);
   };
 
   const openEditDialog = (receipt: Receipt) => {
     setEditingReceipt(receipt);
     setFormData({
-      material_type: receipt.material_type || "ROLL",
-      roll_material_id: receipt.roll_material_id || "",
-      packaging_material_id: receipt.packaging_material_id || "",
-      vendor_id: receipt.vendor_id || NONE_VENDOR_VALUE,
+      material_id: receipt.material_id,
+      vendor_id: receipt.vendor_id || "",
       receipt_no: receipt.receipt_no,
       purchase_order_no: receipt.purchase_order_no || "",
       supplier_invoice_no: receipt.supplier_invoice_no || "",
@@ -312,42 +213,18 @@ export default function RawMaterialReceipt() {
       rejected_qty: String(receipt.rejected_qty || 0),
       unit_cost: String(receipt.unit_cost),
       warehouse_location: receipt.warehouse_location || "MAIN",
-      warehouse_id: receipt.warehouse_id || "",
       qc_status: receipt.qc_status || "Pending",
       remarks: receipt.remarks || "",
     });
-
-    if (receipt.material_type === "PACKAGING") {
-      setSelectedMaterialUom("UNITS");
-    } else {
-      setSelectedMaterialUom("KG");
-    }
+    const material = materials.find((m) => m.id === receipt.material_id);
+    setSelectedMaterialUom(material?.uom || "");
     setDialogOpen(true);
   };
 
-  const handleMaterialTypeChange = (t: MaterialType) => {
-    setFormData((prev) => ({
-      ...prev,
-      material_type: t,
-      roll_material_id: "",
-      packaging_material_id: "",
-    }));
-    setSelectedMaterialUom(t === "PACKAGING" ? "UNITS" : "KG");
-  };
-
-  const handleMaterialChange = (id: string) => {
-    if (id === NONE_MATERIAL_VALUE) {
-      setFormData((prev) => ({ ...prev, roll_material_id: "", packaging_material_id: "" }));
-      return;
-    }
-
-    if (formData.material_type === "PACKAGING") {
-      setFormData((prev) => ({ ...prev, packaging_material_id: id, roll_material_id: "" }));
-      setSelectedMaterialUom("UNITS");
-    } else {
-      setFormData((prev) => ({ ...prev, roll_material_id: id, packaging_material_id: "" }));
-      setSelectedMaterialUom("KG");
-    }
+  const handleMaterialChange = (materialId: string) => {
+    setFormData((prev) => ({ ...prev, material_id: materialId }));
+    const material = materials.find((m) => m.id === materialId);
+    setSelectedMaterialUom(material?.uom || "");
   };
 
   const handleInputChange = (
@@ -357,34 +234,9 @@ export default function RawMaterialReceipt() {
     setFormData((prev) => ({ ...prev, [name]: value }));
   };
 
-  // Auto-calculate Rejected Qty when Gross or QC Passed changes
-  useEffect(() => {
-    const gross = parseFloat(formData.gross_qty);
-    const passed = parseFloat(formData.qc_passed_qty);
-
-    if (!isNaN(gross) && !isNaN(passed)) {
-      const rejected = gross - passed;
-      const newRejected = rejected >= 0 ? rejected : 0;
-
-      // Update if different to avoid infinite loops
-      // We check fuzzy equality or just direct comparison since they are strings in state but calc as numbers
-      if (parseFloat(formData.rejected_qty) !== newRejected) {
-        setFormData(prev => ({ ...prev, rejected_qty: String(newRejected.toFixed(2)) }));
-      }
-    }
-  }, [formData.gross_qty, formData.qc_passed_qty]);
-
   const validateForm = (): boolean => {
-    if (formData.material_type === "ROLL" && !formData.roll_material_id) {
-      toast({ title: "Please select a roll material", variant: "destructive" });
-      return false;
-    }
-    if (formData.material_type === "PACKAGING" && !formData.packaging_material_id) {
-      toast({ title: "Please select a packaging material", variant: "destructive" });
-      return false;
-    }
-    if (!formData.warehouse_id) {
-      toast({ title: "Warehouse is required", variant: "destructive" });
+    if (!formData.material_id) {
+      toast({ title: "Please select a material", variant: "destructive" });
       return false;
     }
     if (!formData.receipt_no) {
@@ -405,10 +257,6 @@ export default function RawMaterialReceipt() {
       toast({ title: "QC passed quantity must be zero or greater", variant: "destructive" });
       return false;
     }
-    if (qcPassedQty > grossQty) {
-      toast({ title: "QC Passed Quantity cannot be greater than Gross Quantity.", variant: "destructive" });
-      return false;
-    }
     const unitCost = parseFloat(formData.unit_cost);
     if (isNaN(unitCost) || unitCost < 0) {
       toast({ title: "Unit cost must be zero or greater", variant: "destructive" });
@@ -423,14 +271,8 @@ export default function RawMaterialReceipt() {
     setSaving(true);
     try {
       const receiptData = {
-        material_type: formData.material_type,
-        roll_material_id: formData.material_type === "ROLL" ? formData.roll_material_id : null,
-        packaging_material_id:
-          formData.material_type === "PACKAGING" ? formData.packaging_material_id : null,
-        vendor_id:
-          !formData.vendor_id || formData.vendor_id === NONE_VENDOR_VALUE
-            ? null
-            : formData.vendor_id,
+        material_id: formData.material_id,
+        vendor_id: formData.vendor_id || null,
         receipt_no: formData.receipt_no,
         purchase_order_no: formData.purchase_order_no || null,
         supplier_invoice_no: formData.supplier_invoice_no || null,
@@ -441,8 +283,7 @@ export default function RawMaterialReceipt() {
         qc_passed_qty: parseFloat(formData.qc_passed_qty),
         rejected_qty: parseFloat(formData.rejected_qty) || 0,
         unit_cost: parseFloat(formData.unit_cost),
-        // warehouse_location: formData.warehouse_location, // Deprecated in favor of ID, handled by trigger/backend or sent for legacy
-        warehouse_id: formData.warehouse_id,
+        warehouse_location: formData.warehouse_location,
         qc_status: formData.qc_status,
         remarks: formData.remarks || null,
       };
@@ -467,29 +308,9 @@ export default function RawMaterialReceipt() {
       setDialogOpen(false);
       fetchReceipts();
     } catch (error: any) {
-      const msg = String(error?.message || "");
-      const details = String(error?.details || "");
-      const code = String(error?.code || "");
-      const combined = `${code} ${msg} ${details}`.toLowerCase();
-
-      if (
-        editingReceipt &&
-        (combined.includes("already been issued") ||
-          combined.includes("cannot edit receipt") ||
-          combined.includes("rm has already been issued") ||
-          combined.includes("issued"))
-      ) {
-        toast({
-          title: "Cannot update receipt",
-          description: "RM already been issued.",
-          variant: "destructive",
-        });
-        return;
-      }
-
       toast({
         title: editingReceipt ? "Error updating receipt" : "Error creating receipt",
-        description: msg,
+        description: error.message,
         variant: "destructive",
       });
     } finally {
@@ -502,24 +323,6 @@ export default function RawMaterialReceipt() {
 
     setSaving(true);
     try {
-      const issueCheck = await supabase
-        .from("raw_material_issues")
-        .select("id", { count: "exact", head: true })
-        .eq("receipt_id", deletingReceipt.id);
-
-      if (issueCheck.error) throw issueCheck.error;
-      const issueCount = Number(issueCheck.count ?? 0);
-      if (issueCount > 0) {
-        toast({
-          title: "Cannot delete receipt",
-          description: "RM already been issued.",
-          variant: "destructive",
-        });
-        setDeleteDialogOpen(false);
-        setDeletingReceipt(null);
-        return;
-      }
-
       const { error } = await supabase
         .from("raw_material_receipts")
         .delete()
@@ -531,22 +334,6 @@ export default function RawMaterialReceipt() {
       setDeletingReceipt(null);
       fetchReceipts();
     } catch (error: any) {
-      const msg = String(error?.message || "");
-      const details = String(error?.details || "");
-      const code = String(error?.code || "");
-      const combined = `${code} ${msg} ${details}`.toLowerCase();
-
-      if (combined.includes("foreign key") || combined.includes("violates foreign key") || code === "23503") {
-        toast({
-          title: "Cannot delete receipt",
-          description: "RM already been issued.",
-          variant: "destructive",
-        });
-        setDeleteDialogOpen(false);
-        setDeletingReceipt(null);
-        return;
-      }
-
       toast({
         title: "Error deleting receipt",
         description: error.message,
@@ -560,22 +347,12 @@ export default function RawMaterialReceipt() {
   const filteredReceipts = receipts
     .filter((receipt) => {
       const searchLower = searchTerm.toLowerCase();
-      const materialName =
-        receipt.material_type === "PACKAGING"
-          ? receipt.packaging_material_master?.name || ""
-          : receipt.raw_material_roll_master?.name || "";
-
       const matchesSearch =
         (receipt.receipt_no || "").toLowerCase().includes(searchLower) ||
-        materialName.toLowerCase().includes(searchLower) ||
+        (receipt.raw_material_master?.name || "").toLowerCase().includes(searchLower) ||
         (receipt.supplier_invoice_no || "").toLowerCase().includes(searchLower);
-
-      const receiptFilterKey =
-        receipt.material_type === "PACKAGING"
-          ? `PACKAGING:${receipt.packaging_material_id || ""}`
-          : `ROLL:${receipt.roll_material_id || ""}`;
-
-      const matchesMaterial = materialFilter === "all" || receiptFilterKey === materialFilter;
+      const matchesMaterial =
+        materialFilter === "all" || receipt.material_id === materialFilter;
       return matchesSearch && matchesMaterial;
     })
     .sort((a, b) => {
@@ -593,17 +370,6 @@ export default function RawMaterialReceipt() {
       default:
         return "bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400";
     }
-  };
-
-  const vendorNameById = (id?: string) => {
-    if (!id || id === NONE_VENDOR_VALUE) return "-";
-    const v = vendors.find((x) => x.id === id);
-    return v?.name || "-";
-  };
-
-  const materialDisplayName = (r: Receipt) => {
-    if (r.material_type === "PACKAGING") return r.packaging_material_master?.name || "Unknown";
-    return r.raw_material_roll_master?.name || "Unknown";
   };
 
   return (
@@ -640,20 +406,9 @@ export default function RawMaterialReceipt() {
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="all">All Materials</SelectItem>
-                  <SelectItem value="ROLL:__all__" disabled>
-                    Rolls
-                  </SelectItem>
-                  {rollMaterials.map((m) => (
-                    <SelectItem key={m.id} value={`ROLL:${m.id}`}>
-                      {m.name}
-                    </SelectItem>
-                  ))}
-                  <SelectItem value="PACKAGING:__all__" disabled>
-                    Packaging
-                  </SelectItem>
-                  {packagingMaterials.map((m) => (
-                    <SelectItem key={m.id} value={`PACKAGING:${m.id}`}>
-                      {m.name}
+                  {materials.map((material) => (
+                    <SelectItem key={material.id} value={material.id}>
+                      {material.name}
                     </SelectItem>
                   ))}
                 </SelectContent>
@@ -688,8 +443,6 @@ export default function RawMaterialReceipt() {
                     <th className="text-left py-2 px-2">Receipt No</th>
                     <th className="text-left py-2 px-2">Date</th>
                     <th className="text-left py-2 px-2">Material</th>
-                    <th className="text-left py-2 px-2">Vendor</th>
-                    <th className="text-left py-2 px-2">Warehouse</th>
                     <th className="text-right py-2 px-2">Gross Qty</th>
                     <th className="text-right py-2 px-2">QC Passed</th>
                     <th className="text-right py-2 px-2">Unit Cost</th>
@@ -710,17 +463,13 @@ export default function RawMaterialReceipt() {
                       </td>
                       <td className="py-2 px-2">{receipt.received_date}</td>
                       <td className="py-2 px-2">
-                        {materialDisplayName(receipt)}
-                      </td>
-                      <td className="py-2 px-2">{vendorNameById(receipt.vendor_id)}</td>
-                      <td className="py-2 px-2">
-                        {receipt.warehouses_master?.name || receipt.warehouse_location || "-"}
+                        {receipt.raw_material_master?.name || "Unknown"}
                       </td>
                       <td className="py-2 px-2 text-right">
-                        {receipt.gross_qty} {receipt.material_type === "PACKAGING" ? "UNITS" : "KG"}
+                        {receipt.gross_qty} {receipt.raw_material_master?.uom}
                       </td>
                       <td className="py-2 px-2 text-right">
-                        {receipt.qc_passed_qty} {receipt.material_type === "PACKAGING" ? "UNITS" : "KG"}
+                        {receipt.qc_passed_qty} {receipt.raw_material_master?.uom}
                       </td>
                       <td className="py-2 px-2 text-right">
                         {Number(receipt.unit_cost).toFixed(2)}
@@ -804,17 +553,20 @@ export default function RawMaterialReceipt() {
 
             <div className="grid grid-cols-2 gap-4">
               <div className="space-y-2">
-                <Label htmlFor="material_type">Material Type *</Label>
+                <Label htmlFor="material_id">Raw Material *</Label>
                 <Select
-                  value={formData.material_type}
-                  onValueChange={(v) => handleMaterialTypeChange(v as MaterialType)}
+                  value={formData.material_id}
+                  onValueChange={handleMaterialChange}
                 >
-                  <SelectTrigger data-testid="select-material-type">
-                    <SelectValue placeholder="Select type" />
+                  <SelectTrigger data-testid="select-material">
+                    <SelectValue placeholder="Select material" />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="ROLL">ROLL</SelectItem>
-                    <SelectItem value="PACKAGING">PACKAGING</SelectItem>
+                    {materials.map((material) => (
+                      <SelectItem key={material.id} value={material.id}>
+                        {material.name} ({material.material_code})
+                      </SelectItem>
+                    ))}
                   </SelectContent>
                 </Select>
               </div>
@@ -826,85 +578,6 @@ export default function RawMaterialReceipt() {
                   className="bg-muted"
                   data-testid="input-uom"
                 />
-              </div>
-            </div>
-
-            <div className="grid grid-cols-2 gap-4">
-              <div className="space-y-2">
-                <Label htmlFor="material_select">
-                  {formData.material_type === "PACKAGING" ? "Packaging Material *" : "Roll Material *"}
-                </Label>
-                <Select
-                  value={
-                    formData.material_type === "PACKAGING"
-                      ? formData.packaging_material_id || ""
-                      : formData.roll_material_id || ""
-                  }
-                  onValueChange={handleMaterialChange}
-                >
-                  <SelectTrigger data-testid="select-material">
-                    <SelectValue placeholder="Select material" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {formData.material_type === "PACKAGING" ? (
-                      packagingMaterials.map((m) => (
-                        <SelectItem key={m.id} value={m.id}>
-                          {m.name}
-                        </SelectItem>
-                      ))
-                    ) : (
-                      rollMaterials.map((m) => (
-                        <SelectItem key={m.id} value={m.id}>
-                          {m.name}
-                        </SelectItem>
-                      ))
-                    )}
-                  </SelectContent>
-                </Select>
-              </div>
-              <div />
-            </div>
-
-            <div className="grid grid-cols-2 gap-4">
-              <div className="space-y-2">
-                <Label htmlFor="vendor_id">Vendor</Label>
-                <Select
-                  value={formData.vendor_id}
-                  onValueChange={(v) => setFormData((prev) => ({ ...prev, vendor_id: v }))}
-                >
-                  <SelectTrigger data-testid="select-vendor">
-                    <SelectValue placeholder="Select vendor" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value={NONE_VENDOR_VALUE}>None</SelectItem>
-                    {vendors.map((vendor) => (
-                      <SelectItem key={vendor.id} value={vendor.id}>
-                        {vendor.name}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="warehouse_id">Warehouse *</Label>
-                <Select
-                  value={formData.warehouse_id}
-                  onValueChange={(v) =>
-                    setFormData((prev) => ({ ...prev, warehouse_id: v }))
-                  }
-                >
-                  <SelectTrigger data-testid="select-warehouse">
-                    <SelectValue placeholder="Select warehouse" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {warehouses.map((w) => (
-                      <SelectItem key={w.id} value={w.id}>
-                        {w.name}
-                        {w.is_main ? " (Main)" : ""}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
               </div>
             </div>
 
@@ -1000,7 +673,7 @@ export default function RawMaterialReceipt() {
               </div>
             </div>
 
-            <div className="grid grid-cols-2 gap-4">
+            <div className="grid grid-cols-3 gap-4">
               <div className="space-y-2">
                 <Label htmlFor="unit_cost">Unit Cost *</Label>
                 <Input
@@ -1013,6 +686,24 @@ export default function RawMaterialReceipt() {
                   placeholder="0.00"
                   data-testid="input-unit-cost"
                 />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="warehouse_location">Warehouse Location</Label>
+                <Select
+                  value={formData.warehouse_location}
+                  onValueChange={(value) =>
+                    setFormData((prev) => ({ ...prev, warehouse_location: value }))
+                  }
+                >
+                  <SelectTrigger data-testid="select-warehouse">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="MAIN">MAIN</SelectItem>
+                    <SelectItem value="WH-A">Warehouse A</SelectItem>
+                    <SelectItem value="WH-B">Warehouse B</SelectItem>
+                  </SelectContent>
+                </Select>
               </div>
               <div className="space-y-2">
                 <Label htmlFor="qc_status">QC Status</Label>
