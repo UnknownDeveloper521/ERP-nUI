@@ -12,7 +12,7 @@ import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Plus, Search, Pencil, Trash2, ChevronsUpDown, Check, Package, ChevronLeft, ChevronRight } from "lucide-react";
+import { Plus, Search, Pencil, Trash2, ChevronsUpDown, Check, Package, Sliders, ChevronLeft, ChevronRight } from "lucide-react";
 import {
     Dialog,
     DialogContent,
@@ -1260,7 +1260,7 @@ export default function ProcurementMasters() {
                             <div className="rounded-md border">
                                 {renderTable()}
                             </div>
-                            
+
                             {/* Pagination */}
                             <div className="flex justify-between items-center px-1 mt-4">
                                 <div className="text-sm text-muted-foreground">
