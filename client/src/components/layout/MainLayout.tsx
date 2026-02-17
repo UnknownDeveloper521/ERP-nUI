@@ -19,8 +19,7 @@
 import { ReactNode, useState } from "react";
 import * as React from "react";
 import { Link, useLocation } from "wouter";
-import { useAuth } from "@/lib/store";
-import { filterVisibleSubItems, getHiddenModules, isModuleVisible } from "@/lib/moduleConfig";
+import { useAuth, MODULES_LIST } from "@/lib/store";
 import {
   LayoutDashboard,
   Users,
@@ -113,8 +112,7 @@ interface SidebarProps {
  */
 const Sidebar = ({ className }: SidebarProps) => {
   const [location] = useLocation();
-  // Removed: const { isModuleVisible } = useAuth(); 
-  // We use isModuleVisible from moduleConfig.ts instead (imported at top)
+  const { isModuleVisible } = useAuth();
 
   // ==========================================================================
   // MODULE CONFIGURATION
@@ -122,10 +120,6 @@ const Sidebar = ({ className }: SidebarProps) => {
   // PURPOSE: Defines all available modules, their icons, paths, and sub-items
   // WHY NEEDED: Central configuration for navigation structure
   // KEEP: Essential for navigation - modify when adding/removing modules
-  // 
-  // MODULE VISIBILITY FILTERING:
-  // Sub-items are filtered using filterVisibleSubItems() from moduleConfig.ts
-  // This removes hidden modules (Leave Management, Payroll, ESS) from sidebar
   // ==========================================================================
   const moduleConfig: { [key: string]: { name: string; icon: any; path: string; subItems?: { name: string; path: string }[] } } = {
     "Dashboard": { name: "Dashboard", icon: LayoutDashboard, path: "/" },
@@ -134,16 +128,14 @@ const Sidebar = ({ className }: SidebarProps) => {
       name: "HRMS & Payroll",
       icon: Users,
       path: "/hrms",
-      // FILTER HIDDEN MODULES: Remove Leave Management, Payroll, ESS from sidebar
-      // These modules are hidden via HIDDEN_MODULES config in moduleConfig.ts
-      subItems: filterVisibleSubItems([
+      subItems: [
         { name: "Dashboard", path: "/hrms" },
         { name: "Core HR", path: "/hrms/core-hr" },
         { name: "Attendance", path: "/hrms/attendance" },
         { name: "Leave Management", path: "/hrms/leave-management" },
         { name: "Payroll Management", path: "/hrms/payroll-management" },
         { name: "Self Service (ESS)", path: "/hrms/ess" },
-      ])
+      ]
     },
     "Products": { name: "Products & Items", icon: Box, path: "/products" },
     "Inventory": {
@@ -507,33 +499,10 @@ export default function MainLayout({ children }: { children: ReactNode }) {
   // WHY NEEDED: Powers the search functionality in header
   // NOTE: Should match moduleConfig in Sidebar
   // KEEP: Essential for search feature
-  // 
-  // HIDDEN MODULES EXCLUSION:
-  // Hidden modules are filtered out from search results using getHiddenModules()
-  // This prevents users from finding Leave Management, Payroll, ESS, HR Setup via search
-  // 
-  // HR SETUP SEARCH ENTRIES:
-  // Added HR Setup and all its sub-modules to enable searching when module is visible.
-  // When HR Setup is hidden (hr-setup: false), all these entries are filtered out:
-  // - HR Setup (main entry point)
-  // - Employee Salary Details (salary assignment page)
-  // - Salary Component (component configuration)
-  // - Salary Structure (structure templates)
-  // - Pay Period (pay period settings)
-  // 
-  // FILTERING MECHANISM:
-  // The filter checks if module path includes any hidden module key.
-  // For HR Setup: path.includes('hr-setup') catches all HR Setup routes.
-  // This ensures comprehensive filtering of all HR Setup related searches.
   // ==========================================================================
-  const allModules = [
+  const modules = [
     { name: "Dashboard", path: "/" },
     { name: "HRMS", path: "/hrms" },
-    { name: "Core HR", path: "/hrms/core-hr" },
-    { name: "Attendance", path: "/hrms/attendance" },
-    { name: "Leave Management", path: "/hrms/leave-management" },
-    { name: "Payroll Management", path: "/hrms/payroll-management" },
-    { name: "Self Service (ESS)", path: "/hrms/ess" },
     { name: "Products", path: "/products" },
     { name: "Inventory", path: "/inventory" },
     { name: "Sales", path: "/sales" },
@@ -545,53 +514,7 @@ export default function MainLayout({ children }: { children: ReactNode }) {
     { name: "Performance", path: "/performance" },
     { name: "Settings", path: "/settings" },
     { name: "My Account", path: "/my-account" },
-    
-    // ========================================================================
-    // HR SETUP MODULE SEARCH ENTRIES
-    // ========================================================================
-    // PURPOSE: Enable searching for HR Setup pages when module is visible
-    // 
-    // VISIBILITY: These entries are filtered out when 'hr-setup': false
-    // 
-    // WHY INCLUDE ALL SUB-MODULES:
-    // - Users may search for specific pages (e.g., "Salary Component")
-    // - Provides direct navigation to sub-modules
-    // - Improves discoverability when module is enabled
-    // 
-    // FILTERING BEHAVIOR:
-    // When HR Setup is hidden:
-    // - getHiddenModules() returns array including 'hr-setup'
-    // - Filter checks: module.path.includes('hr-setup')
-    // - All entries below are removed from search results
-    // - Users cannot find HR Setup via search
-    // 
-    // When HR Setup is visible:
-    // - These entries appear in search results
-    // - Users can search by module name or sub-module name
-    // - Clicking result navigates to the page
-    // 
-    // SEARCH EXAMPLES (when visible):
-    // - Search "HR Setup" → Shows main entry
-    // - Search "Salary" → Shows all salary-related pages
-    // - Search "Employee Salary" → Shows Employee Salary Details
-    // - Search "Component" → Shows Salary Component page
-    // - Search "Structure" → Shows Salary Structure page
-    // - Search "Pay Period" → Shows Pay Period page
-    // ========================================================================
-    { name: "HR Setup", path: "/hr-setup/employee-salary" },
-    { name: "Employee Salary Details", path: "/hr-setup/employee-salary" },
-    { name: "Salary Component", path: "/hr-setup/salary-component" },
-    { name: "Salary Structure", path: "/hr-setup/salary-structure" },
-    { name: "Pay Period", path: "/hr-setup/pay-period" },
   ];
-
-  // FILTER OUT HIDDEN MODULES FROM SEARCH
-  // Get list of hidden module identifiers and exclude them from search results
-  // This catches all HR Setup entries because their paths include 'hr-setup'
-  const hiddenModules = getHiddenModules();
-  const modules = allModules.filter(module => 
-    !hiddenModules.some(hidden => module.path.includes(hidden))
-  );
 
   // ==========================================================================
   // SEARCH FILTERING

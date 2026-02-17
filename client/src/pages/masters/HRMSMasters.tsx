@@ -12,7 +12,7 @@ import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Plus, Search, Pencil, Trash2, CalendarIcon, Check, ChevronsUpDown } from "lucide-react";
+import { Plus, Search, Pencil, Trash2, CalendarIcon, Check, ChevronsUpDown, ChevronLeft, ChevronRight } from "lucide-react";
 import {
     Dialog,
     DialogContent,
@@ -245,6 +245,10 @@ export default function HRMSMasters() {
 
     const [searchTerm, setSearchTerm] = useState("");
     const [open, setOpen] = useState(false);
+    
+    // Pagination State
+    const [currentPage, setCurrentPage] = useState(1);
+    const itemsPerPage = 10;
 
     const updateRoute = (tab: string, type: MasterType) => {
         const slug = MASTER_SLUGS[type] || type;
@@ -255,6 +259,7 @@ export default function HRMSMasters() {
         updateRoute(activeTab, newMaster);
         setSearchTerm("");
         setOpen(false);
+        setCurrentPage(1);
     };
 
     // State for list-based masters
@@ -282,17 +287,27 @@ export default function HRMSMasters() {
 
         updateRoute(value, defaultMaster);
         setSearchTerm("");
+        setCurrentPage(1);
     };
 
     // --- Helpers ---
 
     const currentMasterList = masterData[selectedMaster] || [];
     // Filter by search for all fields
-    const currentData = currentMasterList.filter(item =>
+    const filteredData = currentMasterList.filter(item =>
         Object.values(item).some(value =>
             String(value).toLowerCase().includes(searchTerm.toLowerCase())
         )
     );
+    
+    // Pagination calculations
+    const totalPages = Math.ceil(filteredData.length / itemsPerPage);
+    const currentData = filteredData.slice((currentPage - 1) * itemsPerPage, currentPage * itemsPerPage);
+    
+    // Reset to first page when search term or master type changes
+    useEffect(() => {
+        setCurrentPage(1);
+    }, [searchTerm, selectedMaster]);
 
     const handleAddClick = () => {
         setEditingId(null);
@@ -1400,14 +1415,6 @@ export default function HRMSMasters() {
                                             </TableRow>
                                         ) : (
                                             currentData
-                                                .filter(item => {
-                                                    const searchLower = searchTerm.toLowerCase();
-                                                    return (
-                                                        (item.name && item.name.toLowerCase().includes(searchLower)) ||
-                                                        (item.code && item.code.toLowerCase().includes(searchLower)) ||
-                                                        (item.holiday_name && item.holiday_name.toLowerCase().includes(searchLower))
-                                                    );
-                                                })
                                                 .map((item) => (
                                                     <TableRow key={item.id}>
                                                         {renderTableRow(item)}
@@ -1427,6 +1434,33 @@ export default function HRMSMasters() {
                                     </TableBody>
                                 </Table>
                             </div>
+                            
+                            {/* Pagination */}
+                            {filteredData.length > 0 && (
+                                <div className="flex justify-between items-center px-1 mt-4">
+                                    <div className="text-sm text-muted-foreground">
+                                        Showing {(currentPage - 1) * itemsPerPage + 1} to {Math.min(currentPage * itemsPerPage, filteredData.length)} of {filteredData.length} entries
+                                    </div>
+                                    <div className="flex gap-2">
+                                        <Button
+                                            variant="outline"
+                                            size="sm"
+                                            onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
+                                            disabled={currentPage === 1}
+                                        >
+                                            <ChevronLeft className="h-4 w-4" />
+                                        </Button>
+                                        <Button
+                                            variant="outline"
+                                            size="sm"
+                                            onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
+                                            disabled={currentPage >= totalPages || totalPages === 0}
+                                        >
+                                            <ChevronRight className="h-4 w-4" />
+                                        </Button>
+                                    </div>
+                                </div>
+                            )}
                         </CardContent>
                     </Card>
                 </TabsContent>
@@ -1538,7 +1572,7 @@ export default function HRMSMasters() {
                                             </TableRow>
                                         ) : (
                                             /* Render Standard List Helpers */
-                                            currentData.length === 0 ? (
+                                            filteredData.length === 0 ? (
                                                 <TableRow>
                                                     <TableCell colSpan={6} className="h-24 text-center text-muted-foreground">
                                                         No records found for {selectedMaster}.
@@ -1546,14 +1580,6 @@ export default function HRMSMasters() {
                                                 </TableRow>
                                             ) : (
                                                 currentData
-                                                    .filter(item => {
-                                                        const searchLower = searchTerm.toLowerCase();
-                                                        return (
-                                                            (item.name && item.name.toLowerCase().includes(searchLower)) ||
-                                                            (item.code && item.code.toLowerCase().includes(searchLower)) ||
-                                                            (item.holiday_name && item.holiday_name.toLowerCase().includes(searchLower))
-                                                        );
-                                                    })
                                                     .map((item) => (
                                                         <TableRow key={item.id}>
                                                             {renderTableRow(item)}
@@ -1574,6 +1600,33 @@ export default function HRMSMasters() {
                                     </TableBody>
                                 </Table>
                             </div>
+                            
+                            {/* Pagination */}
+                            {selectedMaster !== "LeavePolicy" && filteredData.length > 0 && (
+                                <div className="flex justify-between items-center px-1 mt-4">
+                                    <div className="text-sm text-muted-foreground">
+                                        Showing {(currentPage - 1) * itemsPerPage + 1} to {Math.min(currentPage * itemsPerPage, filteredData.length)} of {filteredData.length} entries
+                                    </div>
+                                    <div className="flex gap-2">
+                                        <Button
+                                            variant="outline"
+                                            size="sm"
+                                            onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
+                                            disabled={currentPage === 1}
+                                        >
+                                            <ChevronLeft className="h-4 w-4" />
+                                        </Button>
+                                        <Button
+                                            variant="outline"
+                                            size="sm"
+                                            onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
+                                            disabled={currentPage >= totalPages || totalPages === 0}
+                                        >
+                                            <ChevronRight className="h-4 w-4" />
+                                        </Button>
+                                    </div>
+                                </div>
+                            )}
                         </CardContent>
                     </Card>
                 </TabsContent>

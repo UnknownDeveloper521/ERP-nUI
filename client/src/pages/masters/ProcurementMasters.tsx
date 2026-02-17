@@ -12,7 +12,7 @@ import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Plus, Search, Pencil, Trash2, ChevronsUpDown, Check, Package } from "lucide-react";
+import { Plus, Search, Pencil, Trash2, ChevronsUpDown, Check, Package, ChevronLeft, ChevronRight } from "lucide-react";
 import {
     Dialog,
     DialogContent,
@@ -50,14 +50,15 @@ import { cn } from "@/lib/utils";
 
 // --- Types & Interfaces ---
 
-type MasterType = "Vendors" | "Items";
+type MasterType = "Vendors" | "Items" | "RM Threshold";
 
 const MASTER_SLUGS: Record<MasterType, string> = {
     "Vendors": "vendors",
     "Items": "items",
+    "RM Threshold": "rm-threshold",
 };
 
-const MASTER_TYPES: MasterType[] = ["Vendors", "Items"];
+const MASTER_TYPES: MasterType[] = ["Vendors", "Items", "RM Threshold"];
 
 interface VendorAddress {
     id: number; // local temp id
@@ -140,6 +141,9 @@ interface Item {
 
     // Specification / Notes
     notes?: string; // Specification
+
+    // RM Threshold
+    daily_required_qty?: number;
 
     // Audit
     created_at?: string;
@@ -258,6 +262,8 @@ export default function ProcurementMasters() {
 
     const [searchTerm, setSearchTerm] = useState("");
     const [open, setOpen] = useState(false); // Master type selector open state
+    const [currentPage, setCurrentPage] = useState(1);
+    const itemsPerPage = 10;
 
     const updateRoute = (tab: string, type: MasterType) => {
         const slug = MASTER_SLUGS[type] || type.toLowerCase();
@@ -270,6 +276,7 @@ export default function ProcurementMasters() {
         setOpen(false);
         setFilterType("All");
         setFilterStatus("All");
+        setCurrentPage(1);
     };
 
     // State for mock data
@@ -283,6 +290,7 @@ export default function ProcurementMasters() {
     // Filters
     const [filterType, setFilterType] = useState<string>("All");
     const [filterStatus, setFilterStatus] = useState<string>("All");
+    const [filterConfigured, setFilterConfigured] = useState<string>("All"); // "All" | "Configured" | "Not Configured"
 
     // Vendor Items Dialog State
     const [isItemDialogOpen, setIsItemDialogOpen] = useState(false);
@@ -298,6 +306,7 @@ export default function ProcurementMasters() {
     const getData = () => {
         if (selectedMaster === "Vendors") return vendors;
         if (selectedMaster === "Items") return items;
+        if (selectedMaster === "RM Threshold") return items.filter(i => i.type === "RM");
         return [];
     };
 
@@ -312,6 +321,16 @@ export default function ProcurementMasters() {
                 v.code.toLowerCase().includes(searchLower) ||
                 v.contact_person.toLowerCase().includes(searchLower) ||
                 v.addresses.some(a => a.city.toLowerCase().includes(searchLower));
+        } else if (selectedMaster === "RM Threshold") {
+            matchesSearch =
+                item.name.toLowerCase().includes(searchLower) ||
+                item.code.toLowerCase().includes(searchLower);
+
+            if (filterConfigured === "Configured") {
+                matchesSearch = matchesSearch && (item.daily_required_qty !== undefined && item.daily_required_qty > 0);
+            } else if (filterConfigured === "Not Configured") {
+                matchesSearch = matchesSearch && (item.daily_required_qty === undefined || item.daily_required_qty === 0);
+            }
         } else {
             matchesSearch =
                 item.name.toLowerCase().includes(searchLower) ||
@@ -324,6 +343,9 @@ export default function ProcurementMasters() {
         return matchesSearch && matchesType && matchesStatus;
     });
 
+    const totalPages = Math.ceil(currentData.length / itemsPerPage);
+    const paginatedData = currentData.slice((currentPage - 1) * itemsPerPage, currentPage * itemsPerPage);
+
     const handleAddClick = () => {
         setEditingId(null);
         if (selectedMaster === "Vendors") {
@@ -333,7 +355,7 @@ export default function ProcurementMasters() {
                 addresses: [{ id: Date.now(), address_line: "", country: "India", state: "", city: "" }],
                 documents: []
             });
-        } else {
+        } else if (selectedMaster === "Items") {
             setFormData({
                 status: "Active",
                 type: "RM",
@@ -407,7 +429,7 @@ export default function ProcurementMasters() {
                 setVendors(prev => [...prev, newItem]);
                 toast({ title: "Created", description: "Vendor created successfully" });
             }
-        } else {
+        } else if (selectedMaster === "Items") {
             // Item Validation
             if (!formData.code || !formData.name || !formData.type || !formData.uom || !formData.status) {
                 toast({ variant: "destructive", title: "Validation Error", description: "Please fill all required fields." });
@@ -428,6 +450,17 @@ export default function ProcurementMasters() {
                 const newItem = { ...formData, id: newId, created_at: now, created_by: user } as Item;
                 setItems(prev => [...prev, newItem]);
                 toast({ title: "Created", description: "Item created successfully" });
+            }
+        } else if (selectedMaster === "RM Threshold") {
+            const qty = parseFloat(formData.daily_required_qty);
+            if (isNaN(qty) || qty < 0) {
+                toast({ variant: "destructive", title: "Validation Error", description: "Daily Required Quantity cannot be negative." });
+                return;
+            }
+
+            if (editingId) {
+                setItems(prev => prev.map(item => item.id === editingId ? { ...item, daily_required_qty: qty, updated_at: now, updated_by: user } : item));
+                toast({ title: "Updated", description: "RM Threshold updated" });
             }
         }
         setIsDialogOpen(false);
@@ -540,14 +573,14 @@ export default function ProcurementMasters() {
                         </TableRow>
                     </TableHeader>
                     <TableBody>
-                        {currentData.length === 0 ? (
+                        {paginatedData.length === 0 ? (
                             <TableRow>
                                 <TableCell colSpan={9} className="h-24 text-center text-muted-foreground">
                                     No vendors found.
                                 </TableCell>
                             </TableRow>
                         ) : (
-                            currentData.map((item: any) => (
+                            paginatedData.map((item: any) => (
                                 <TableRow key={item.id}>
                                     <TableCell className="font-medium">{item.code}</TableCell>
                                     <TableCell>{item.name}</TableCell>
@@ -579,6 +612,52 @@ export default function ProcurementMasters() {
                     </TableBody>
                 </Table>
             );
+        } else if (selectedMaster === "RM Threshold") {
+            // RM Threshold Table
+            return (
+                <Table>
+                    <TableHeader>
+                        <TableRow className="bg-muted/50">
+                            <TableHead>Item Code</TableHead>
+                            <TableHead>Item Name</TableHead>
+                            <TableHead>UOM</TableHead>
+                            <TableHead>Daily Required Qty</TableHead>
+                            <TableHead>Status</TableHead>
+                            <TableHead className="text-right">Actions</TableHead>
+                        </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                        {currentData.length === 0 ? (
+                            <TableRow>
+                                <TableCell colSpan={6} className="h-24 text-center text-muted-foreground">
+                                    No RM items found.
+                                </TableCell>
+                            </TableRow>
+                        ) : (
+                            currentData.map((item: any) => (
+                                <TableRow key={item.id}>
+                                    <TableCell className="font-medium">{item.code}</TableCell>
+                                    <TableCell>{item.name}</TableCell>
+                                    <TableCell>{item.uom}</TableCell>
+                                    <TableCell>
+                                        {item.daily_required_qty !== undefined ? (
+                                            <Badge variant="outline">{item.daily_required_qty}</Badge>
+                                        ) : (
+                                            <span className="text-muted-foreground">-</span>
+                                        )}
+                                    </TableCell>
+                                    <TableCell><StatusBadge status={item.status} /></TableCell>
+                                    <TableCell className="text-right">
+                                        <Button variant="outline" size="sm" onClick={() => handleEditClick(item)}>
+                                            <Sliders className="h-4 w-4 mr-2" /> Configure
+                                        </Button>
+                                    </TableCell>
+                                </TableRow>
+                            ))
+                        )}
+                    </TableBody>
+                </Table>
+            );
         } else {
             // Items Table
             return (
@@ -594,14 +673,14 @@ export default function ProcurementMasters() {
                         </TableRow>
                     </TableHeader>
                     <TableBody>
-                        {currentData.length === 0 ? (
+                        {paginatedData.length === 0 ? (
                             <TableRow>
                                 <TableCell colSpan={6} className="h-24 text-center text-muted-foreground">
                                     No items found.
                                 </TableCell>
                             </TableRow>
                         ) : (
-                            currentData.map((item: any) => (
+                            paginatedData.map((item: any) => (
                                 <TableRow key={item.id}>
                                     <TableCell className="font-medium">{item.code}</TableCell>
                                     <TableCell>{item.name}</TableCell>
@@ -864,6 +943,46 @@ export default function ProcurementMasters() {
                     </div>
                 </div>
             );
+        } else if (selectedMaster === "RM Threshold") {
+            return (
+                <div className="grid gap-6 py-4 px-1">
+                    <div className="grid grid-cols-2 gap-4">
+                        <div className="space-y-2">
+                            <Label>Item Code</Label>
+                            <Input value={formData.code} disabled className="bg-muted" />
+                        </div>
+                        <div className="space-y-2">
+                            <Label>Item Name</Label>
+                            <Input value={formData.name} disabled className="bg-muted" />
+                        </div>
+                        <div className="space-y-2">
+                            <Label>UOM</Label>
+                            <Input value={formData.uom} disabled className="bg-muted" />
+                        </div>
+                        <div className="space-y-2">
+                            <Label htmlFor="daily_required_qty">Daily Required Quantity *</Label>
+                            <Input
+                                id="daily_required_qty"
+                                type="number"
+                                min={0}
+                                value={formData.daily_required_qty || ""}
+                                onChange={e => setFormData({ ...formData, daily_required_qty: e.target.value })}
+                                placeholder="Enter daily quantity"
+                            />
+                        </div>
+                        <div className="space-y-2">
+                            <Label>Status</Label>
+                            <Select value={formData.status} onValueChange={(val: any) => setFormData({ ...formData, status: val })}>
+                                <SelectTrigger><SelectValue placeholder="Select Status" /></SelectTrigger>
+                                <SelectContent>
+                                    <SelectItem value="Active">Active</SelectItem>
+                                    <SelectItem value="Inactive">Inactive</SelectItem>
+                                </SelectContent>
+                            </Select>
+                        </div>
+                    </div>
+                </div>
+            );
         } else {
             // Items Form
             return (
@@ -1058,28 +1177,44 @@ export default function ProcurementMasters() {
 
                         {/* Filters */}
                         <div className="w-full sm:w-1/6">
-                            <Label className="mb-1.5 block text-xs font-medium text-muted-foreground uppercase tracking-wider">Type</Label>
-                            <Select value={filterType} onValueChange={setFilterType}>
-                                <SelectTrigger className="h-10"><SelectValue /></SelectTrigger>
-                                <SelectContent>
-                                    <SelectItem value="All">All Types</SelectItem>
-                                    {selectedMaster === "Vendors" ? (
-                                        <>
-                                            <SelectItem value="Supplier">Supplier</SelectItem>
-                                            <SelectItem value="Service">Service</SelectItem>
-                                            <SelectItem value="Both">Both</SelectItem>
-                                        </>
-                                    ) : (
-                                        <>
-                                            <SelectItem value="RM">RM</SelectItem>
-                                            <SelectItem value="SFG">SFG</SelectItem>
-                                            <SelectItem value="FG">FG</SelectItem>
-                                            <SelectItem value="Consumable">Consumable</SelectItem>
-                                            <SelectItem value="Service">Service</SelectItem>
-                                        </>
-                                    )}
-                                </SelectContent>
-                            </Select>
+                            {selectedMaster === "RM Threshold" ? (
+                                <>
+                                    <Label className="mb-1.5 block text-xs font-medium text-muted-foreground uppercase tracking-wider">Configuration</Label>
+                                    <Select value={filterConfigured} onValueChange={setFilterConfigured}>
+                                        <SelectTrigger className="h-10"><SelectValue /></SelectTrigger>
+                                        <SelectContent>
+                                            <SelectItem value="All">All Items</SelectItem>
+                                            <SelectItem value="Configured">Configured</SelectItem>
+                                            <SelectItem value="Not Configured">Not Configured</SelectItem>
+                                        </SelectContent>
+                                    </Select>
+                                </>
+                            ) : (
+                                <>
+                                    <Label className="mb-1.5 block text-xs font-medium text-muted-foreground uppercase tracking-wider">Type</Label>
+                                    <Select value={filterType} onValueChange={setFilterType}>
+                                        <SelectTrigger className="h-10"><SelectValue /></SelectTrigger>
+                                        <SelectContent>
+                                            <SelectItem value="All">All Types</SelectItem>
+                                            {selectedMaster === "Vendors" ? (
+                                                <>
+                                                    <SelectItem value="Supplier">Supplier</SelectItem>
+                                                    <SelectItem value="Service">Service</SelectItem>
+                                                    <SelectItem value="Both">Both</SelectItem>
+                                                </>
+                                            ) : (
+                                                <>
+                                                    <SelectItem value="RM">RM</SelectItem>
+                                                    <SelectItem value="SFG">SFG</SelectItem>
+                                                    <SelectItem value="FG">FG</SelectItem>
+                                                    <SelectItem value="Consumable">Consumable</SelectItem>
+                                                    <SelectItem value="Service">Service</SelectItem>
+                                                </>
+                                            )}
+                                        </SelectContent>
+                                    </Select>
+                                </>
+                            )}
                         </div>
                         <div className="w-full sm:w-1/6">
                             <Label className="mb-1.5 block text-xs font-medium text-muted-foreground uppercase tracking-wider">Status</Label>
@@ -1107,10 +1242,12 @@ export default function ProcurementMasters() {
                         </div>
 
                         <div className="w-full sm:w-auto ml-auto mt-auto pt-5">
-                            <Button onClick={handleAddClick} className="w-full sm:w-auto">
-                                <Plus className="mr-2 h-4 w-4" />
-                                Add {selectedMaster === "Vendors" ? "Vendor" : "Item"}
-                            </Button>
+                            {selectedMaster !== "RM Threshold" && (
+                                <Button onClick={handleAddClick} className="w-full sm:w-auto">
+                                    <Plus className="mr-2 h-4 w-4" />
+                                    Add {selectedMaster === "Vendors" ? "Vendor" : "Item"}
+                                </Button>
+                            )}
                         </div>
                     </div>
 
@@ -1122,6 +1259,31 @@ export default function ProcurementMasters() {
                         <CardContent>
                             <div className="rounded-md border">
                                 {renderTable()}
+                            </div>
+                            
+                            {/* Pagination */}
+                            <div className="flex justify-between items-center px-1 mt-4">
+                                <div className="text-sm text-muted-foreground">
+                                    Showing {currentData.length === 0 ? 0 : (currentPage - 1) * itemsPerPage + 1} to {Math.min(currentPage * itemsPerPage, currentData.length)} of {currentData.length} entries
+                                </div>
+                                <div className="flex gap-2">
+                                    <Button
+                                        variant="outline"
+                                        size="sm"
+                                        onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
+                                        disabled={currentPage === 1}
+                                    >
+                                        <ChevronLeft className="h-4 w-4" />
+                                    </Button>
+                                    <Button
+                                        variant="outline"
+                                        size="sm"
+                                        onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
+                                        disabled={currentPage >= totalPages || totalPages === 0}
+                                    >
+                                        <ChevronRight className="h-4 w-4" />
+                                    </Button>
+                                </div>
                             </div>
                         </CardContent>
                     </Card>

@@ -1,4 +1,4 @@
-import { Switch, Route, Redirect } from "wouter";
+import { Switch, Route } from "wouter";
 import { queryClient } from "./lib/queryClient";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { Toaster } from "@/components/ui/toaster";
@@ -8,7 +8,6 @@ import NotFound from "@/pages/not-found";
 import Login from "@/pages/Login";
 import Register from "@/pages/Register";
 import ProtectedRoute from "@/components/auth/ProtectedRoute";
-import { shouldBlockRoute } from "@/lib/moduleConfig";
 import Dashboard from "@/pages/Dashboard";
 import HRMS from "@/pages/HRMS";
 import Customers from "@/pages/Customers";
@@ -90,49 +89,6 @@ const PlaceholderPage = ({ title }: { title: string }) => (
   </div>
 );
 
-/**
- * ============================================================================
- * ROUTE GUARD COMPONENT
- * ============================================================================
- * 
- * PURPOSE:
- * Protects routes for hidden modules by redirecting to dashboard.
- * Prevents users from accessing hidden modules via direct URL entry.
- * 
- * WHY NEEDED:
- * Even if modules are hidden from sidebar and search, users could still
- * type the URL directly (e.g., /hrms/leave-management). This component
- * blocks that access and redirects to dashboard.
- * 
- * HOW IT WORKS:
- * 1. Checks if current route path matches any hidden module
- * 2. If hidden: Redirects to dashboard (/)
- * 3. If visible: Renders the protected content normally
- * 
- * USAGE:
- * Wrap any route that might be hidden with this component:
- * <RouteGuard path="/hrms/leave-management">
- *   <LeaveManagement />
- * </RouteGuard>
- * 
- * CONFIGURATION:
- * Hidden modules are defined in client/src/lib/moduleConfig.ts
- * To re-enable a module, change its value from false to true in HIDDEN_MODULES
- * 
- * ============================================================================
- */
-const RouteGuard = ({ path, children }: { path: string; children: React.ReactNode }) => {
-  // Check if this route should be blocked (module is hidden)
-  if (shouldBlockRoute(path)) {
-    // Redirect to dashboard - user cannot access this hidden module
-    window.location.href = '/';
-    return null;
-  }
-  
-  // Route is allowed - render the content
-  return <>{children}</>;
-};
-
 function Router() {
   return (
     <Switch>
@@ -204,130 +160,96 @@ function Router() {
         )}
       </Route>
 
-      {/* ====================================================================
-           LEAVE MANAGEMENT ROUTES - PROTECTED BY ROUTE GUARD
-           ====================================================================
-           PURPOSE: All Leave Management module routes
-           ROUTE GUARD: Redirects to dashboard if module is hidden
-           CONFIGURATION: Controlled by HIDDEN_MODULES in moduleConfig.ts
-           TO RE-ENABLE: Set 'leave-management': true in moduleConfig.ts
-           ==================================================================== */}
       <Route path="/hrms/leave-management">
         {() => (
-          <RouteGuard path="/hrms/leave-management">
-            <ProtectedRoute>
-              <MainLayout>
-                <LeaveManagement />
-              </MainLayout>
-            </ProtectedRoute>
-          </RouteGuard>
+          <ProtectedRoute>
+            <MainLayout>
+              <LeaveManagement />
+            </MainLayout>
+          </ProtectedRoute>
         )}
       </Route>
 
       <Route path="/hrms/leave-management/dashboard">
         {() => (
-          <RouteGuard path="/hrms/leave-management/dashboard">
-            <ProtectedRoute>
-              <MainLayout>
-                <LeaveManagement />
-              </MainLayout>
-            </ProtectedRoute>
-          </RouteGuard>
+          <ProtectedRoute>
+            <MainLayout>
+              <LeaveManagement />
+            </MainLayout>
+          </ProtectedRoute>
         )}
       </Route>
 
       <Route path="/hrms/leave-management/apply">
         {() => (
-          <RouteGuard path="/hrms/leave-management/apply">
-            <ProtectedRoute>
-              <MainLayout>
-                <LeaveManagement />
-              </MainLayout>
-            </ProtectedRoute>
-          </RouteGuard>
+          <ProtectedRoute>
+            <MainLayout>
+              <LeaveManagement />
+            </MainLayout>
+          </ProtectedRoute>
         )}
       </Route>
 
       <Route path="/hrms/leave-management/management">
         {() => (
-          <RouteGuard path="/hrms/leave-management/management">
-            <ProtectedRoute>
-              <MainLayout>
-                <LeaveManagement />
-              </MainLayout>
-            </ProtectedRoute>
-          </RouteGuard>
+          <ProtectedRoute>
+            <MainLayout>
+              <LeaveManagement />
+            </MainLayout>
+          </ProtectedRoute>
         )}
       </Route>
 
       <Route path="/hrms/leave-management/calendar">
         {() => (
-          <RouteGuard path="/hrms/leave-management/calendar">
-            <ProtectedRoute>
-              <MainLayout>
-                <LeaveManagement />
-              </MainLayout>
-            </ProtectedRoute>
-          </RouteGuard>
+          <ProtectedRoute>
+            <MainLayout>
+              <LeaveManagement />
+            </MainLayout>
+          </ProtectedRoute>
         )}
       </Route>
 
       <Route path="/leave-management/apply">
         {() => (
-          <RouteGuard path="/leave-management/apply">
-            <ProtectedRoute>
-              <MainLayout>
-                <LeaveManagement />
-              </MainLayout>
-            </ProtectedRoute>
-          </RouteGuard>
+          <ProtectedRoute>
+            <MainLayout>
+              <LeaveManagement />
+            </MainLayout>
+          </ProtectedRoute>
         )}
       </Route>
 
-      {/* ====================================================================
-           PAYROLL MANAGEMENT ROUTES - PROTECTED BY ROUTE GUARD
-           ====================================================================
-           PURPOSE: All Payroll Management module routes
-           ROUTE GUARD: Redirects to dashboard if module is hidden
-           CONFIGURATION: Controlled by HIDDEN_MODULES in moduleConfig.ts
-           TO RE-ENABLE: Set 'payroll-management': true in moduleConfig.ts
-           ==================================================================== */}
       {/* Payroll Management - Main page (Run Payroll tab) */}
       <Route path="/hrms/payroll-management">
         {() => (
-          <RouteGuard path="/hrms/payroll-management">
-            <ProtectedRoute>
-              <MainLayout>
-                <PayrollManagement />
-              </MainLayout>
-            </ProtectedRoute>
-          </RouteGuard>
+          <ProtectedRoute>
+            <MainLayout>
+              <PayrollManagement />
+            </MainLayout>
+          </ProtectedRoute>
         )}
       </Route>
 
       {/* Payroll Management - Payslips Tab */}
       <Route path="/hrms/payroll-management/payslips">
         {() => (
-          <RouteGuard path="/hrms/payroll-management/payslips">
-            <ProtectedRoute>
-              <MainLayout>
-                <PayrollManagement />
-              </MainLayout>
-            </ProtectedRoute>
-          </RouteGuard>
+          <ProtectedRoute>
+            <MainLayout>
+              <PayrollManagement />
+            </MainLayout>
+          </ProtectedRoute>
         )}
       </Route>
 
       {/* Payroll Management - Employee Form */}
       <Route path="/hrms/payroll-management/:employeeId">
         {() => (
-          <RouteGuard path="/hrms/payroll-management/:employeeId">
-            <ProtectedRoute>
-              <MainLayout>
-                <PayrollManagement />
-              </MainLayout>
-            </ProtectedRoute>
-          </RouteGuard>
+          <ProtectedRoute>
+            <MainLayout>
+              <PayrollManagement />
+            </MainLayout>
+          </ProtectedRoute>
         )}
       </Route>
 
@@ -350,23 +272,13 @@ function Router() {
           </ProtectedRoute>
         )}
       </Route>
-      {/* ====================================================================
-           EMPLOYEE SELF SERVICE (ESS) ROUTE - PROTECTED BY ROUTE GUARD
-           ====================================================================
-           PURPOSE: Employee Self Service module route
-           ROUTE GUARD: Redirects to dashboard if module is hidden
-           CONFIGURATION: Controlled by HIDDEN_MODULES in moduleConfig.ts
-           TO RE-ENABLE: Set 'ess': true in moduleConfig.ts
-           ==================================================================== */}
       <Route path="/hrms/ess">
         {() => (
-          <RouteGuard path="/hrms/ess">
-            <ProtectedRoute>
-              <MainLayout>
-                <ESS />
-              </MainLayout>
-            </ProtectedRoute>
-          </RouteGuard>
+          <ProtectedRoute>
+            <MainLayout>
+              <ESS />
+            </MainLayout>
+          </ProtectedRoute>
         )}
       </Route>
 
@@ -664,262 +576,112 @@ function Router() {
         )}
       </Route>
 
-      {/* ====================================================================
-           HR SETUP ROUTES - PROTECTED BY ROUTE GUARD
-           ====================================================================
-           PURPOSE: All HR Setup module routes for salary configuration
-           
-           ROUTE GUARD: Redirects to dashboard if module is hidden
-           
-           CONFIGURATION: Controlled by HIDDEN_MODULES in moduleConfig.ts
-           
-           TO RE-ENABLE: Set 'hr-setup': true in moduleConfig.ts
-           
-           MODULE OVERVIEW:
-           HR Setup is a configuration module used during initial system setup
-           and when salary structures need updates. It contains sensitive
-           salary configuration that should be protected from accidental changes.
-           
-           SUB-MODULES:
-           1. Employee Salary Details - Assign salary structures to employees
-           2. Salary Component - Define earning/deduction/reimbursement components
-           3. Salary Structure - Create and manage salary structure templates
-           4. Pay Period - Configure pay period settings and schedules
-           
-           ROUTES PROTECTED (11 total):
-           
-           Employee Salary Details:
-           - /hr-setup/employee-salary (list view)
-           - /hr-setup/employee-salary/new (create new assignment)
-           - /hr-setup/employee-salary/:id (edit existing assignment)
-           
-           Salary Component:
-           - /hr-setup/salary-component (default view)
-           - /hr-setup/salary-component/:tab (tab view: earning/deduction/reimbursement)
-           - /hr-setup/salary-component/:tab/new (create new component in tab)
-           - /hr-setup/salary-component/:tab/:id (edit existing component)
-           
-           Salary Structure:
-           - /hr-setup/salary-structure (list view)
-           - /hr-setup/salary-structure/new (create new structure)
-           - /hr-setup/salary-structure/:id (edit existing structure)
-           
-           Pay Period:
-           - /hr-setup/pay-period (pay period management)
-           
-           REDIRECT BEHAVIOR:
-           When module is hidden ('hr-setup': false):
-           - User types any HR Setup URL in browser
-           - RouteGuard component checks shouldBlockRoute('/hr-setup/...')
-           - Function returns true (module is hidden)
-           - User is redirected to dashboard (/)
-           - No error message shown (silent redirect)
-           - URL changes to '/'
-           
-           WHY HIDE HR SETUP:
-           - Setup phase completed: Initial configuration is done
-           - Configuration locked: Prevent accidental changes to salary structures
-           - Security: Limit access to sensitive salary configuration
-           - Simplify UI: Regular users don't need setup access
-           - Workflow control: Salary changes should be planned and controlled
-           
-           BUSINESS LOGIC:
-           HR Setup is typically used during:
-           - Initial system implementation
-           - Annual salary structure reviews
-           - New salary component additions
-           - Pay period configuration changes
-           - Bulk salary assignment updates
-           
-           Once configured and tested, the module can be hidden to:
-           - Prevent accidental modifications
-           - Reduce UI complexity
-           - Protect sensitive salary data
-           - Enforce change control processes
-           
-           RE-ENABLING PROCESS:
-           When salary structures need updates:
-           1. Open client/src/lib/moduleConfig.ts
-           2. Find 'hr-setup': false in HIDDEN_MODULES
-           3. Change to 'hr-setup': true
-           4. Save file and refresh browser
-           5. HR Setup appears in sidebar (System section)
-           6. HR Setup appears in search results
-           7. All routes become accessible
-           8. Make necessary changes
-           9. Test thoroughly
-           10. Hide module again if desired
-           
-           SECURITY CONSIDERATIONS:
-           - Salary configuration is sensitive data
-           - Changes affect employee compensation
-           - Should be restricted to authorized personnel
-           - Consider using role-based access when re-enabled
-           - Audit trail recommended for salary changes
-           
-           ==================================================================== */}
-      
-      {/* ==================================================================
-           EMPLOYEE SALARY DETAILS ROUTES
-           ==================================================================
-           PURPOSE: Assign salary structures to employees
-           PAGES: List view, Create new, Edit existing
-           ================================================================== */}
+      {/* HR Setup Routes */}
       <Route path="/hr-setup/employee-salary">
         {() => (
-          <RouteGuard path="/hr-setup/employee-salary">
-            <ProtectedRoute>
-              <MainLayout>
-                <EmployeeSalaryDetails />
-              </MainLayout>
-            </ProtectedRoute>
-          </RouteGuard>
+          <ProtectedRoute>
+            <MainLayout>
+              <EmployeeSalaryDetails />
+            </MainLayout>
+          </ProtectedRoute>
         )}
       </Route>
-      
       {/* Route for creating a new Employee Salary Assignment */}
       <Route path="/hr-setup/employee-salary/new">
         {() => (
-          <RouteGuard path="/hr-setup/employee-salary/new">
-            <ProtectedRoute>
-              <MainLayout>
-                <EmployeeSalaryDetails />
-              </MainLayout>
-            </ProtectedRoute>
-          </RouteGuard>
+          <ProtectedRoute>
+            <MainLayout>
+              <EmployeeSalaryDetails />
+            </MainLayout>
+          </ProtectedRoute>
         )}
       </Route>
-      
       {/* Route for editing an existing Employee Salary Assignment */}
       <Route path="/hr-setup/employee-salary/:id">
         {() => (
-          <RouteGuard path="/hr-setup/employee-salary/:id">
-            <ProtectedRoute>
-              <MainLayout>
-                <EmployeeSalaryDetails />
-              </MainLayout>
-            </ProtectedRoute>
-          </RouteGuard>
+          <ProtectedRoute>
+            <MainLayout>
+              <EmployeeSalaryDetails />
+            </MainLayout>
+          </ProtectedRoute>
         )}
       </Route>
-      
-      {/* ==================================================================
-           SALARY COMPONENT ROUTES
-           ==================================================================
-           PURPOSE: Define earning/deduction/reimbursement components
-           PAGES: Default view, Tab view, Create new, Edit existing
-           TABS: earning, deduction, reimbursement
-           ================================================================== */}
       <Route path="/hr-setup/salary-component">
         {() => (
-          <RouteGuard path="/hr-setup/salary-component">
-            <ProtectedRoute>
-              <MainLayout>
-                <SalaryComponent />
-              </MainLayout>
-            </ProtectedRoute>
-          </RouteGuard>
+          <ProtectedRoute>
+            <MainLayout>
+              <SalaryComponent />
+            </MainLayout>
+          </ProtectedRoute>
         )}
       </Route>
-      
       {/* Route for Salary Component Tabs (earning, deduction, reimbursement) */}
       <Route path="/hr-setup/salary-component/:tab">
         {() => (
-          <RouteGuard path="/hr-setup/salary-component/:tab">
-            <ProtectedRoute>
-              <MainLayout>
-                <SalaryComponent />
-              </MainLayout>
-            </ProtectedRoute>
-          </RouteGuard>
+          <ProtectedRoute>
+            <MainLayout>
+              <SalaryComponent />
+            </MainLayout>
+          </ProtectedRoute>
         )}
       </Route>
-      
       {/* Route for adding a new Salary Component within a specific tab */}
       <Route path="/hr-setup/salary-component/:tab/new">
         {() => (
-          <RouteGuard path="/hr-setup/salary-component/:tab/new">
-            <ProtectedRoute>
-              <MainLayout>
-                <SalaryComponent />
-              </MainLayout>
-            </ProtectedRoute>
-          </RouteGuard>
+          <ProtectedRoute>
+            <MainLayout>
+              <SalaryComponent />
+            </MainLayout>
+          </ProtectedRoute>
         )}
       </Route>
-      
       {/* Route for editing a Salary Component */}
       <Route path="/hr-setup/salary-component/:tab/:id">
         {() => (
-          <RouteGuard path="/hr-setup/salary-component/:tab/:id">
-            <ProtectedRoute>
-              <MainLayout>
-                <SalaryComponent />
-              </MainLayout>
-            </ProtectedRoute>
-          </RouteGuard>
+          <ProtectedRoute>
+            <MainLayout>
+              <SalaryComponent />
+            </MainLayout>
+          </ProtectedRoute>
         )}
       </Route>
-      
-      {/* ==================================================================
-           SALARY STRUCTURE ROUTES
-           ==================================================================
-           PURPOSE: Create and manage salary structure templates
-           PAGES: List view, Create new, Edit existing
-           ================================================================== */}
       <Route path="/hr-setup/salary-structure">
         {() => (
-          <RouteGuard path="/hr-setup/salary-structure">
-            <ProtectedRoute>
-              <MainLayout>
-                <SalaryStructure />
-              </MainLayout>
-            </ProtectedRoute>
-          </RouteGuard>
+          <ProtectedRoute>
+            <MainLayout>
+              <SalaryStructure />
+            </MainLayout>
+          </ProtectedRoute>
         )}
       </Route>
-      
       {/* Route for creating a new Salary Structure */}
       <Route path="/hr-setup/salary-structure/new">
         {() => (
-          <RouteGuard path="/hr-setup/salary-structure/new">
-            <ProtectedRoute>
-              <MainLayout>
-                <SalaryStructure />
-              </MainLayout>
-            </ProtectedRoute>
-          </RouteGuard>
+          <ProtectedRoute>
+            <MainLayout>
+              <SalaryStructure />
+            </MainLayout>
+          </ProtectedRoute>
         )}
       </Route>
-      
       {/* Route for editing an existing Salary Structure */}
       <Route path="/hr-setup/salary-structure/:id">
         {() => (
-          <RouteGuard path="/hr-setup/salary-structure/:id">
-            <ProtectedRoute>
-              <MainLayout>
-                <SalaryStructure />
-              </MainLayout>
-            </ProtectedRoute>
-          </RouteGuard>
+          <ProtectedRoute>
+            <MainLayout>
+              <SalaryStructure />
+            </MainLayout>
+          </ProtectedRoute>
         )}
       </Route>
 
-      {/* ==================================================================
-           PAY PERIOD ROUTE
-           ==================================================================
-           PURPOSE: Configure pay period settings and schedules
-           PAGES: Pay period management
-           ================================================================== */}
       <Route path="/hr-setup/pay-period">
         {() => (
-          <RouteGuard path="/hr-setup/pay-period">
-            <ProtectedRoute>
-              <MainLayout>
-                <PayPeriod />
-              </MainLayout>
-            </ProtectedRoute>
-          </RouteGuard>
+          <ProtectedRoute>
+            <MainLayout>
+              <PayPeriod />
+            </MainLayout>
+          </ProtectedRoute>
         )}
       </Route>
       <Route path="/masters/hrms/:tab?/:type?">

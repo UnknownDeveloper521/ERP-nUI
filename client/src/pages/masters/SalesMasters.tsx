@@ -12,7 +12,7 @@ import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Plus, Search, Pencil, Trash2, ChevronsUpDown, Check, Package } from "lucide-react";
+import { Plus, Search, Pencil, Trash2, ChevronsUpDown, Check, Package, ChevronLeft, ChevronRight } from "lucide-react";
 import {
     Dialog,
     DialogContent,
@@ -214,6 +214,8 @@ export default function SalesMasters() {
 
     const [searchTerm, setSearchTerm] = useState("");
     const [open, setOpen] = useState(false); // Master type selector open state
+    const [currentPage, setCurrentPage] = useState(1);
+    const itemsPerPage = 10;
 
     const updateRoute = (tab: string, type: MasterType) => {
         const slug = MASTER_SLUGS[type] || type.toLowerCase();
@@ -226,6 +228,7 @@ export default function SalesMasters() {
         setOpen(false);
         setFilterType("All");
         setFilterStatus("All");
+        setCurrentPage(1);
     };
 
     // State for mock data
@@ -264,6 +267,9 @@ export default function SalesMasters() {
 
         return matchesSearch && matchesStatus;
     });
+
+    const totalPages = Math.ceil(currentData.length / itemsPerPage);
+    const paginatedData = currentData.slice((currentPage - 1) * itemsPerPage, currentPage * itemsPerPage);
 
     const handleAddClick = () => {
         setEditingId(null);
@@ -431,14 +437,14 @@ export default function SalesMasters() {
                         </TableRow>
                     </TableHeader>
                     <TableBody>
-                        {currentData.length === 0 ? (
+                        {paginatedData.length === 0 ? (
                             <TableRow>
                                 <TableCell colSpan={7} className="h-24 text-center text-muted-foreground">
                                     No customers found.
                                 </TableCell>
                             </TableRow>
                         ) : (
-                            currentData.map((item: any) => (
+                            paginatedData.map((item: any) => (
                                 <TableRow key={item.id}>
                                     <TableCell className="font-medium">{item.code}</TableCell>
                                     <TableCell>{item.name}</TableCell>
@@ -882,6 +888,31 @@ export default function SalesMasters() {
                         <CardContent>
                             <div className="rounded-md border">
                                 {renderTable()}
+                            </div>
+                            
+                            {/* Pagination */}
+                            <div className="flex justify-between items-center px-1 mt-4">
+                                <div className="text-sm text-muted-foreground">
+                                    Showing {currentData.length === 0 ? 0 : (currentPage - 1) * itemsPerPage + 1} to {Math.min(currentPage * itemsPerPage, currentData.length)} of {currentData.length} entries
+                                </div>
+                                <div className="flex gap-2">
+                                    <Button
+                                        variant="outline"
+                                        size="sm"
+                                        onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
+                                        disabled={currentPage === 1}
+                                    >
+                                        <ChevronLeft className="h-4 w-4" />
+                                    </Button>
+                                    <Button
+                                        variant="outline"
+                                        size="sm"
+                                        onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
+                                        disabled={currentPage >= totalPages || totalPages === 0}
+                                    >
+                                        <ChevronRight className="h-4 w-4" />
+                                    </Button>
+                                </div>
                             </div>
                         </CardContent>
                     </Card>

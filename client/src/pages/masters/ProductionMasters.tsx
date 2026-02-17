@@ -12,7 +12,7 @@ import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Plus, Search, Pencil, Trash2, ChevronsUpDown, Check } from "lucide-react";
+import { Plus, Search, Pencil, Trash2, ChevronsUpDown, Check, ChevronLeft, ChevronRight } from "lucide-react";
 import {
     Dialog,
     DialogContent,
@@ -48,15 +48,9 @@ import {
 } from "@/components/ui/popover";
 import { cn } from "@/lib/utils";
 
-// --- Types & Interfaces ---
-
-// ... (previous imports)
 
 // --- Types & Interfaces ---
 
-// ... (previous code)
-
-// --- Types & Interfaces ---
 
 type MasterType = "Work Centers" | "Machines" | "Operations";
 
@@ -199,6 +193,8 @@ export default function ProductionMasters() {
 
     const [searchTerm, setSearchTerm] = useState("");
     const [open, setOpen] = useState(false);
+    const [currentPage, setCurrentPage] = useState(1);
+    const itemsPerPage = 10;
 
     const updateRoute = (tab: string, type: MasterType) => {
         const slug = MASTER_SLUGS[type] || type.toLowerCase();
@@ -210,6 +206,7 @@ export default function ProductionMasters() {
         setSearchTerm("");
         setOpen(false);
         setFilterStatus("All");
+        setCurrentPage(1);
     };
 
     // State for mock data
@@ -269,6 +266,9 @@ export default function ProductionMasters() {
         return matchesSearch && matchesStatus;
     });
 
+    const totalPages = Math.ceil(currentData.length / itemsPerPage);
+    const paginatedData = currentData.slice((currentPage - 1) * itemsPerPage, currentPage * itemsPerPage);
+
     const handleAddClick = () => {
         setEditingId(null);
         // Reset Operations State
@@ -327,7 +327,7 @@ export default function ProductionMasters() {
                 setWorkCenters(prev => prev.filter(item => item.id !== id));
             } else if (selectedMaster === "Machines") {
                 // Check if used in operations
-                if (operations.some(o => o.machine_id === id)) {
+                if (operations.some(o => o.machines?.some(m => m.machine_id === id))) {
                     toast({ variant: "destructive", title: "Cannot Delete", description: "Machine is used in Operations." });
                     return;
                 }
@@ -501,14 +501,14 @@ export default function ProductionMasters() {
                         </TableRow>
                     </TableHeader>
                     <TableBody>
-                        {currentData.length === 0 ? (
+                        {paginatedData.length === 0 ? (
                             <TableRow>
                                 <TableCell colSpan={6} className="h-24 text-center text-muted-foreground">
                                     No work centers found.
                                 </TableCell>
                             </TableRow>
                         ) : (
-                            currentData.map((item: any) => (
+                            paginatedData.map((item: any) => (
                                 <TableRow key={item.id}>
                                     <TableCell className="font-medium">{item.code}</TableCell>
                                     <TableCell>{item.name}</TableCell>
@@ -546,14 +546,14 @@ export default function ProductionMasters() {
                         </TableRow>
                     </TableHeader>
                     <TableBody>
-                        {currentData.length === 0 ? (
+                        {paginatedData.length === 0 ? (
                             <TableRow>
                                 <TableCell colSpan={6} className="h-24 text-center text-muted-foreground">
                                     No machines found.
                                 </TableCell>
                             </TableRow>
                         ) : (
-                            currentData.map((item: any) => {
+                            paginatedData.map((item: any) => {
                                 const wc = workCenters.find(w => w.id === item.work_center_id);
                                 return (
                                     <TableRow key={item.id}>
@@ -593,14 +593,14 @@ export default function ProductionMasters() {
                         </TableRow>
                     </TableHeader>
                     <TableBody>
-                        {currentData.length === 0 ? (
+                        {paginatedData.length === 0 ? (
                             <TableRow>
                                 <TableCell colSpan={6} className="h-24 text-center text-muted-foreground">
                                     No operations found.
                                 </TableCell>
                             </TableRow>
                         ) : (
-                            currentData.map((item: any) => {
+                            paginatedData.map((item: any) => {
                                 const wc = workCenters.find(w => w.id === item.work_center_id);
                                 return (
                                     <TableRow key={item.id}>
@@ -839,8 +839,9 @@ export default function ProductionMasters() {
                                 <TableHeader>
                                     <TableRow className="bg-muted/50">
                                         <TableHead>Item Details</TableHead>
-                                        <TableHead className="w-[100px]">Type</TableHead>
                                         <TableHead className="w-[100px]">UOM</TableHead>
+                                        <TableHead className="w-[100px]">Type</TableHead>
+                                        <TableHead className="w-[120px]">Quantity</TableHead>
                                         <TableHead className="w-[50px]"></TableHead>
                                     </TableRow>
                                 </TableHeader>
@@ -860,10 +861,19 @@ export default function ProductionMasters() {
                                                         <div className="font-medium">{originalItem?.name}</div>
                                                         <div className="text-xs text-muted-foreground">{originalItem?.code}</div>
                                                     </TableCell>
+                                                    <TableCell>{originalItem?.uom}</TableCell>
                                                     <TableCell>
                                                         <Badge variant="secondary" className="text-[10px]">{item.type}</Badge>
                                                     </TableCell>
-                                                    <TableCell>{originalItem?.uom}</TableCell>
+                                                    <TableCell>
+                                                        <Input
+                                                            type="number"
+                                                            min="0"
+                                                            className="h-8 w-20"
+                                                            value={item.quantity || 0}
+                                                            onChange={(e) => updateOperationItem("inputs", item.id, "quantity", Math.max(0, parseFloat(e.target.value) || 0))}
+                                                        />
+                                                    </TableCell>
                                                     <TableCell>
                                                         <Button variant="ghost" size="icon" className="h-8 w-8 text-destructive" onClick={() => removeOperationItem("inputs", item.id)}>
                                                             <Trash2 className="h-4 w-4" />
@@ -964,8 +974,9 @@ export default function ProductionMasters() {
                                 <TableHeader>
                                     <TableRow className="bg-muted/50">
                                         <TableHead>Item Details</TableHead>
-                                        <TableHead className="w-[100px]">Type</TableHead>
                                         <TableHead className="w-[100px]">UOM</TableHead>
+                                        <TableHead className="w-[100px]">Type</TableHead>
+                                        <TableHead className="w-[120px]">Quantity</TableHead>
                                         <TableHead className="w-[50px]"></TableHead>
                                     </TableRow>
                                 </TableHeader>
@@ -985,10 +996,19 @@ export default function ProductionMasters() {
                                                         <div className="font-medium">{originalItem?.name}</div>
                                                         <div className="text-xs text-muted-foreground">{originalItem?.code}</div>
                                                     </TableCell>
+                                                    <TableCell>{originalItem?.uom}</TableCell>
                                                     <TableCell>
                                                         <Badge variant="secondary" className="text-[10px]">{item.type}</Badge>
                                                     </TableCell>
-                                                    <TableCell>{originalItem?.uom}</TableCell>
+                                                    <TableCell>
+                                                        <Input
+                                                            type="number"
+                                                            min="0"
+                                                            className="h-8 w-20"
+                                                            value={item.quantity || 0}
+                                                            onChange={(e) => updateOperationItem("outputs", item.id, "quantity", Math.max(0, parseFloat(e.target.value) || 0))}
+                                                        />
+                                                    </TableCell>
                                                     <TableCell>
                                                         <Button variant="ghost" size="icon" className="h-8 w-8 text-destructive" onClick={() => removeOperationItem("outputs", item.id)}>
                                                             <Trash2 className="h-4 w-4" />
@@ -1281,6 +1301,31 @@ export default function ProductionMasters() {
                         <CardContent>
                             <div className="rounded-md border">
                                 {renderTable()}
+                            </div>
+                            
+                            {/* Pagination */}
+                            <div className="flex justify-between items-center px-1 mt-4">
+                                <div className="text-sm text-muted-foreground">
+                                    Showing {currentData.length === 0 ? 0 : (currentPage - 1) * itemsPerPage + 1} to {Math.min(currentPage * itemsPerPage, currentData.length)} of {currentData.length} entries
+                                </div>
+                                <div className="flex gap-2">
+                                    <Button
+                                        variant="outline"
+                                        size="sm"
+                                        onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
+                                        disabled={currentPage === 1}
+                                    >
+                                        <ChevronLeft className="h-4 w-4" />
+                                    </Button>
+                                    <Button
+                                        variant="outline"
+                                        size="sm"
+                                        onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
+                                        disabled={currentPage >= totalPages || totalPages === 0}
+                                    >
+                                        <ChevronRight className="h-4 w-4" />
+                                    </Button>
+                                </div>
                             </div>
                         </CardContent>
                     </Card>
