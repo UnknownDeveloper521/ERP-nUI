@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from "@/components/ui/dialog";
 import {
     AlertDialog,
@@ -28,7 +29,7 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { Checkbox } from "@/components/ui/checkbox";
 import { Command, CommandInput, CommandList, CommandEmpty, CommandGroup, CommandItem, CommandInputBorderless } from "@/components/ui/command";
 import { format } from "date-fns";
-import { CalendarIcon, Plus, Edit, Upload, Trash2, Search, User, Briefcase, FileText, ShieldCheck, FileSpreadsheet, ChevronLeft, ChevronRight, Eye, ChevronDown, ExternalLink, Download, ChevronsUpDown, Check } from "lucide-react";
+import { CalendarIcon, Plus, Edit, Upload, Trash2, Search, User, Briefcase, FileText, ShieldCheck, FileSpreadsheet, ChevronLeft, ChevronRight, Eye, EyeOff, ChevronDown, ExternalLink, Download, ChevronsUpDown, Check, Copy, Key, Info, CheckCircle2, AlertCircle } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useToast } from "@/hooks/use-toast";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -168,7 +169,7 @@ const gradeOptions: string[] = ["A", "B", "C", "D", "E"];
 const workLocationOptions: string[] = ["Head Office", "Branch Office", "Remote", "Factory"];
 const shiftOptions: string[] = ["General Shift (9 AM - 6 PM)", "Night Shift (10 PM - 7 AM)", "Flexible"];
 const employmentTypeOptions: string[] = ["Full Time", "Part Time", "Contract", "Intern"];
-const employmentStatusOptions: string[] = ["Active", "Inactive", "On Leave", "Terminated"];
+const employmentStatusOptions: string[] = ["Active", "Inactive", "Terminated"];
 const probationPeriodOptions: Array<{ value: string; label: string }> = [
   { value: "3", label: "3 Months" },
   { value: "6", label: "6 Months" },
@@ -425,13 +426,33 @@ export default function CoreHR() {
             formData.workLocation
         ) && !formData.hasEmploymentValidationErrors;
 
-        // Documents validation
-        const hasUploadedDocuments = formData.documents &&
-            formData.documents.length > 0 &&
-            formData.documents.some((doc: any) => doc.fileName && doc.fileUrl);
-        const isDocsValid = hasUploadedDocuments && !formData.documentsHasValidationErrors;
+        // Documents validation - OPTIONAL (employee can be saved without documents)
+        // Only check for validation errors if documents exist
+        const isDocsValid = !formData.documentsHasValidationErrors;
 
-        return isPersonalValid && isJobValid && isDocsValid;
+        // System Access validation - ONLY if login access is enabled
+        let isSystemValid = true;
+        if (formData.enableLoginAccess) {
+            isSystemValid = !!(
+                formData.username &&
+                formData.password &&
+                formData.selectedRoles &&
+                formData.selectedRoles.length > 0
+            );
+        }
+        // If login access is disabled, system tab is always valid (employee can be saved without login)
+
+        // Debug logging to help identify which tab is blocking Save Employee button
+        console.log('📋 Save Employee Button Validation:', {
+            isPersonalValid,
+            isJobValid,
+            isDocsValid,
+            isSystemValid,
+            enableLoginAccess: formData.enableLoginAccess,
+            allValid: isPersonalValid && isJobValid && isDocsValid && isSystemValid
+        });
+
+        return isPersonalValid && isJobValid && isDocsValid && isSystemValid;
     };
 
     const handleClear = () => {
@@ -455,8 +476,15 @@ export default function CoreHR() {
                 fields.forEach(f => newData[f] = "");
             } else if (activeTab === 'docs') {
                 newData.documents = [];
+            } else if (activeTab === 'system') {
+                // System tab - only clear if adding new (not editing existing)
+                if (viewMode === 'add') {
+                    newData.enableLoginAccess = false;
+                    newData.username = "";
+                    newData.password = "";
+                    newData.selectedRoles = [];
+                }
             }
-            // System tab is read-only, no clear needed
 
             return newData;
         });
@@ -1172,6 +1200,12 @@ export default function CoreHR() {
             shift: "",
 
             documents: [],
+            
+            // System Access fields
+            enableLoginAccess: false,
+            username: "",
+            password: "",
+            selectedRoles: [],
         });
         setActiveTab("personal");
     };
@@ -1299,7 +1333,8 @@ export default function CoreHR() {
     const handleNextTab = () => {
         if (activeTab === "personal") setActiveTab("job");
         else if (activeTab === "job") setActiveTab("docs");
-        // No more tabs after docs since system tab was removed
+        else if (activeTab === "docs") setActiveTab("system");
+        // No more tabs after system
     };
 
     const handleSave = async (shouldExit: boolean = false) => {
@@ -1325,6 +1360,34 @@ export default function CoreHR() {
                 variant: "destructive"
             });
             return;
+        }
+
+        // Validate System Access if enabled
+        if (formData.enableLoginAccess) {
+            if (!formData.username) {
+                toast({
+                    title: "Validation Error",
+                    description: "Username is required when login access is enabled.",
+                    variant: "destructive"
+                });
+                return;
+            }
+            if (!formData.password) {
+                toast({
+                    title: "Validation Error",
+                    description: "Password is required when login access is enabled.",
+                    variant: "destructive"
+                });
+                return;
+            }
+            if (!formData.selectedRoles || formData.selectedRoles.length === 0) {
+                toast({
+                    title: "Validation Error",
+                    description: "At least one role must be selected when login access is enabled.",
+                    variant: "destructive"
+                });
+                return;
+            }
         }
 
         try {
@@ -1360,7 +1423,32 @@ export default function CoreHR() {
                 });
             } else if (viewMode === 'add') {
                 console.log('➕ Creating new employee (viewMode:', viewMode, ', editingId:', editingId, ')');
-                const newEmployee = await createEmployeeMutation.mutateAsync(payload);
+                const newEmployee: any = await createEmployeeMutation.mutateAsync(payload);
+
+                // Create user account if login access is enabled
+                if (formData.enableLoginAccess && formData.username && formData.password && formData.selectedRoles && formData.selectedRoles.length > 0) {
+                    const savedUsers = localStorage.getItem("system_users");
+                    const users = savedUsers ? JSON.parse(savedUsers) : [];
+                    
+                    const newUser = {
+                        id: `user_${Date.now()}`,
+                        employeeId: newEmployee.id,
+                        username: formData.username,
+                        password: formData.password,
+                        roles: formData.selectedRoles, // Store as array
+                        createdAt: new Date().toISOString(),
+                        isActive: true
+                    };
+                    
+                    users.push(newUser);
+                    localStorage.setItem("system_users", JSON.stringify(users));
+                    
+                    toast({
+                        title: "User Account Created",
+                        description: `Login credentials created for ${formData.username}`,
+                        className: "bg-blue-50 border-blue-200 text-blue-900"
+                    });
+                }
 
                 toast({
                     title: "Employee Created",
@@ -1375,6 +1463,51 @@ export default function CoreHR() {
                 // Wait for state to update before navigation
                 await new Promise(resolve => setTimeout(resolve, 100));
                 console.log('🔍 After employee creation - Total employees:', employees.length);
+            } else if (viewMode === 'edit' && editingId) {
+                console.log('🔄 Updating existing employee with ID:', editingId);
+                await updateEmployeeMutation.mutateAsync({ id: editingId, data: payload });
+                
+                // Update user account if it exists and roles changed
+                if (formData.enableLoginAccess && formData.selectedRoles && formData.selectedRoles.length > 0) {
+                    const savedUsers = localStorage.getItem("system_users");
+                    const users = savedUsers ? JSON.parse(savedUsers) : [];
+                    const userIndex = users.findIndex((u: any) => u.employeeId === editingId);
+                    
+                    if (userIndex !== -1) {
+                        // Update existing user roles and password if provided
+                        users[userIndex].roles = formData.selectedRoles;
+                        if (formData.password) {
+                            users[userIndex].password = formData.password;
+                        }
+                        localStorage.setItem("system_users", JSON.stringify(users));
+                    } else if (formData.username && formData.password) {
+                        // Create new user account for existing employee
+                        const newUser = {
+                            id: `user_${Date.now()}`,
+                            employeeId: editingId,
+                            username: formData.username,
+                            password: formData.password,
+                            roles: formData.selectedRoles, // Store as array
+                            createdAt: new Date().toISOString(),
+                            isActive: true
+                        };
+                        
+                        users.push(newUser);
+                        localStorage.setItem("system_users", JSON.stringify(users));
+                        
+                        toast({
+                            title: "User Account Created",
+                            description: `Login credentials created for ${formData.username}`,
+                            className: "bg-blue-50 border-blue-200 text-blue-900"
+                        });
+                    }
+                }
+                
+                toast({
+                    title: "Employee Updated",
+                    description: "Employee information updated successfully.",
+                    className: "bg-green-50 border-green-200 text-green-900"
+                });
             } else {
                 console.log('⚠️ Unexpected state - viewMode:', viewMode, ', editingId:', editingId);
                 toast({
@@ -1611,8 +1744,8 @@ export default function CoreHR() {
 
                                         {/* Status */}
                                         <div className="col-span-1 cursor-pointer" onClick={() => handleEdit(emp)}>
-                                            <Badge variant={emp.status === 'active' ? 'default' : 'secondary'} className={cn("text-xs font-normal", emp.status === 'active' ? "bg-green-100 text-green-700 hover:bg-green-100" : "bg-gray-100 text-gray-700")}>
-                                                {emp.status}
+                                            <Badge variant={emp.status?.toLowerCase() === 'active' ? 'default' : 'secondary'} className={cn("text-xs font-normal lowercase", emp.status?.toLowerCase() === 'active' ? "bg-green-100 text-green-700 hover:bg-green-100" : "bg-gray-100 text-gray-700")}>
+                                                {emp.status?.toLowerCase()}
                                             </Badge>
                                         </div>
 
@@ -1681,6 +1814,12 @@ export default function CoreHR() {
                             >
                                 Documents
                             </TabsTrigger>
+                            <TabsTrigger
+                                value="system"
+                                className="data-[state=active]:bg-transparent data-[state=active]:shadow-none data-[state=active]:border-primary data-[state=active]:text-primary px-4 py-2 text-sm font-medium border-b-2 border-transparent transition-colors rounded-none text-muted-foreground hover:text-foreground hover:border-muted-foreground/30"
+                            >
+                                System Access
+                            </TabsTrigger>
                         </TabsList>
                     </div>
 
@@ -1696,14 +1835,25 @@ export default function CoreHR() {
                                 <TabsContent value="docs" className="m-0 focus-visible:ring-0">
                                     <DocumentsForm data={formData} updateData={setFormData} readOnly={viewMode === 'edit' && !isEditing} />
                                 </TabsContent>
+                                <TabsContent value="system" className="m-0 focus-visible:ring-0">
+                                    <SystemAccessForm data={formData} updateData={setFormData} readOnly={viewMode === 'edit' && !isEditing} />
+                                </TabsContent>
                             </div>
                         </ScrollArea>
 
                         <div className="p-4 border-t bg-muted/20 flex justify-end gap-3 shrink-0">
                             {(isEditing || viewMode === 'add') && (
-                                <Button variant="outline" onClick={handleClear}>Clear</Button>
+                                <Button 
+                                    variant="outline" 
+                                    onClick={handleClear}
+                                    disabled={activeTab === 'docs'}
+                                >
+                                    Clear
+                                </Button>
                             )}
-                            {(isEditing || viewMode === 'add') && activeTab !== 'docs' && (
+                            
+                            {/* Save & Next button - show for Personal and Employment tabs only */}
+                            {(isEditing || viewMode === 'add') && (activeTab === 'personal' || activeTab === 'job') && (
                                 <Button
                                     onClick={() => handleSave(false)}
                                     disabled={!isCurrentTabValid()}
@@ -1715,9 +1865,26 @@ export default function CoreHR() {
                                     Save & Next
                                 </Button>
                             )}
+                            
+                            {/* Save & Next button for Documents tab - navigates to System Access */}
+                            {(isEditing || viewMode === 'add') && activeTab === 'docs' && (
+                                <Button
+                                    onClick={() => {
+                                        // Save document data and navigate to System Access tab
+                                        setActiveTab('system');
+                                    }}
+                                    disabled={!isCurrentTabValid()}
+                                    className={`${isCurrentTabValid()
+                                            ? "bg-blue-600 hover:bg-blue-700 text-white"
+                                            : "bg-gray-300 text-gray-500 cursor-not-allowed"
+                                        }`}
+                                >
+                                    Save & Next
+                                </Button>
+                            )}
 
-                            {/* Save Employee/Update Info button for Documents tab or when all tabs are valid */}
-                            {(isEditing || viewMode === 'add') && (activeTab === 'docs' || areAllTabsValid()) && (
+                            {/* Save Employee button - only on System Access tab */}
+                            {(isEditing || viewMode === 'add') && activeTab === 'system' && (
                                 <Button
                                     onClick={() => handleSave(true)}
                                     disabled={!areAllTabsValid()}
@@ -1874,8 +2041,8 @@ function EmployeeCard({ employee, onEdit }: { employee: any, onEdit: () => void 
                         <p className="text-sm text-muted-foreground">{employee.designation || 'No Designation'}</p>
                         <div className="flex items-center justify-center gap-2 mt-2">
                             <Badge variant="outline" className="font-normal">{employee.employeeId}</Badge>
-                            <Badge variant={employee.status === 'active' ? 'default' : 'destructive'} className={cn("capitalize", employee.status === 'active' ? "bg-green-600 hover:bg-green-700" : "")}>
-                                {employee.status}
+                            <Badge variant={employee.status?.toLowerCase() === 'active' ? 'default' : 'destructive'} className={cn("lowercase", employee.status?.toLowerCase() === 'active' ? "bg-green-600 hover:bg-green-700" : "")}>
+                                {employee.status?.toLowerCase()}
                             </Badge>
                         </div>
                     </div>
@@ -2135,13 +2302,14 @@ function PersonalDetailsForm({ data, updateData, readOnly }: any) {
 }
 
 function EmploymentDetailsForm({ data, updateData, departments, employees, readOnly }: any) {
+    const { toast } = useToast();
     const [validationErrors, setValidationErrors] = useState<{ [key: string]: string }>({});
 
     // Date validation functions
     const validateDateOfJoining = (doj: Date | undefined): string => {
         if (!doj) return "";
         const today = new Date();
-        today.setHours(23, 59, 59, 999); // End of today
+        today.setHours(23, 59, 59, 999);
         if (doj > today) {
             return "Date of Joining cannot be in the future";
         }
@@ -2152,12 +2320,11 @@ function EmploymentDetailsForm({ data, updateData, departments, employees, readO
         if (!confirmationDate) return "";
         if (!doj) return "";
 
-        // Convert dates to compare only date parts (ignore time)
         const confirmDate = new Date(confirmationDate.getFullYear(), confirmationDate.getMonth(), confirmationDate.getDate());
         const dojDate = new Date(doj.getFullYear(), doj.getMonth(), doj.getDate());
 
         if (confirmDate <= dojDate) {
-            return "Confirmation date must be after Date of Joining";
+            return "Confirmation Date cannot be earlier than Date of Joining";
         }
 
         if (probationPeriod) {
@@ -2175,22 +2342,46 @@ function EmploymentDetailsForm({ data, updateData, departments, employees, readO
     };
 
     const validateExitDate = (exitDate: Date | undefined, doj: Date | undefined, confirmationDate: Date | undefined, employmentStatus: string): string => {
-        if (employmentStatus === "active") return "";
+        // Exit Date not required for Active employees or when status is empty
+        if (!employmentStatus || employmentStatus === "Active") {
+            return "";
+        }
 
-        if (!exitDate && (employmentStatus === "inactive" || employmentStatus === "Resigned" || employmentStatus === "Terminated")) {
-            return "Exit date is required when employee is inactive";
+        // Exit Date required for Inactive/Terminated status
+        if (!exitDate && (employmentStatus === "Inactive" || employmentStatus === "Terminated")) {
+            return "Exit Date is required for Inactive/Terminated status";
         }
 
         if (exitDate) {
-            if (doj && exitDate <= doj) {
-                return "Exit date must be after Date of Joining";
+            // Exit Date cannot be before DOJ
+            if (doj) {
+                const exitDateOnly = new Date(exitDate.getFullYear(), exitDate.getMonth(), exitDate.getDate());
+                const dojDateOnly = new Date(doj.getFullYear(), doj.getMonth(), doj.getDate());
+                
+                if (exitDateOnly <= dojDateOnly) {
+                    return "Exit Date cannot be earlier than Date of Joining";
+                }
             }
 
-            if (confirmationDate && exitDate <= confirmationDate) {
-                return "Exit date must be after Confirmation Date";
+            // Exit Date cannot be before Confirmation Date
+            if (confirmationDate) {
+                const exitDateOnly = new Date(exitDate.getFullYear(), exitDate.getMonth(), exitDate.getDate());
+                const confirmDateOnly = new Date(confirmationDate.getFullYear(), confirmationDate.getMonth(), confirmationDate.getDate());
+                
+                if (exitDateOnly <= confirmDateOnly) {
+                    return "Exit Date cannot be earlier than Confirmation Date";
+                }
             }
         }
 
+        return "";
+    };
+
+    const validateEmploymentStatus = (exitDate: Date | undefined, employmentStatus: string): string => {
+        // If Exit Date is filled, status must not be Active
+        if (exitDate && employmentStatus === "Active") {
+            return "Please set Employment Status to Inactive/Terminated when Exit Date is entered";
+        }
         return "";
     };
 
@@ -2205,7 +2396,7 @@ function EmploymentDetailsForm({ data, updateData, departments, employees, readO
         return confirmationDate;
     };
 
-    // Enhanced handleChange with validation and auto-calculation
+    // Enhanced handleChange with validation and auto-clear
     const handleChange = (field: string, value: any) => {
         if (readOnly) return;
 
@@ -2220,19 +2411,64 @@ function EmploymentDetailsForm({ data, updateData, departments, employees, readO
                 );
                 if (autoConfirmationDate) {
                     newData.confirmationDate = autoConfirmationDate;
-                    console.log('🔄 Auto-calculated confirmation date:', autoConfirmationDate);
                 }
             }
 
-            // Clear exit date when employment status becomes active
-            if (field === "employmentStatus" && value === "active") {
+            // Clear/Auto-fix behavior when DOJ changes
+            if (field === "dateOfJoining" && value) {
+                const dojDate = new Date(value.getFullYear(), value.getMonth(), value.getDate());
+                
+                // Clear Confirmation Date if it becomes invalid
+                if (newData.confirmationDate) {
+                    const confirmDate = new Date(newData.confirmationDate.getFullYear(), newData.confirmationDate.getMonth(), newData.confirmationDate.getDate());
+                    if (confirmDate <= dojDate) {
+                        newData.confirmationDate = undefined;
+                        toast({
+                            title: "Confirmation Date Cleared",
+                            description: "Confirmation Date cleared because it is before Date of Joining",
+                            variant: "default"
+                        });
+                    }
+                }
+                
+                // Clear Exit Date if it becomes invalid
+                if (newData.exitDate) {
+                    const exitDate = new Date(newData.exitDate.getFullYear(), newData.exitDate.getMonth(), newData.exitDate.getDate());
+                    if (exitDate <= dojDate) {
+                        newData.exitDate = undefined;
+                        toast({
+                            title: "Exit Date Cleared",
+                            description: "Exit Date cleared because it is before Date of Joining",
+                            variant: "default"
+                        });
+                    }
+                }
+            }
+
+            // Clear Exit Date if it becomes invalid when Confirmation Date changes
+            if (field === "confirmationDate" && value && newData.exitDate) {
+                const confirmDate = new Date(value.getFullYear(), value.getMonth(), value.getDate());
+                const exitDate = new Date(newData.exitDate.getFullYear(), newData.exitDate.getMonth(), newData.exitDate.getDate());
+                
+                if (exitDate <= confirmDate) {
+                    newData.exitDate = undefined;
+                    toast({
+                        title: "Exit Date Cleared",
+                        description: "Exit Date cleared because it is before Confirmation Date",
+                        variant: "default"
+                    });
+                }
+            }
+
+            // Clear exit date when employment status becomes Active
+            if (field === "employmentStatus" && value === "Active") {
                 newData.exitDate = undefined;
             }
 
             return newData;
         });
 
-        // Validate after state update with a slight delay to ensure state is updated
+        // Validate after state update
         setTimeout(() => validateAllFields(), 100);
     };
 
@@ -2252,13 +2488,9 @@ function EmploymentDetailsForm({ data, updateData, departments, employees, readO
         const exitError = validateExitDate(data.exitDate, data.dateOfJoining, data.confirmationDate, data.employmentStatus);
         if (exitError) errors.exitDate = exitError;
 
-        console.log('🔍 Employment Validation:', {
-            doj: data.dateOfJoining,
-            confirmationDate: data.confirmationDate,
-            probationPeriod: data.probationPeriod,
-            employmentStatus: data.employmentStatus,
-            errors
-        });
+        // Validate Employment Status (when Exit Date is filled)
+        const statusError = validateEmploymentStatus(data.exitDate, data.employmentStatus);
+        if (statusError) errors.employmentStatus = statusError;
 
         setValidationErrors(errors);
 
@@ -2272,7 +2504,10 @@ function EmploymentDetailsForm({ data, updateData, departments, employees, readO
 
     // Validate on component mount and data changes
     React.useEffect(() => {
-        validateAllFields();
+        // Only validate if we have employment status selected
+        if (data.employmentStatus && data.employmentStatus !== '') {
+            validateAllFields();
+        }
     }, [data.dateOfJoining, data.confirmationDate, data.exitDate, data.probationPeriod, data.employmentStatus]);
 
     return (
@@ -2309,6 +2544,9 @@ function EmploymentDetailsForm({ data, updateData, departments, employees, readO
                                 ))}
                             </SelectContent>
                         </Select>
+                        {validationErrors.employmentStatus && (
+                            <p className="text-sm text-red-500 mt-1">{validationErrors.employmentStatus}</p>
+                        )}
                     </div>
 
                     <div className="space-y-2">
@@ -2330,11 +2568,11 @@ function EmploymentDetailsForm({ data, updateData, departments, employees, readO
                         )}
                     </div>
                     <div className="space-y-2">
-                        <Label>Exit Date{(data.employmentStatus !== 'active' && data.employmentStatus !== '') && <span className="text-red-500">*</span>}</Label>
+                        <Label>Exit Date{(data.employmentStatus !== 'Active' && data.employmentStatus !== '') && <span className="text-red-500">*</span>}</Label>
                         <DatePicker
                             date={data.exitDate}
                             setDate={(d) => handleChange("exitDate", d)}
-                            disabled={readOnly || data.employmentStatus === 'active'}
+                            disabled={readOnly || data.employmentStatus === 'Active'}
                         />
                         {validationErrors.exitDate && (
                             <p className="text-sm text-red-500 mt-1">{validationErrors.exitDate}</p>
@@ -3057,6 +3295,314 @@ function DocumentsForm({ data, updateData, readOnly }: any) {
             </AlertDialog>
         </div>
     )
+}
+
+function SystemAccessForm({ data, updateData, readOnly }: any) {
+    const { toast } = useToast();
+    const [enableLoginAccess, setEnableLoginAccess] = useState(data.enableLoginAccess || false);
+    const [username, setUsername] = useState(data.username || "");
+    const [password, setPassword] = useState(data.password || "");
+    const [showPassword, setShowPassword] = useState(false);
+    const [selectedRoles, setSelectedRoles] = useState<string[]>(data.selectedRoles || []);
+    const [roleDropdownOpen, setRoleDropdownOpen] = useState(false);
+    const [userExists, setUserExists] = useState(false);
+    
+    // Mock roles - in production, fetch from Users & Roles module
+    const availableRoles = [
+        { id: "admin", name: "Administrator" },
+        { id: "manager", name: "Manager" },
+        { id: "employee", name: "Employee" },
+        { id: "hr", name: "HR Staff" },
+        { id: "accountant", name: "Accountant" }
+    ];
+    
+    // Check if user account already exists (for edit mode)
+    useEffect(() => {
+        if (data.id) {
+            // Check if user account exists for this employee
+            const savedUsers = localStorage.getItem("system_users");
+            const users = savedUsers ? JSON.parse(savedUsers) : [];
+            const existingUser = users.find((u: any) => u.employeeId === data.id);
+            
+            if (existingUser) {
+                setUserExists(true);
+                setEnableLoginAccess(true);
+                setUsername(existingUser.username);
+                // Load existing roles
+                if (existingUser.roles && Array.isArray(existingUser.roles)) {
+                    setSelectedRoles(existingUser.roles);
+                }
+            }
+        }
+    }, [data.id]);
+    
+    // Generate username from employee name
+    useEffect(() => {
+        if (enableLoginAccess && !userExists && data.firstName && data.lastName) {
+            const generatedUsername = `${data.firstName.toLowerCase()}.${data.lastName.toLowerCase()}`;
+            setUsername(generatedUsername);
+        }
+    }, [enableLoginAccess, data.firstName, data.lastName, userExists]);
+    
+    // Update parent form data
+    useEffect(() => {
+        updateData((prev: any) => ({
+            ...prev,
+            enableLoginAccess,
+            username,
+            password,
+            selectedRoles
+        }));
+    }, [enableLoginAccess, username, password, selectedRoles]);
+    
+    const handleToggleAccess = (checked: boolean) => {
+        setEnableLoginAccess(checked);
+        if (!checked) {
+            // Clear fields when disabled
+            if (!userExists) {
+                setUsername("");
+                setPassword("");
+            }
+            // Always clear roles when toggle is OFF
+            setSelectedRoles([]);
+        }
+    };
+    
+    const handleAddRole = (roleId: string) => {
+        if (!roleId) return;
+        
+        // Add role to list (duplicate check handled by UI)
+        setSelectedRoles(prev => [...prev, roleId]);
+    };
+    
+    const handleDeleteRole = (roleId: string) => {
+        setSelectedRoles(prev => prev.filter(r => r !== roleId));
+    };
+    
+    const getRoleName = (roleId: string) => {
+        const role = availableRoles.find(r => r.id === roleId);
+        return role ? role.name : roleId;
+    };
+    
+    const handleResetPassword = () => {
+        setPassword("");
+        
+        toast({
+            title: "Password Reset",
+            description: "Please enter a new password for this user.",
+            className: "bg-blue-50 border-blue-200 text-blue-900"
+        });
+    };
+    
+    return (
+        <div className="space-y-3">
+            <div className="flex justify-between items-center">
+                <h4 className="font-semibold text-primary text-sm">System Access Configuration</h4>
+            </div>
+            
+            {/* Enable Login Access Toggle */}
+            <div className="flex items-center justify-between p-2.5 border rounded-md bg-muted/20">
+                <div className="space-y-0">
+                    <label className="text-xs font-medium">Enable Login Access</label>
+                    <p className="text-[11px] text-muted-foreground">
+                        Allow this employee to access the system
+                    </p>
+                </div>
+                <Switch
+                    checked={enableLoginAccess}
+                    onCheckedChange={handleToggleAccess}
+                    disabled={readOnly || userExists}
+                />
+            </div>
+            
+            {/* Show fields only when toggle is ON */}
+            {enableLoginAccess && (
+                <div className="space-y-2 p-2.5 border rounded-md bg-card">
+                    {/* Username */}
+                    <div className="space-y-0.5">
+                        <Label htmlFor="username" className="text-[11px] font-medium">
+                            Username {!userExists && <span className="text-destructive">*</span>}
+                        </Label>
+                        <Input
+                            id="username"
+                            value={username}
+                            onChange={(e) => setUsername(e.target.value)}
+                            placeholder="username"
+                            disabled={readOnly || userExists || !enableLoginAccess}
+                            className={cn("h-8 text-xs w-40 max-w-[160px]", userExists ? "bg-muted" : "")}
+                        />
+                        {userExists && (
+                            <p className="text-[10px] text-muted-foreground mt-0.5 w-40 max-w-[160px]">
+                                Username cannot be changed for existing users
+                            </p>
+                        )}
+                    </div>
+                    
+                    {/* Password - Manual Entry with View Toggle */}
+                    <div className="space-y-0.5">
+                        <Label htmlFor="password" className="text-[11px] font-medium">
+                            Password <span className="text-destructive">*</span>
+                        </Label>
+                        <div className="relative w-40 max-w-[160px]">
+                            <Input
+                                id="password"
+                                type={showPassword ? "text" : "password"}
+                                value={password}
+                                onChange={(e) => setPassword(e.target.value)}
+                                placeholder="Enter password"
+                                disabled={readOnly || !enableLoginAccess}
+                                className="h-8 text-xs pr-8"
+                            />
+                            <Button
+                                type="button"
+                                variant="ghost"
+                                size="icon"
+                                onClick={() => setShowPassword(!showPassword)}
+                                disabled={readOnly || !enableLoginAccess}
+                                className="absolute right-0 top-0 h-8 w-8 hover:bg-transparent"
+                                title={showPassword ? "Hide password" : "Show password"}
+                            >
+                                {showPassword ? (
+                                    <EyeOff className="h-4 w-4 text-muted-foreground" />
+                                ) : (
+                                    <Eye className="h-4 w-4 text-muted-foreground" />
+                                )}
+                            </Button>
+                        </div>
+                    </div>
+                    
+                    {/* Reset Password button - only show for existing users */}
+                    {userExists && !readOnly && (
+                        <div className="pt-1">
+                            <Button
+                                type="button"
+                                variant="outline"
+                                size="sm"
+                                onClick={handleResetPassword}
+                                className="h-7 text-xs"
+                            >
+                                <Key className="mr-1.5 h-3 w-3" />
+                                Reset Password
+                            </Button>
+                        </div>
+                    )}
+                    
+                    {/* Role Selection Dropdown */}
+                    <div className="space-y-0.5">
+                        <Label className="text-[11px] font-medium block">
+                            Add Role <span className="text-destructive">*</span>
+                        </Label>
+                        <div>
+                            <Popover open={roleDropdownOpen} onOpenChange={setRoleDropdownOpen}>
+                                <PopoverTrigger asChild>
+                                    <Button
+                                        variant="outline"
+                                        role="combobox"
+                                        aria-expanded={roleDropdownOpen}
+                                        className="w-40 max-w-[160px] justify-between h-8 font-normal border-input text-xs px-3"
+                                        disabled={readOnly || !enableLoginAccess}
+                                    >
+                                        <span className="text-muted-foreground text-left">
+                                            Select role
+                                        </span>
+                                        <ChevronsUpDown className="ml-2 h-3.5 w-3.5 shrink-0 opacity-50" />
+                                    </Button>
+                                </PopoverTrigger>
+                                <PopoverContent className="w-[160px] p-0" align="start">
+                                    <Command>
+                                        <CommandInputBorderless placeholder="Search role..." className="h-8 text-xs" />
+                                        <CommandList className="max-h-[200px] overflow-y-auto">
+                                            <CommandEmpty className="text-xs py-2">No roles found.</CommandEmpty>
+                                            <CommandGroup>
+                                                {availableRoles.map((role) => {
+                                                    const isSelected = selectedRoles.includes(role.id);
+                                                    return (
+                                                        <CommandItem
+                                                            key={role.id}
+                                                            value={role.name}
+                                                            onSelect={() => {
+                                                                if (!isSelected) {
+                                                                    handleAddRole(role.id);
+                                                                }
+                                                            }}
+                                                            disabled={isSelected}
+                                                            className={cn(
+                                                                "cursor-pointer text-xs",
+                                                                isSelected && "opacity-50 cursor-not-allowed"
+                                                            )}
+                                                        >
+                                                            <Check
+                                                                className={cn(
+                                                                    "mr-2 h-3.5 w-3.5",
+                                                                    isSelected ? "opacity-100" : "opacity-0"
+                                                                )}
+                                                            />
+                                                            {role.name}
+                                                        </CommandItem>
+                                                    );
+                                                })}
+                                            </CommandGroup>
+                                        </CommandList>
+                                    </Command>
+                                </PopoverContent>
+                            </Popover>
+                        </div>
+                    </div>
+                    
+                    {/* Selected Roles Table - ALWAYS VISIBLE but empty when toggle OFF */}
+                    <div className="space-y-0.5">
+                        <Label className="text-[11px] font-medium">Selected Roles</Label>
+                        <div className="border rounded-md overflow-hidden">
+                            <Table>
+                                <TableHeader>
+                                    <TableRow className="bg-muted/50">
+                                        <TableHead className="w-12 h-8 text-xs py-1.5">Sr No</TableHead>
+                                        <TableHead className="h-8 text-xs py-1.5">Role Name</TableHead>
+                                        <TableHead className="w-16 text-right h-8 text-xs py-1.5">Action</TableHead>
+                                    </TableRow>
+                                </TableHeader>
+                                <TableBody>
+                                    {!enableLoginAccess || selectedRoles.length === 0 ? (
+                                        <TableRow>
+                                            <TableCell colSpan={3} className="text-center py-3 text-xs text-muted-foreground">
+                                                No roles added yet
+                                            </TableCell>
+                                        </TableRow>
+                                    ) : (
+                                        selectedRoles.map((roleId, index) => (
+                                            <TableRow key={roleId} className="h-9">
+                                                <TableCell className="font-medium py-1.5 text-xs">{index + 1}</TableCell>
+                                                <TableCell className="py-1.5 text-xs">{getRoleName(roleId)}</TableCell>
+                                                <TableCell className="text-right py-1.5">
+                                                    <Button
+                                                        type="button"
+                                                        variant="ghost"
+                                                        size="icon"
+                                                        onClick={() => handleDeleteRole(roleId)}
+                                                        disabled={readOnly || !enableLoginAccess}
+                                                        className="h-6 w-6"
+                                                    >
+                                                        <Trash2 className="h-3 w-3 text-destructive" />
+                                                    </Button>
+                                                </TableCell>
+                                            </TableRow>
+                                        ))
+                                    )}
+                                </TableBody>
+                            </Table>
+                        </div>
+                    </div>
+                </div>
+            )}
+            
+            {!enableLoginAccess && (
+                <div className="text-center py-6 text-muted-foreground">
+                    <p className="text-sm">Login access is disabled for this employee.</p>
+                    <p className="text-xs mt-1">Enable the toggle above to configure system access.</p>
+                </div>
+            )}
+        </div>
+    );
 }
 
 function DatePicker({ date, setDate, disabled = false }: { date?: Date, setDate: (d?: Date) => void, disabled?: boolean }) {

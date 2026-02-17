@@ -16,7 +16,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogD
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Command, CommandInput, CommandList, CommandEmpty, CommandGroup, CommandItem, CommandInputBorderless } from "@/components/ui/command";
-import { Plus, Calendar, ChevronDown, ChevronUp, AlertTriangle, CalendarIcon, ChevronLeft, ChevronRight, Search, FileSpreadsheet, ShieldCheck, Eye, Trash2, ChevronsUpDown, Check } from "lucide-react";
+import { Plus, Calendar, ChevronDown, ChevronUp, AlertTriangle, CalendarIcon, ChevronLeft, ChevronRight, Search, FileSpreadsheet, ShieldCheck, Eye, Trash2, ChevronsUpDown, Check, X } from "lucide-react";
 import { format } from "date-fns";
 import { cn } from "@/lib/utils";
 import { useToast } from "@/hooks/use-toast";
@@ -36,88 +36,88 @@ const tabsConfig = [
 // --- Reusable Searchable Combobox Component ---
 
 interface SearchableSelectProps {
-    label: string;
-    value?: string;
-    options: string[];
-    onChange: (val: string) => void;
-    required?: boolean;
-    disabled?: boolean;
+  label: string;
+  value?: string;
+  options: string[];
+  onChange: (val: string) => void;
+  required?: boolean;
+  disabled?: boolean;
 }
 
 function SearchableSelect({
-    label,
-    value,
-    options,
-    onChange,
-    required = false,
-    disabled = false,
+  label,
+  value,
+  options,
+  onChange,
+  required = false,
+  disabled = false,
 }: SearchableSelectProps) {
-    const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState(false);
 
-    return (
-        <div className="space-y-2">
-            <Label>
-                {label} {required && <span className="text-red-500">*</span>}
-            </Label>
-            <Popover open={open} onOpenChange={setOpen}>
-                <PopoverTrigger asChild>
-                    <Button
-                        variant="outline"
-                        role="combobox"
-                        aria-expanded={open}
-                        className="w-full justify-between h-10 font-normal border-input"
-                        disabled={disabled}
-                    >
-                        <span className={cn(!value && "text-muted-foreground")}>
-                            {value || `Select ${label}`}
-                        </span>
-                        <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
-                    </Button>
-                </PopoverTrigger>
-                <PopoverContent className="w-[var(--radix-popover-trigger-width)] p-0" align="start">
-                    <Command>
-                        <CommandInputBorderless placeholder={`Search ${label.toLowerCase()}...`} className="h-9" />
-                        <CommandList className="max-h-[200px] overflow-y-auto">
-                            <CommandEmpty>No results found.</CommandEmpty>
-                            <CommandGroup>
-                                {options.map((item) => (
-                                    <CommandItem
-                                        key={item}
-                                        value={item}
-                                        onSelect={() => {
-                                            onChange(item);
-                                            setOpen(false);
-                                        }}
-                                        className="cursor-pointer"
-                                    >
-                                        <Check
-                                            className={cn(
-                                                "mr-2 h-4 w-4",
-                                                value === item ? "opacity-100" : "opacity-0"
-                                            )}
-                                        />
-                                        {item}
-                                    </CommandItem>
-                                ))}
-                            </CommandGroup>
-                        </CommandList>
-                    </Command>
-                </PopoverContent>
-            </Popover>
-        </div>
-    );
+  return (
+    <div className="space-y-2">
+      <Label>
+        {label} {required && <span className="text-red-500">*</span>}
+      </Label>
+      <Popover open={open} onOpenChange={setOpen}>
+        <PopoverTrigger asChild>
+          <Button
+            variant="outline"
+            role="combobox"
+            aria-expanded={open}
+            className="w-full justify-between h-10 font-normal border-input"
+            disabled={disabled}
+          >
+            <span className={cn(!value && "text-muted-foreground")}>
+              {value || `Select ${label}`}
+            </span>
+            <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
+          </Button>
+        </PopoverTrigger>
+        <PopoverContent className="w-[var(--radix-popover-trigger-width)] p-0" align="start">
+          <Command>
+            <CommandInputBorderless placeholder={`Search ${label.toLowerCase()}...`} className="h-9" />
+            <CommandList className="max-h-[200px] overflow-y-auto">
+              <CommandEmpty>No results found.</CommandEmpty>
+              <CommandGroup>
+                {options.map((item) => (
+                  <CommandItem
+                    key={item}
+                    value={item}
+                    onSelect={() => {
+                      onChange(item);
+                      setOpen(false);
+                    }}
+                    className="cursor-pointer"
+                  >
+                    <Check
+                      className={cn(
+                        "mr-2 h-4 w-4",
+                        value === item ? "opacity-100" : "opacity-0"
+                      )}
+                    />
+                    {item}
+                  </CommandItem>
+                ))}
+              </CommandGroup>
+            </CommandList>
+          </Command>
+        </PopoverContent>
+      </Popover>
+    </div>
+  );
 }
 
 export default function LeaveManagement() {
   const { toast } = useToast();
   const [location, setLocation] = useLocation();
   const [activeTab, setActiveTab] = useState("dashboard");
-  const [expandedGroups, setExpandedGroups] = useState<{[key: string]: boolean}>({});
-  
+  const [expandedGroups, setExpandedGroups] = useState<{ [key: string]: boolean }>({});
+
   // Calendar state
   const [calendarView, setCalendarView] = useState<'week' | 'month' | 'year'>('month');
   const [currentDate, setCurrentDate] = useState(new Date());
-  
+
   // Apply Leave Form State
   const [formData, setFormData] = useState({
     leaveType: "",
@@ -128,20 +128,21 @@ export default function LeaveManagement() {
     halfDaySession: "",
     attachment: null as File | null
   });
-  
-  const [formErrors, setFormErrors] = useState<{[key: string]: string}>({});
+
+  const [formErrors, setFormErrors] = useState<{ [key: string]: string }>({});
   const [isApplyModalOpen, setIsApplyModalOpen] = useState(false);
   const [isViewModalOpen, setIsViewModalOpen] = useState(false);
   const [selectedApplication, setSelectedApplication] = useState<any>(null);
-  
+
   // Delete confirmation dialog state
   const [isDeleteOpen, setIsDeleteOpen] = useState(false);
   const [appToDelete, setAppToDelete] = useState<LeaveApplication | null>(null);
-  
+
   // Management Tab State
   const [searchQuery, setSearchQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState("All");
   const [leaveTypeFilter, setLeaveTypeFilter] = useState("All");
+  const [dateFilter, setDateFilter] = useState<Date | undefined>(undefined);
   const [isManageModalOpen, setIsManageModalOpen] = useState(false);
   const [managedApplication, setManagedApplication] = useState<any>(null);
   const [refusalReason, setRefusalReason] = useState("");
@@ -156,7 +157,7 @@ export default function LeaveManagement() {
   const [managementCurrentPage, setManagementCurrentPage] = useState(1);
   const [applyCurrentPage, setApplyCurrentPage] = useState(1);
   const itemsPerPage = 10;
-  
+
   // Define the leave application type
   type LeaveApplication = {
     id: string;
@@ -213,11 +214,11 @@ export default function LeaveManagement() {
       lastUpdatedOn: new Date().toISOString()
     }
   ]);
-  
+
   // Configuration
   const attachmentRequiredFor = ['Sick'];
   const leaveTypeOptions = ['Paid', 'Sick', 'Casual'];
-  
+
   // Set initial tab based on URL
   useEffect(() => {
     if (location === '/hrms/leave-management/apply' || location === '/leave-management/apply') {
@@ -235,7 +236,7 @@ export default function LeaveManagement() {
       setActiveTab('dashboard');
     }
   }, [location, setLocation]);
-  
+
   // Handle tab changes with URL routing
   const handleTabChange = (value: string) => {
     setActiveTab(value);
@@ -249,14 +250,14 @@ export default function LeaveManagement() {
   // Calculate duration live
   const calculateDuration = (): string => {
     if (!formData.fromDate || !formData.toDate) return "0";
-    
+
     const from = new Date(formData.fromDate);
     const to = new Date(formData.toDate);
-    
+
     if (formData.halfDay) {
       return "0.5";
     }
-    
+
     const diffTime = Math.abs(to.getTime() - from.getTime());
     const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24)) + 1; // Inclusive count
     return diffDays.toString();
@@ -265,13 +266,13 @@ export default function LeaveManagement() {
   // Get all dates that are blocked due to existing leave applications
   const getBlockedDates = (): Date[] => {
     const blockedDates: Date[] = [];
-    
+
     leaveApplications.forEach(app => {
       // Only block dates for Pending and Approved applications
       if (app.status === 'Pending' || app.status === 'Approved') {
         const fromDate = new Date(app.fromDate);
         const toDate = new Date(app.toDate);
-        
+
         // Add all dates in the range
         const currentDate = new Date(fromDate);
         while (currentDate <= toDate) {
@@ -280,41 +281,41 @@ export default function LeaveManagement() {
         }
       }
     });
-    
+
     return blockedDates;
   };
 
   // Form validation - simplified since calendar prevents most invalid states
   const validateForm = (): boolean => {
-    const errors: {[key: string]: string} = {};
-    
+    const errors: { [key: string]: string } = {};
+
     // Required field validation
     if (!formData.leaveType) errors.leaveType = "Leave Type is required";
     if (!formData.fromDate) errors.fromDate = "From Date is required";
     if (!formData.toDate) errors.toDate = "To Date is required";
     if (!formData.reason.trim()) errors.reason = "Reason is required";
-    
+
     // Half day validation
     if (formData.halfDay && !formData.halfDaySession) {
       errors.halfDaySession = "Half Day Session is required when Half Day is enabled";
     }
-    
+
     // Attachment validation
     if (attachmentRequiredFor.includes(formData.leaveType) && !formData.attachment) {
       errors.attachment = "Attachment is required for this leave type";
     }
-    
+
     // Only validate dates if they somehow became invalid (shouldn't happen with calendar restrictions)
     if (formData.fromDate && formData.toDate) {
       const today = new Date();
       today.setHours(0, 0, 0, 0);
-      
+
       const fromDate = new Date(formData.fromDate);
       fromDate.setHours(0, 0, 0, 0);
-      
+
       const toDate = new Date(formData.toDate);
       toDate.setHours(0, 0, 0, 0);
-      
+
       // These should rarely trigger due to calendar restrictions
       if (fromDate < today) {
         errors.fromDate = "From Date cannot be in the past";
@@ -326,7 +327,7 @@ export default function LeaveManagement() {
         errors.toDate = "To Date must be greater than or equal to From Date";
       }
     }
-    
+
     setFormErrors(errors);
     return Object.keys(errors).length === 0;
   };
@@ -338,7 +339,7 @@ export default function LeaveManagement() {
         ...prev,
         [field]: value
       };
-      
+
       // Smart date handling
       if (field === 'fromDate' && value) {
         // If user changes fromDate and toDate is earlier than new fromDate, reset toDate to fromDate
@@ -346,10 +347,10 @@ export default function LeaveManagement() {
           newData.toDate = value;
         }
       }
-      
+
       return newData;
     });
-    
+
     // Clear specific field error when user starts typing
     if (formErrors[field]) {
       setFormErrors(prev => {
@@ -378,7 +379,7 @@ export default function LeaveManagement() {
       attachment: null
     });
     setFormErrors({});
-    
+
     // Clear file input
     const fileInput = document.querySelector('input[type="file"]') as HTMLInputElement;
     if (fileInput) fileInput.value = '';
@@ -394,11 +395,11 @@ export default function LeaveManagement() {
   // Handle submit
   const handleSubmit = () => {
     const isValid = validateForm();
-    
+
     if (!isValid) {
       return; // Just return without showing error summary
     }
-    
+
     // Create new leave application
     const newApplication = {
       id: `app_${Date.now()}`,
@@ -408,10 +409,10 @@ export default function LeaveManagement() {
       department: "—",
       manager: "—",
       leaveType: formData.leaveType,
-      fromDate: formData.halfDay 
+      fromDate: formData.halfDay
         ? (formData.fromDate ? format(formData.fromDate, 'yyyy-MM-dd') : '')
         : (formData.fromDate ? format(formData.fromDate, 'yyyy-MM-dd') : ''),
-      toDate: formData.halfDay 
+      toDate: formData.halfDay
         ? (formData.fromDate ? format(formData.fromDate, 'yyyy-MM-dd') : '')
         : (formData.toDate ? format(formData.toDate, 'yyyy-MM-dd') : ''),
       duration: calculateDuration(),
@@ -428,17 +429,17 @@ export default function LeaveManagement() {
       refusalReason: null as string | null,
       lastUpdatedOn: new Date().toISOString()
     };
-    
+
     // Add to applications list
     setLeaveApplications(prev => [newApplication, ...prev]);
-    
+
     // Show success toast message
     toast({
       title: "Leave Applied Successfully",
       description: "Your leave request has been submitted successfully.",
       className: "bg-green-50 border-green-200 text-green-900"
     });
-    
+
     // Reset and close modal
     resetForm();
     setIsApplyModalOpen(false);
@@ -463,7 +464,7 @@ export default function LeaveManagement() {
       setIsViewModalOpen(false);
       setIsDeleteOpen(false);
       setAppToDelete(null);
-      
+
       toast({
         title: "Leave Application Deleted",
         description: "Your leave application has been deleted successfully.",
@@ -496,15 +497,15 @@ export default function LeaveManagement() {
     if (!managedApplication) return;
 
     const now = new Date().toISOString();
-    setLeaveApplications(prev => 
-      prev.map(app => 
-        app.id === managedApplication.id 
-          ? { 
-              ...app, 
-              status: "Approved",
-              approvedOn: now,
-              lastUpdatedOn: now
-            }
+    setLeaveApplications(prev =>
+      prev.map(app =>
+        app.id === managedApplication.id
+          ? {
+            ...app,
+            status: "Approved",
+            approvedOn: now,
+            lastUpdatedOn: now
+          }
           : app
       )
     );
@@ -536,16 +537,16 @@ export default function LeaveManagement() {
     if (!managedApplication) return;
 
     const now = new Date().toISOString();
-    setLeaveApplications(prev => 
-      prev.map(app => 
-        app.id === managedApplication.id 
-          ? { 
-              ...app, 
-              status: "Refused",
-              refusedOn: now,
-              refusalReason: refusalReason.trim(),
-              lastUpdatedOn: now
-            }
+    setLeaveApplications(prev =>
+      prev.map(app =>
+        app.id === managedApplication.id
+          ? {
+            ...app,
+            status: "Refused",
+            refusedOn: now,
+            refusalReason: refusalReason.trim(),
+            lastUpdatedOn: now
+          }
           : app
       )
     );
@@ -584,17 +585,17 @@ export default function LeaveManagement() {
     if (!managedApplication) return;
 
     const now = new Date().toISOString();
-    setLeaveApplications(prev => 
-      prev.map(app => 
-        app.id === managedApplication.id 
-          ? { 
-              ...app, 
-              status: managementFormData.status,
-              remarks: managementFormData.remarks || app.remarks,
-              lastUpdatedOn: now,
-              ...(managementFormData.status === "Approved" && { approvedOn: now }),
-              ...(managementFormData.status === "Refused" && { refusedOn: now })
-            }
+    setLeaveApplications(prev =>
+      prev.map(app =>
+        app.id === managedApplication.id
+          ? {
+            ...app,
+            status: managementFormData.status,
+            remarks: managementFormData.remarks || app.remarks,
+            lastUpdatedOn: now,
+            ...(managementFormData.status === "Approved" && { approvedOn: now }),
+            ...(managementFormData.status === "Refused" && { refusedOn: now })
+          }
           : app
       )
     );
@@ -613,7 +614,7 @@ export default function LeaveManagement() {
   // Filter applications based on search query and filters
   const filteredApplications = leaveApplications.filter(app => {
     // Enhanced search filter - searches across multiple fields
-    const searchMatch = searchQuery === "" || 
+    const searchMatch = searchQuery === "" ||
       // Request ID search
       app.requestId.toLowerCase().includes(searchQuery.toLowerCase()) ||
       // Employee name search
@@ -631,13 +632,27 @@ export default function LeaveManagement() {
       // Reason search
       (app.reason && app.reason.toLowerCase().includes(searchQuery.toLowerCase()));
 
+    // Date filter
+    const dateMatch = !dateFilter || (() => {
+      const filterDate = new Date(dateFilter);
+      filterDate.setHours(0, 0, 0, 0);
+
+      const fromDate = new Date(app.fromDate);
+      fromDate.setHours(0, 0, 0, 0);
+
+      const toDate = new Date(app.toDate);
+      toDate.setHours(0, 0, 0, 0);
+
+      return filterDate >= fromDate && filterDate <= toDate;
+    })();
+
     // Status filter
     const statusMatch = statusFilter === "All" || app.status === statusFilter;
 
     // Leave type filter
     const leaveTypeMatch = leaveTypeFilter === "All" || app.leaveType === leaveTypeFilter;
 
-    return searchMatch && statusMatch && leaveTypeMatch;
+    return searchMatch && statusMatch && leaveTypeMatch && dateMatch;
   });
 
   // Pagination for Management tab
@@ -655,7 +670,7 @@ export default function LeaveManagement() {
   // Reset pagination when filters change
   useEffect(() => {
     setManagementCurrentPage(1);
-  }, [searchQuery, statusFilter, leaveTypeFilter]);
+  }, [searchQuery, statusFilter, leaveTypeFilter, dateFilter]);
 
   // Reset pagination when apply list changes
   useEffect(() => {
@@ -667,7 +682,7 @@ export default function LeaveManagement() {
     switch (status.toLowerCase()) {
       case 'approved': return 'bg-green-100 text-green-700 hover:bg-green-100';
       case 'pending': return 'bg-blue-100 text-blue-700 hover:bg-blue-100';
-      case 'refused': 
+      case 'refused':
       case 'rejected': return 'bg-red-100 text-red-700 hover:bg-red-100';
       case 'cancelled': return 'bg-orange-100 text-orange-700 hover:bg-orange-100';
       case 'draft': return 'bg-gray-100 text-gray-700 hover:bg-gray-100';
@@ -703,43 +718,43 @@ export default function LeaveManagement() {
       formData.toDate &&
       formData.reason.trim()
     );
-    
+
     // Check half day session if half day is enabled
     const hasHalfDaySession = !formData.halfDay || Boolean(formData.halfDaySession);
-    
+
     // Check attachment if required
     const hasRequiredAttachment = !attachmentRequiredFor.includes(formData.leaveType) || Boolean(formData.attachment);
-    
+
     // Check if no validation errors exist
     const noValidationErrors = Object.keys(formErrors).length === 0;
-    
+
     // Check dates are not in the past
     const today = new Date();
     today.setHours(0, 0, 0, 0);
-    
+
     let validDates = true;
     if (formData.fromDate) {
       const fromDate = new Date(formData.fromDate);
       fromDate.setHours(0, 0, 0, 0);
       if (fromDate < today) validDates = false;
     }
-    
+
     if (formData.toDate) {
       const toDate = new Date(formData.toDate);
       toDate.setHours(0, 0, 0, 0);
       if (toDate < today) validDates = false;
     }
-    
+
     return hasRequiredFields && hasHalfDaySession && hasRequiredAttachment && noValidationErrors && validDates;
   };
-  
+
   // Check if submit should be disabled
   const isSubmitDisabled = !isFormValidForSubmit() || showAttachmentWarning;
 
   // Calendar navigation function
   const navigateCalendar = (direction: number) => {
     const newDate = new Date(currentDate);
-    
+
     if (calendarView === 'month') {
       newDate.setMonth(newDate.getMonth() + direction);
     } else if (calendarView === 'week') {
@@ -747,7 +762,7 @@ export default function LeaveManagement() {
     } else if (calendarView === 'year') {
       newDate.setFullYear(newDate.getFullYear() + direction);
     }
-    
+
     setCurrentDate(newDate);
   };
 
@@ -762,13 +777,13 @@ export default function LeaveManagement() {
   // Get leave data for a specific date - using only actual leave applications
   const getLeaveForDate = (date: Date) => {
     const dateStr = format(date, 'yyyy-MM-dd');
-    
+
     // Get actual leave applications for this date
     const actualLeaves = leaveApplications.filter(app => {
       const fromDate = new Date(app.fromDate);
       const toDate = new Date(app.toDate);
       const checkDate = new Date(dateStr);
-      
+
       // Check if the date falls within the leave period
       return checkDate >= fromDate && checkDate <= toDate;
     }).map(app => ({
@@ -777,7 +792,7 @@ export default function LeaveManagement() {
       title: `${app.leaveType} Leave`,
       status: app.status.toLowerCase()
     }));
-    
+
     return actualLeaves;
   };
 
@@ -787,7 +802,7 @@ export default function LeaveManagement() {
     switch (status) {
       case 'approved': return 'bg-green-100 text-green-700';
       case 'pending': return 'bg-yellow-100 text-yellow-700';
-      case 'rejected': 
+      case 'rejected':
       case 'refused': return 'bg-red-100 text-red-700';
       default: return 'bg-gray-100 text-gray-700';
     }
@@ -804,7 +819,7 @@ export default function LeaveManagement() {
 
     const days = [];
     const today = new Date();
-    
+
     // Previous month's trailing days
     const prevMonth = new Date(year, month - 1, 0);
     for (let i = startingDayOfWeek - 1; i >= 0; i--) {
@@ -873,7 +888,7 @@ export default function LeaveManagement() {
               )}>
                 {day.date.getDate()}
               </div>
-              
+
               {/* Leave items */}
               <div className="space-y-1">
                 {day.leaves.slice(0, 3).map((leave, leaveIndex) => (
@@ -903,7 +918,7 @@ export default function LeaveManagement() {
   const renderWeekView = () => {
     const weekStart = getWeekStart(currentDate);
     const weekDays = [];
-    
+
     for (let i = 0; i < 7; i++) {
       const day = new Date(weekStart);
       day.setDate(weekStart.getDate() + i);
@@ -943,7 +958,7 @@ export default function LeaveManagement() {
           {weekDays.map((day, index) => {
             const leaves = getLeaveForDate(day);
             const isToday = day.toDateString() === today.toDateString();
-            
+
             return (
               <div
                 key={index}
@@ -976,7 +991,7 @@ export default function LeaveManagement() {
   const renderYearView = () => {
     const year = currentDate.getFullYear();
     const months = [];
-    
+
     for (let month = 0; month < 12; month++) {
       months.push(new Date(year, month, 1));
     }
@@ -992,11 +1007,11 @@ export default function LeaveManagement() {
               const fromDate = new Date(app.fromDate);
               const toDate = new Date(app.toDate);
               return (fromDate.getFullYear() === year && fromDate.getMonth() === month.getMonth()) ||
-                     (toDate.getFullYear() === year && toDate.getMonth() === month.getMonth());
+                (toDate.getFullYear() === year && toDate.getMonth() === month.getMonth());
             }).map(app => ({
               status: app.status.toLowerCase()
             }));
-            
+
             const allMonthLeaves = actualMonthLeaves;
 
             return (
@@ -1028,18 +1043,18 @@ export default function LeaveManagement() {
 
   // Group leave requests by month
   const groupLeaveRequestsByMonth = (requests: LeaveApplication[]) => {
-    const groups: {[key: string]: LeaveApplication[]} = {};
-    
+    const groups: { [key: string]: LeaveApplication[] } = {};
+
     requests.forEach(request => {
       const date = new Date(request.fromDate);
       const monthYear = date.toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
-      
+
       if (!groups[monthYear]) {
         groups[monthYear] = [];
       }
       groups[monthYear].push(request);
     });
-    
+
     return groups;
   };
 
@@ -1071,10 +1086,10 @@ export default function LeaveManagement() {
 
   const formatDate = (dateString: string) => {
     const date = new Date(dateString);
-    return date.toLocaleDateString('en-GB', { 
-      day: '2-digit', 
-      month: 'short', 
-      year: 'numeric' 
+    return date.toLocaleDateString('en-GB', {
+      day: '2-digit',
+      month: 'short',
+      year: 'numeric'
     });
   };
 
@@ -1220,7 +1235,7 @@ export default function LeaveManagement() {
           <div className="space-y-6">
             {/* Apply Leave Button */}
             <div className="flex justify-end">
-              <Button 
+              <Button
                 onClick={() => setIsApplyModalOpen(true)}
                 className="bg-blue-600 hover:bg-blue-700"
               >
@@ -1305,7 +1320,7 @@ export default function LeaveManagement() {
                     >
                       <ChevronLeft className="h-4 w-4" />
                     </Button>
-                    
+
                     <Button
                       variant="outline"
                       size="sm"
@@ -1377,8 +1392,8 @@ export default function LeaveManagement() {
                     // Single Date Picker for Half Day
                     <div className="space-y-2 md:col-span-2">
                       <Label htmlFor="leaveDate">Leave Date <span className="text-red-500">*</span></Label>
-                      <DatePicker 
-                        date={formData.fromDate} 
+                      <DatePicker
+                        date={formData.fromDate}
                         setDate={(date) => {
                           handleInputChange('fromDate', date);
                           handleInputChange('toDate', date); // Set same date for both
@@ -1395,8 +1410,8 @@ export default function LeaveManagement() {
                     <>
                       <div className="space-y-2">
                         <Label htmlFor="fromDate">From Date <span className="text-red-500">*</span></Label>
-                        <DatePicker 
-                          date={formData.fromDate} 
+                        <DatePicker
+                          date={formData.fromDate}
                           setDate={(date) => handleInputChange('fromDate', date)}
                           minDate={new Date()} // Block past dates
                           blockedDates={getBlockedDates()} // Block existing leave dates
@@ -1408,8 +1423,8 @@ export default function LeaveManagement() {
 
                       <div className="space-y-2">
                         <Label htmlFor="toDate">To Date <span className="text-red-500">*</span></Label>
-                        <DatePicker 
-                          date={formData.toDate} 
+                        <DatePicker
+                          date={formData.toDate}
                           setDate={(date) => handleInputChange('toDate', date)}
                           minDate={formData.fromDate || new Date()} // Block dates before fromDate or today
                           blockedDates={getBlockedDates()} // Block existing leave dates
@@ -1518,13 +1533,13 @@ export default function LeaveManagement() {
                 <Button variant="outline" onClick={handleModalCancel}>
                   Cancel
                 </Button>
-                <Button 
+                <Button
                   onClick={handleSubmit}
                   disabled={isSubmitDisabled}
                   className={cn(
                     "transition-colors",
-                    isSubmitDisabled 
-                      ? "bg-gray-300 text-gray-500 cursor-not-allowed hover:bg-gray-300" 
+                    isSubmitDisabled
+                      ? "bg-gray-300 text-gray-500 cursor-not-allowed hover:bg-gray-300"
                       : "bg-blue-600 hover:bg-blue-700 text-white"
                   )}
                 >
@@ -1656,8 +1671,8 @@ export default function LeaveManagement() {
                       <Label>Attachment</Label>
                       <div className="flex items-center gap-2">
                         <Input value={selectedApplication.attachment.name} disabled className="bg-muted flex-1" />
-                        <Button 
-                          variant="outline" 
+                        <Button
+                          variant="outline"
                           size="sm"
                           onClick={() => {
                             try {
@@ -1688,8 +1703,8 @@ export default function LeaveManagement() {
                 <div className="flex justify-between w-full">
                   {/* Delete button - only show for Pending status */}
                   {selectedApplication && selectedApplication.status === 'Pending' ? (
-                    <Button 
-                      variant="destructive" 
+                    <Button
+                      variant="destructive"
                       onClick={() => handleDeleteLeave(selectedApplication)}
                       className="flex items-center gap-2"
                     >
@@ -1699,7 +1714,7 @@ export default function LeaveManagement() {
                   ) : (
                     <div></div> // Empty div to maintain spacing
                   )}
-                  
+
                   <Button variant="outline" onClick={() => setIsViewModalOpen(false)}>
                     Close
                   </Button>
@@ -1714,7 +1729,7 @@ export default function LeaveManagement() {
             {/* Filters Bar */}
             <Card>
               <CardContent className="p-4">
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
                   {/* Status Filter */}
                   <SearchableSelect
                     label="Status"
@@ -1730,6 +1745,30 @@ export default function LeaveManagement() {
                     options={["All", "Paid", "Sick", "Casual", "Annual", "Unpaid", "Maternity", "Paternity"]}
                     onChange={setLeaveTypeFilter}
                   />
+
+                  {/* Date Filter */}
+                  <div className="space-y-2">
+                    <Label>Date</Label>
+                    <div className="flex gap-2">
+                      <div className="flex-1">
+                        <DatePicker
+                          date={dateFilter}
+                          setDate={setDateFilter}
+                        />
+                      </div>
+                      {dateFilter && (
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          onClick={() => setDateFilter(undefined)}
+                          className="h-10 w-10 shrink-0"
+                          title="Clear date filter"
+                        >
+                          <X className="h-4 w-4" />
+                        </Button>
+                      )}
+                    </div>
+                  </div>
 
                   {/* Search Filter */}
                   <div className="space-y-2">
@@ -1766,13 +1805,13 @@ export default function LeaveManagement() {
                     <div className="text-center py-12 text-muted-foreground">
                       <Calendar className="mx-auto h-12 w-12 mb-4 opacity-50" />
                       <p className="text-lg font-medium mb-2">
-                        {searchQuery || statusFilter !== "All" || leaveTypeFilter !== "All"
-                          ? "No matching applications found" 
+                        {searchQuery || statusFilter !== "All" || leaveTypeFilter !== "All" || dateFilter
+                          ? "No matching applications found"
                           : "No leave applications found"}
                       </p>
                       <p className="text-sm">
-                        {searchQuery || statusFilter !== "All" || leaveTypeFilter !== "All"
-                          ? "Try adjusting your search criteria or filters" 
+                        {searchQuery || statusFilter !== "All" || leaveTypeFilter !== "All" || dateFilter
+                          ? "Try adjusting your search criteria or filters"
                           : "Leave applications will appear here for management"}
                       </p>
                     </div>
@@ -1814,7 +1853,7 @@ export default function LeaveManagement() {
                         </div>
                         <div className="col-span-1 text-sm">
                           {application.attachment ? (
-                            <button 
+                            <button
                               className="flex items-center gap-1 text-blue-600 hover:text-blue-800 hover:underline cursor-pointer"
                               onClick={() => {
                                 try {
@@ -1869,7 +1908,7 @@ export default function LeaveManagement() {
                     >
                       <ChevronLeft className="h-4 w-4" />
                     </Button>
-                    
+
                     <Button
                       variant="outline"
                       size="sm"
@@ -1982,9 +2021,9 @@ export default function LeaveManagement() {
                   <div className="space-y-2">
                     <Label>Attachment</Label>
                     {managedApplication.attachment ? (
-                      <Button 
-                        variant="outline" 
-                        size="sm" 
+                      <Button
+                        variant="outline"
+                        size="sm"
                         className="w-fit"
                         onClick={() => {
                           try {
@@ -2048,13 +2087,13 @@ export default function LeaveManagement() {
                 <Button variant="outline" onClick={() => setIsManageModalOpen(false)}>
                   Cancel
                 </Button>
-                <Button 
+                <Button
                   onClick={handleManagementSubmit}
                   disabled={!managementFormData.status}
                   className={cn(
                     "transition-colors",
-                    !managementFormData.status 
-                      ? "bg-gray-300 text-gray-500 cursor-not-allowed hover:bg-gray-300" 
+                    !managementFormData.status
+                      ? "bg-gray-300 text-gray-500 cursor-not-allowed hover:bg-gray-300"
                       : "bg-blue-600 hover:bg-blue-700 text-white"
                   )}
                 >
@@ -2076,7 +2115,7 @@ export default function LeaveManagement() {
                   <span className="text-sm text-gray-600">My Leaves</span>
                 </div>
               </div>
-              
+
               {/* View Toggle and Apply Leave Button */}
               <div className="flex items-center gap-4">
                 <div className="flex bg-muted rounded-lg p-1">
@@ -2120,16 +2159,16 @@ export default function LeaveManagement() {
               >
                 <ChevronLeft className="h-4 w-4" />
               </Button>
-              
+
               <h3 className="text-lg font-semibold">
-                {calendarView === 'year' 
+                {calendarView === 'year'
                   ? currentDate.getFullYear()
                   : calendarView === 'month'
-                  ? format(currentDate, 'MMMM yyyy')
-                  : `Week of ${format(getWeekStart(currentDate), 'MMM dd, yyyy')}`
+                    ? format(currentDate, 'MMMM yyyy')
+                    : `Week of ${format(getWeekStart(currentDate), 'MMM dd, yyyy')}`
                 }
               </h3>
-              
+
               <Button
                 variant="outline"
                 size="icon"
@@ -2192,335 +2231,345 @@ export default function LeaveManagement() {
   );
 }
 
-// DatePicker Component with minDate and blocked dates support
-function DatePicker({ date, setDate, disabled = false, minDate, blockedDates }: { 
-  date?: Date, 
-  setDate: (d?: Date) => void, 
-  disabled?: boolean, 
+function DatePicker({ date, setDate, disabled = false, minDate, blockedDates }: {
+  date?: Date,
+  setDate: (d?: Date) => void,
+  disabled?: boolean,
   minDate?: Date,
   blockedDates?: Date[]
 }) {
-    const [isOpen, setIsOpen] = useState(false);
-    const [viewMode, setViewMode] = useState<"day" | "month" | "year">("day");
-    const [visibleDate, setVisibleDate] = useState(() => date || new Date());
+  const [isOpen, setIsOpen] = useState(false);
+  const [viewMode, setViewMode] = useState<"day" | "month" | "year">("day");
+  const [visibleDate, setVisibleDate] = useState(() => date || new Date());
 
-    const monthNames = [
-        "January", "February", "March", "April", "May", "June",
-        "July", "August", "September", "October", "November", "December"
-    ];
+  const monthNames = [
+    "January", "February", "March", "April", "May", "June",
+    "July", "August", "September", "October", "November", "December"
+  ];
 
-    const monthNamesShort = [
-        "Jan", "Feb", "Mar", "Apr", "May", "Jun",
-        "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"
-    ];
+  const monthNamesShort = [
+    "Jan", "Feb", "Mar", "Apr", "May", "Jun",
+    "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"
+  ];
 
-    const formatDisplayDate = (date: Date | undefined) => {
-        if (!date) return "Pick a date";
-        try {
-            return format(date, "dd/MM/yyyy");
-        } catch (error) {
-            return "Pick a date";
-        }
-    };
+  const formatDisplayDate = (date: Date | undefined) => {
+    if (!date) return "Pick a date";
+    try {
+      return format(date, "dd/MM/yyyy");
+    } catch (error) {
+      return "Pick a date";
+    }
+  };
 
-    const handleDateSelect = (selectedDate: Date) => {
-        // Use minDate if provided, otherwise use today
-        const minimumDate = minDate || new Date();
-        minimumDate.setHours(0, 0, 0, 0);
-        const selected = new Date(selectedDate);
-        selected.setHours(0, 0, 0, 0);
-        
-        // Check if date is blocked
-        const isBlocked = blockedDates?.some(blockedDate => {
-            const blocked = new Date(blockedDate);
-            blocked.setHours(0, 0, 0, 0);
-            return blocked.getTime() === selected.getTime();
-        });
-        
-        // Only allow dates >= minimumDate and not blocked
-        if (selected >= minimumDate && !isBlocked) {
-            setDate(selectedDate);
-            setIsOpen(false);
-            setViewMode("day");
-        }
-    };
+  const handleDateSelect = (selectedDate: Date) => {
+    // Use minDate if provided, BUT DON'T default to today if not provided
+    // This allows selecting past dates when minDate is undefined
+    const selected = new Date(selectedDate);
+    selected.setHours(0, 0, 0, 0);
 
-    const handleMonthSelect = (monthIndex: number) => {
-        const newDate = new Date(visibleDate.getFullYear(), monthIndex, 1);
-        setVisibleDate(newDate);
-        setViewMode("day");
-    };
+    let isBeforeMinDate = false;
+    if (minDate) {
+      const minimumDate = new Date(minDate);
+      minimumDate.setHours(0, 0, 0, 0);
+      isBeforeMinDate = selected < minimumDate;
+    }
 
-    const handleYearSelect = (year: number) => {
-        const newDate = new Date(year, visibleDate.getMonth(), 1);
-        setVisibleDate(newDate);
-        setViewMode("month");
-    };
+    // Check if date is blocked
+    const isBlocked = blockedDates?.some(blockedDate => {
+      const blocked = new Date(blockedDate);
+      blocked.setHours(0, 0, 0, 0);
+      return blocked.getTime() === selected.getTime();
+    });
 
-    const navigateMonth = (direction: number) => {
-        const newDate = new Date(visibleDate.getFullYear(), visibleDate.getMonth() + direction, 1);
-        setVisibleDate(newDate);
-    };
+    // Only allow dates >= minimumDate (if set) and not blocked
+    if (!isBeforeMinDate && !isBlocked) {
+      setDate(selectedDate);
+      setIsOpen(false);
+      setViewMode("day");
+    }
+  };
 
-    const getDaysInMonth = (date: Date) => {
-        const year = date.getFullYear();
-        const month = date.getMonth();
-        const firstDay = new Date(year, month, 1);
-        const lastDay = new Date(year, month + 1, 0);
-        const daysInMonth = lastDay.getDate();
-        const startingDayOfWeek = firstDay.getDay();
+  const handleMonthSelect = (monthIndex: number) => {
+    const newDate = new Date(visibleDate.getFullYear(), monthIndex, 1);
+    setVisibleDate(newDate);
+    setViewMode("day");
+  };
 
-        const days = [];
-        const minimumDate = minDate || new Date();
-        minimumDate.setHours(0, 0, 0, 0);
-        
-        // Previous month's trailing days
-        const prevMonth = new Date(year, month - 1, 0);
-        for (let i = startingDayOfWeek - 1; i >= 0; i--) {
-            const dayDate = new Date(year, month - 1, prevMonth.getDate() - i);
-            dayDate.setHours(0, 0, 0, 0);
-            days.push({
-                date: dayDate,
-                isCurrentMonth: false,
-                isToday: false,
-                isSelected: false,
-                isPast: dayDate < minimumDate
-            });
-        }
+  const handleYearSelect = (year: number) => {
+    const newDate = new Date(year, visibleDate.getMonth(), 1);
+    setVisibleDate(newDate);
+    setViewMode("month");
+  };
 
-        // Current month days
-        for (let day = 1; day <= daysInMonth; day++) {
-            const currentDate = new Date(year, month, day);
-            currentDate.setHours(0, 0, 0, 0);
-            const isToday = currentDate.getTime() === minimumDate.getTime();
-            const isSelected = date && currentDate.toDateString() === date.toDateString();
-            const isPast = currentDate < minimumDate;
-            
-            // Check if date is blocked
-            const isBlocked = blockedDates?.some(blockedDate => {
-                const blocked = new Date(blockedDate);
-                blocked.setHours(0, 0, 0, 0);
-                return blocked.getTime() === currentDate.getTime();
-            });
+  const navigateMonth = (direction: number) => {
+    const newDate = new Date(visibleDate.getFullYear(), visibleDate.getMonth() + direction, 1);
+    setVisibleDate(newDate);
+  };
 
-            days.push({
-                date: currentDate,
-                isCurrentMonth: true,
-                isToday,
-                isSelected,
-                isPast: isPast || isBlocked // Treat blocked dates as past dates for styling
-            });
-        }
+  const getDaysInMonth = (date: Date) => {
+    const year = date.getFullYear();
+    const month = date.getMonth();
+    const firstDay = new Date(year, month, 1);
+    const lastDay = new Date(year, month + 1, 0);
+    const daysInMonth = lastDay.getDate();
+    const startingDayOfWeek = firstDay.getDay();
 
-        // Next month's leading days
-        const remainingDays = 42 - days.length;
-        for (let day = 1; day <= remainingDays; day++) {
-            const dayDate = new Date(year, month + 1, day);
-            dayDate.setHours(0, 0, 0, 0);
-            days.push({
-                date: dayDate,
-                isCurrentMonth: false,
-                isToday: false,
-                isSelected: false,
-                isPast: dayDate < minimumDate
-            });
-        }
+    const days = [];
 
-        return days;
-    };
+    // Use minDate if provided, BUT DON'T default to today if not provided
+    let minimumDate: Date | null = null;
+    if (minDate) {
+      minimumDate = new Date(minDate);
+      minimumDate.setHours(0, 0, 0, 0);
+    }
 
-    const renderDayView = () => {
-        const days = getDaysInMonth(visibleDate);
-        const weekDays = ["Su", "Mo", "Tu", "We", "Th", "Fr", "Sa"];
+    // Previous month's trailing days
+    const prevMonth = new Date(year, month - 1, 0);
+    for (let i = startingDayOfWeek - 1; i >= 0; i--) {
+      const dayDate = new Date(year, month - 1, prevMonth.getDate() - i);
+      dayDate.setHours(0, 0, 0, 0);
+      days.push({
+        date: dayDate,
+        isCurrentMonth: false,
+        isToday: false,
+        isSelected: false,
+        isPast: minimumDate ? dayDate < minimumDate : false
+      });
+    }
 
-        return (
-            <div className="w-80">
-                <div className="flex items-center justify-between mb-4">
-                    <Button
-                        variant="ghost"
-                        size="icon"
-                        className="h-8 w-8"
-                        onClick={() => navigateMonth(-1)}
-                    >
-                        <ChevronLeft className="h-4 w-4" />
-                    </Button>
-                    
-                    <div className="flex items-center gap-2">
-                        <Button
-                            variant="ghost"
-                            className="font-semibold text-sm"
-                            onClick={() => setViewMode("month")}
-                        >
-                            {monthNames[visibleDate.getMonth()]}
-                            <ChevronDown className="ml-1 h-3 w-3" />
-                        </Button>
-                        <Button
-                            variant="ghost"
-                            className="font-semibold text-sm"
-                            onClick={() => setViewMode("year")}
-                        >
-                            {visibleDate.getFullYear()}
-                            <ChevronDown className="ml-1 h-3 w-3" />
-                        </Button>
-                    </div>
+    // Current month days
+    for (let day = 1; day <= daysInMonth; day++) {
+      const currentDate = new Date(year, month, day);
+      currentDate.setHours(0, 0, 0, 0);
+      const isToday = new Date().toDateString() === currentDate.toDateString();
+      const isSelected = date && currentDate.toDateString() === date.toDateString();
+      const isPast = minimumDate ? currentDate < minimumDate : false;
 
-                    <Button
-                        variant="ghost"
-                        size="icon"
-                        className="h-8 w-8"
-                        onClick={() => navigateMonth(1)}
-                    >
-                        <ChevronRight className="h-4 w-4" />
-                    </Button>
-                </div>
+      // Check if date is blocked
+      const isBlocked = blockedDates?.some(blockedDate => {
+        const blocked = new Date(blockedDate);
+        blocked.setHours(0, 0, 0, 0);
+        return blocked.getTime() === currentDate.getTime();
+      });
 
-                <div className="grid grid-cols-7 gap-1 mb-2">
-                    {weekDays.map((day) => (
-                        <div key={day} className="h-8 flex items-center justify-center text-xs font-medium text-muted-foreground">
-                            {day}
-                        </div>
-                    ))}
-                </div>
+      days.push({
+        date: currentDate,
+        isCurrentMonth: true,
+        isToday,
+        isSelected,
+        isPast: isPast || isBlocked // Treat blocked dates as past dates for styling
+      });
+    }
 
-                <div className="grid grid-cols-7 gap-1">
-                    {days.map((day, index) => (
-                        <Button
-                            key={index}
-                            variant="ghost"
-                            size="icon"
-                            disabled={day.isPast}
-                            className={cn(
-                                "h-8 w-8 text-sm font-normal",
-                                !day.isCurrentMonth && "text-muted-foreground opacity-50",
-                                day.isToday && "bg-accent text-accent-foreground font-semibold",
-                                day.isSelected && "bg-primary text-primary-foreground font-semibold",
-                                day.isCurrentMonth && !day.isPast && "hover:bg-accent hover:text-accent-foreground",
-                                day.isPast && "opacity-30 cursor-not-allowed text-muted-foreground"
-                            )}
-                            onClick={() => !day.isPast && handleDateSelect(day.date)}
-                        >
-                            {day.date.getDate()}
-                        </Button>
-                    ))}
-                </div>
-            </div>
-        );
-    };
+    // Next month's leading days
+    const remainingDays = 42 - days.length;
+    for (let day = 1; day <= remainingDays; day++) {
+      const dayDate = new Date(year, month + 1, day);
+      dayDate.setHours(0, 0, 0, 0);
+      days.push({
+        date: dayDate,
+        isCurrentMonth: false,
+        isToday: false,
+        isSelected: false,
+        isPast: minimumDate ? dayDate < minimumDate : false
+      });
+    }
 
-    const renderMonthView = () => {
-        return (
-            <div className="w-80">
-                <div className="flex items-center justify-between mb-4">
-                    <Button
-                        variant="ghost"
-                        size="icon"
-                        className="h-8 w-8"
-                        onClick={() => setViewMode("day")}
-                    >
-                        <ChevronLeft className="h-4 w-4" />
-                    </Button>
-                    <h3 className="font-semibold">{visibleDate.getFullYear()}</h3>
-                    <Button
-                        variant="ghost"
-                        className="font-semibold text-sm"
-                        onClick={() => setViewMode("year")}
-                    >
-                        {visibleDate.getFullYear()}
-                        <ChevronDown className="ml-1 h-3 w-3" />
-                    </Button>
-                </div>
+    return days;
+  };
 
-                <div className="grid grid-cols-3 gap-2">
-                    {monthNamesShort.map((month, index) => (
-                        <Button
-                            key={month}
-                            variant="ghost"
-                            className={cn(
-                                "h-10 text-sm font-normal",
-                                index === visibleDate.getMonth() && "bg-primary text-primary-foreground font-semibold"
-                            )}
-                            onClick={() => handleMonthSelect(index)}
-                        >
-                            {month}
-                        </Button>
-                    ))}
-                </div>
-            </div>
-        );
-    };
-
-    const renderYearView = () => {
-        const currentYear = visibleDate.getFullYear();
-        const startYear = Math.floor(currentYear / 12) * 12;
-        const years = Array.from({ length: 12 }, (_, i) => startYear + i);
-
-        return (
-            <div className="w-80">
-                <div className="flex items-center justify-between mb-4">
-                    <Button
-                        variant="ghost"
-                        size="icon"
-                        className="h-8 w-8"
-                        onClick={() => {
-                            const newStartYear = startYear - 12;
-                            setVisibleDate(new Date(newStartYear, visibleDate.getMonth(), 1));
-                        }}
-                    >
-                        <ChevronLeft className="h-4 w-4" />
-                    </Button>
-                    <h3 className="font-semibold">{startYear} - {startYear + 11}</h3>
-                    <Button
-                        variant="ghost"
-                        size="icon"
-                        className="h-8 w-8"
-                        onClick={() => {
-                            const newStartYear = startYear + 12;
-                            setVisibleDate(new Date(newStartYear, visibleDate.getMonth(), 1));
-                        }}
-                    >
-                        <ChevronRight className="h-4 w-4" />
-                    </Button>
-                </div>
-
-                <div className="grid grid-cols-3 gap-2">
-                    {years.map((year) => (
-                        <Button
-                            key={year}
-                            variant="ghost"
-                            className={cn(
-                                "h-10 text-sm font-normal",
-                                year === currentYear && "bg-primary text-primary-foreground font-semibold"
-                            )}
-                            onClick={() => handleYearSelect(year)}
-                        >
-                            {year}
-                        </Button>
-                    ))}
-                </div>
-            </div>
-        );
-    };
+  const renderDayView = () => {
+    const days = getDaysInMonth(visibleDate);
+    const weekDays = ["Su", "Mo", "Tu", "We", "Th", "Fr", "Sa"];
 
     return (
-        <Popover open={isOpen} onOpenChange={setIsOpen}>
-            <PopoverTrigger asChild>
-                <Button
-                    variant="outline"
-                    disabled={disabled}
-                    className={cn(
-                        "w-full justify-start text-left font-normal flex h-9 rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50 hover:bg-transparent",
-                        !date && "text-muted-foreground"
-                    )}
-                >
-                    <CalendarIcon className="mr-2 h-4 w-4" />
-                    {date ? formatDisplayDate(date) : <span>Pick a date</span>}
-                </Button>
-            </PopoverTrigger>
-            <PopoverContent className="w-auto p-4 shadow-lg border rounded-lg z-[9999]" align="start" side="bottom" sideOffset={4}>
-                {viewMode === "day" && renderDayView()}
-                {viewMode === "month" && renderMonthView()}
-                {viewMode === "year" && renderYearView()}
-            </PopoverContent>
-        </Popover>
+      <div className="w-80">
+        <div className="flex items-center justify-between mb-4">
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-8 w-8"
+            onClick={() => navigateMonth(-1)}
+          >
+            <ChevronLeft className="h-4 w-4" />
+          </Button>
+
+          <div className="flex items-center gap-2">
+            <Button
+              variant="ghost"
+              className="font-semibold text-sm"
+              onClick={() => setViewMode("month")}
+            >
+              {monthNames[visibleDate.getMonth()]}
+              <ChevronDown className="ml-1 h-3 w-3" />
+            </Button>
+            <Button
+              variant="ghost"
+              className="font-semibold text-sm"
+              onClick={() => setViewMode("year")}
+            >
+              {visibleDate.getFullYear()}
+              <ChevronDown className="ml-1 h-3 w-3" />
+            </Button>
+          </div>
+
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-8 w-8"
+            onClick={() => navigateMonth(1)}
+          >
+            <ChevronRight className="h-4 w-4" />
+          </Button>
+        </div>
+
+        <div className="grid grid-cols-7 gap-1 mb-2">
+          {weekDays.map((day) => (
+            <div key={day} className="h-8 flex items-center justify-center text-xs font-medium text-muted-foreground">
+              {day}
+            </div>
+          ))}
+        </div>
+
+        <div className="grid grid-cols-7 gap-1">
+          {days.map((day, index) => (
+            <Button
+              key={index}
+              variant="ghost"
+              size="icon"
+              disabled={day.isPast}
+              className={cn(
+                "h-8 w-8 text-sm font-normal",
+                !day.isCurrentMonth && "text-muted-foreground opacity-50",
+                day.isToday && "bg-accent text-accent-foreground font-semibold",
+                day.isSelected && "bg-primary text-primary-foreground font-semibold",
+                day.isCurrentMonth && !day.isPast && "hover:bg-accent hover:text-accent-foreground",
+                day.isPast && "opacity-30 cursor-not-allowed text-muted-foreground"
+              )}
+              onClick={() => !day.isPast && handleDateSelect(day.date)}
+            >
+              {day.date.getDate()}
+            </Button>
+          ))}
+        </div>
+      </div>
     );
+  };
+
+  const renderMonthView = () => {
+    return (
+      <div className="w-80">
+        <div className="flex items-center justify-between mb-4">
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-8 w-8"
+            onClick={() => setViewMode("day")}
+          >
+            <ChevronLeft className="h-4 w-4" />
+          </Button>
+          <h3 className="font-semibold">{visibleDate.getFullYear()}</h3>
+          <Button
+            variant="ghost"
+            className="font-semibold text-sm"
+            onClick={() => setViewMode("year")}
+          >
+            {visibleDate.getFullYear()}
+            <ChevronDown className="ml-1 h-3 w-3" />
+          </Button>
+        </div>
+
+        <div className="grid grid-cols-3 gap-2">
+          {monthNamesShort.map((month, index) => (
+            <Button
+              key={month}
+              variant="ghost"
+              className={cn(
+                "h-10 text-sm font-normal",
+                index === visibleDate.getMonth() && "bg-primary text-primary-foreground font-semibold"
+              )}
+              onClick={() => handleMonthSelect(index)}
+            >
+              {month}
+            </Button>
+          ))}
+        </div>
+      </div>
+    );
+  };
+
+  const renderYearView = () => {
+    const currentYear = visibleDate.getFullYear();
+    const startYear = Math.floor(currentYear / 12) * 12;
+    const years = Array.from({ length: 12 }, (_, i) => startYear + i);
+
+    return (
+      <div className="w-80">
+        <div className="flex items-center justify-between mb-4">
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-8 w-8"
+            onClick={() => {
+              const newStartYear = startYear - 12;
+              setVisibleDate(new Date(newStartYear, visibleDate.getMonth(), 1));
+            }}
+          >
+            <ChevronLeft className="h-4 w-4" />
+          </Button>
+          <h3 className="font-semibold">{startYear} - {startYear + 11}</h3>
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-8 w-8"
+            onClick={() => {
+              const newStartYear = startYear + 12;
+              setVisibleDate(new Date(newStartYear, visibleDate.getMonth(), 1));
+            }}
+          >
+            <ChevronRight className="h-4 w-4" />
+          </Button>
+        </div>
+
+        <div className="grid grid-cols-3 gap-2">
+          {years.map((year) => (
+            <Button
+              key={year}
+              variant="ghost"
+              className={cn(
+                "h-10 text-sm font-normal",
+                year === currentYear && "bg-primary text-primary-foreground font-semibold"
+              )}
+              onClick={() => handleYearSelect(year)}
+            >
+              {year}
+            </Button>
+          ))}
+        </div>
+      </div>
+    );
+  };
+
+  return (
+    <Popover open={isOpen} onOpenChange={setIsOpen}>
+      <PopoverTrigger asChild>
+        <Button
+          variant="outline"
+          disabled={disabled}
+          className={cn(
+            "w-full justify-start text-left font-normal flex h-10 rounded-md border border-input px-3 py-2 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50",
+            !date && "text-muted-foreground"
+          )}
+        >
+          <CalendarIcon className="mr-2 h-4 w-4" />
+          {date ? formatDisplayDate(date) : <span>Pick a date</span>}
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent className="w-auto p-4 shadow-lg border rounded-lg z-[9999]" align="start" side="bottom" sideOffset={4}>
+        {viewMode === "day" && renderDayView()}
+        {viewMode === "month" && renderMonthView()}
+        {viewMode === "year" && renderYearView()}
+      </PopoverContent>
+    </Popover>
+  );
 }
