@@ -68,9 +68,15 @@ interface WorkCenter {
     name: string;
     description?: string;
     location: string;
+    operations?: WorkCenterOperation[];
     status: "Active" | "Inactive";
     created_at?: string;
     updated_at?: string;
+}
+
+interface WorkCenterOperation {
+    id: number; // temp id
+    operation_id: number;
 }
 
 interface Machine {
@@ -93,14 +99,11 @@ interface QCParameter {
 interface OperationItem {
     id: number; // temp id
     item_id: number; // mocked item id
-    type: "RM" | "SFG" | "FG" | "Waste";
+    type: "RM" | "SFG" | "FG" | "Waste" | "Consumable";
     quantity: number;
 }
 
-interface OperationMachine {
-    id: number; // temp id
-    machine_id: number;
-}
+
 
 interface Operation {
     id: number;
@@ -110,7 +113,6 @@ interface Operation {
     description?: string;
     inputs: OperationItem[]; // RM / SFG
     outputs: OperationItem[]; // SFG / FG / Waste
-    machines: OperationMachine[];
     is_qc_required: boolean;
     qc_parameters: QCParameter[];
     status: "Active" | "Inactive";
@@ -118,21 +120,32 @@ interface Operation {
     updated_at?: string;
 }
 
-// Mock Items for Dropdowns
-const MOCK_ITEMS = [
-    { id: 101, code: "RM001", name: "Steel Sheet", type: "RM", uom: "kg" },
-    { id: 102, code: "RM002", name: "Plastic Granules", type: "RM", uom: "kg" },
-    { id: 201, code: "SFG001", name: "Molded Part", type: "SFG", uom: "nos" },
-    { id: 202, code: "SFG002", name: "Painted Housing", type: "SFG", uom: "nos" },
-    { id: 301, code: "FG001", name: "Finished Widget", type: "FG", uom: "nos" },
-    { id: 401, code: "WST001", name: "Scrap Metal", type: "Waste", uom: "kg" },
-];
+
 
 // --- Mock Data ---
 
+interface Item {
+    id: number;
+    code: string;
+    name: string;
+    type: "RM" | "SFG" | "FG" | "Waste" | "Consumable";
+    uom: string;
+}
+
+const MOCK_ITEMS: Item[] = [
+    { id: 101, code: "RM001", name: "Steel Sheet", type: "RM", uom: "Sheet" },
+    { id: 102, code: "RM002", name: "Plastic Granules", type: "RM", uom: "kg" },
+    { id: 103, code: "CNS001", name: "Industrial Paint", type: "Consumable", uom: "Ltr" },
+    { id: 201, code: "SFG001", name: "Molded Body", type: "SFG", uom: "Nos" },
+    { id: 202, code: "SFG002", name: "Cut Sheets", type: "SFG", uom: "Nos" },
+    { id: 203, code: "SFG003", name: "Welded Frame", type: "SFG", uom: "Nos" },
+    { id: 301, code: "FG001", name: "Finished Widget", type: "FG", uom: "Nos" },
+    { id: 401, code: "WST001", name: "Scrap Metal", type: "Waste", uom: "kg" },
+];
+
 const initialWorkCenters: WorkCenter[] = [
-    { id: 1, code: "WC001", name: "Assembly Line 1", description: "Main assembly line for electronics", location: "Plant A", status: "Active" },
-    { id: 2, code: "WC002", name: "Packaging Unit", description: "Final packaging area", location: "Plant B", status: "Active" },
+    { id: 1, code: "WC001", name: "Assembly Line 1", description: "Main assembly line for electronics", location: "Plant A", status: "Active", operations: [] },
+    { id: 2, code: "WC002", name: "Packaging Unit", description: "Final packaging area", location: "Plant B", status: "Active", operations: [] },
 ];
 
 const initialMachines: Machine[] = [
@@ -149,10 +162,97 @@ const initialOperations: Operation[] = [
         description: "Initial molding process",
         inputs: [{ id: 1, item_id: 102, type: "RM", quantity: 10 }],
         outputs: [{ id: 1, item_id: 201, type: "SFG", quantity: 1 }],
-        machines: [{ id: 1, machine_id: 1 }],
+
         is_qc_required: true,
         qc_parameters: [{ id: 1, name: "Dimensions", description: "Check length and width" }],
         status: "Active"
+    },
+    {
+        id: 2,
+        code: "OP002",
+        name: "Cutting",
+        work_center_id: 1,
+        description: "Cut sheets to size",
+        inputs: [{ id: 2, item_id: 101, type: "RM", quantity: 5 }],
+        outputs: [{ id: 2, item_id: 202, type: "SFG", quantity: 5 }],
+        is_qc_required: false,
+        qc_parameters: [],
+        status: "Active"
+    },
+    {
+        id: 3,
+        code: "OP003",
+        name: "Welding",
+        work_center_id: 1,
+        description: "Spot welding components",
+        inputs: [{ id: 3, item_id: 202, type: "SFG", quantity: 2 }],
+        outputs: [{ id: 3, item_id: 203, type: "SFG", quantity: 1 }],
+        is_qc_required: true,
+        qc_parameters: [{ id: 2, name: "Strength Test", description: "Verify weld integrity" }],
+        status: "Active"
+    },
+    {
+        id: 4,
+        code: "OP004",
+        name: "Painting",
+        work_center_id: 2,
+        description: "Apply powder coating",
+        inputs: [
+            { id: 4, item_id: 203, type: "SFG", quantity: 1 },
+            { id: 41, item_id: 103, type: "Consumable", quantity: 0.5 }
+        ],
+        outputs: [{ id: 4, item_id: 301, type: "FG", quantity: 1 }],
+        is_qc_required: true,
+        qc_parameters: [{ id: 3, name: "Finish Check", description: "Check for scratches or bubbles" }],
+        status: "Active"
+    },
+    {
+        id: 5,
+        code: "OP005",
+        name: "Assembly",
+        work_center_id: 2,
+        description: "Final product assembly",
+        inputs: [{ id: 5, item_id: 201, type: "SFG", quantity: 2 }, { id: 6, item_id: 202, type: "SFG", quantity: 1 }],
+        outputs: [{ id: 5, item_id: 301, type: "FG", quantity: 1 }],
+        is_qc_required: true,
+        qc_parameters: [{ id: 4, name: "Functionality", description: "Test all buttons and lights" }],
+        status: "Active"
+    },
+    {
+        id: 6,
+        code: "OP006",
+        name: "Packaging",
+        work_center_id: 2,
+        description: "Packing into boxes",
+        inputs: [{ id: 7, item_id: 301, type: "FG", quantity: 1 }],
+        outputs: [{ id: 6, item_id: 301, type: "FG", quantity: 1 }],
+        is_qc_required: false,
+        qc_parameters: [],
+        status: "Active"
+    },
+    {
+        id: 7,
+        code: "OP007",
+        name: "Quality Check",
+        work_center_id: 2,
+        description: "Final quality assurance",
+        inputs: [{ id: 8, item_id: 301, type: "FG", quantity: 1 }],
+        outputs: [{ id: 7, item_id: 301, type: "FG", quantity: 1 }],
+        is_qc_required: true,
+        qc_parameters: [{ id: 5, name: "Comprehensive", description: "Full system check" }],
+        status: "Active"
+    },
+    {
+        id: 8,
+        code: "OP008",
+        name: "Scrap Processing",
+        work_center_id: 1,
+        description: "Processing metal waste",
+        inputs: [{ id: 9, item_id: 401, type: "Waste", quantity: 10 }],
+        outputs: [{ id: 8, item_id: 101, type: "RM", quantity: 8 }],
+        is_qc_required: false,
+        qc_parameters: [],
+        status: "Inactive"
     }
 ];
 
@@ -224,14 +324,20 @@ export default function ProductionMasters() {
     // Operations UI State
     const [selectedInputId, setSelectedInputId] = useState<string>("");
     const [isInputComboboxOpen, setIsInputComboboxOpen] = useState(false);
-    const [selectedInputType, setSelectedInputType] = useState<"RM" | "SFG" | "Waste">("RM");
+    const [selectedInputType, setSelectedInputType] = useState<"RM" | "SFG" | "FG" | "Waste" | "Consumable">("RM");
 
     const [selectedOutputId, setSelectedOutputId] = useState<string>("");
     const [isOutputComboboxOpen, setIsOutputComboboxOpen] = useState(false);
-    const [selectedOutputType, setSelectedOutputType] = useState<"SFG" | "FG" | "Waste">("SFG");
+    const [selectedOutputType, setSelectedOutputType] = useState<"RM" | "SFG" | "FG" | "Waste">("SFG");
+    const [isOpWCComboboxOpen, setIsOpWCComboboxOpen] = useState(false);
 
-    const [selectedMachineId, setSelectedMachineId] = useState<string>("");
-    const [isMachineComboboxOpen, setIsMachineComboboxOpen] = useState(false);
+    // Work Center Operations UI State
+    const [selectedWCOperationId, setSelectedWCOperationId] = useState<string>("");
+    const [isWCOpComboboxOpen, setIsWCOpComboboxOpen] = useState(false);
+    const [isLocationComboboxOpen, setIsLocationComboboxOpen] = useState(false);
+    const [isMachineWCComboboxOpen, setIsMachineWCComboboxOpen] = useState(false);
+
+
 
     // --- Helpers ---
 
@@ -279,6 +385,7 @@ export default function ProductionMasters() {
             setFormData({
                 status: "Active",
                 location: "Plant A",
+                operations: [],
             });
         } else if (selectedMaster === "Machines") {
             setFormData({
@@ -291,7 +398,7 @@ export default function ProductionMasters() {
                 is_qc_required: false,
                 inputs: [],
                 outputs: [],
-                machines: [],
+
                 qc_parameters: [],
             });
         }
@@ -310,7 +417,7 @@ export default function ProductionMasters() {
             data.work_center_id = item.work_center_id?.toString();
         } else if (selectedMaster === "Operations") {
             data.work_center_id = item.work_center_id?.toString();
-            // machine_id is no longer a single field on Operation
+            data.work_center_id = item.work_center_id?.toString();
         }
         setFormData(data);
         setIsDialogOpen(true);
@@ -327,10 +434,7 @@ export default function ProductionMasters() {
                 setWorkCenters(prev => prev.filter(item => item.id !== id));
             } else if (selectedMaster === "Machines") {
                 // Check if used in operations
-                if (operations.some(o => o.machines?.some(m => m.machine_id === id))) {
-                    toast({ variant: "destructive", title: "Cannot Delete", description: "Machine is used in Operations." });
-                    return;
-                }
+            } else if (selectedMaster === "Machines") {
                 setMachines(prev => prev.filter(item => item.id !== id));
             } else if (selectedMaster === "Operations") {
                 setOperations(prev => prev.filter(item => item.id !== id));
@@ -398,7 +502,7 @@ export default function ProductionMasters() {
             const opData = {
                 ...formData,
                 work_center_id: formData.work_center_id ? parseInt(formData.work_center_id) : undefined,
-                // machine_id removed
+
             };
 
             if (editingId) {
@@ -449,22 +553,24 @@ export default function ProductionMasters() {
         });
     };
 
-    const addOperationMachine = () => {
-        if (!selectedMachineId) return;
+    const addWorkCenterOperation = () => {
+        if (!selectedWCOperationId) return;
 
-        const newMachine: OperationMachine = {
+        const newOp: WorkCenterOperation = {
             id: Date.now(),
-            machine_id: parseInt(selectedMachineId)
+            operation_id: parseInt(selectedWCOperationId)
         };
 
-        setFormData({ ...formData, machines: [...(formData.machines || []), newMachine] });
-        setSelectedMachineId("");
-        setIsMachineComboboxOpen(false);
+        setFormData({ ...formData, operations: [...(formData.operations || []), newOp] });
+        setSelectedWCOperationId("");
+        setIsWCOpComboboxOpen(false);
     };
 
-    const removeOperationMachine = (id: number) => {
-        setFormData({ ...formData, machines: formData.machines.filter((m: any) => m.id !== id) });
+    const removeWorkCenterOperation = (id: number) => {
+        setFormData({ ...formData, operations: formData.operations.filter((o: any) => o.id !== id) });
     };
+
+
 
     const addQCParam = () => {
         const newParam: QCParameter = { id: Date.now(), name: "", description: "" };
@@ -584,45 +690,13 @@ export default function ProductionMasters() {
                 <Table>
                     <TableHeader>
                         <TableRow className="bg-muted/50">
-                            <TableHead>Code</TableHead>
-                            <TableHead>Operation Name</TableHead>
-                            <TableHead>Work Center</TableHead>
-                            <TableHead>QC Req</TableHead>
-                            <TableHead>Status</TableHead>
-                            <TableHead className="text-right">Actions</TableHead>
+                            <TableHead>Debug</TableHead>
                         </TableRow>
                     </TableHeader>
                     <TableBody>
-                        {paginatedData.length === 0 ? (
-                            <TableRow>
-                                <TableCell colSpan={6} className="h-24 text-center text-muted-foreground">
-                                    No operations found.
-                                </TableCell>
-                            </TableRow>
-                        ) : (
-                            paginatedData.map((item: any) => {
-                                const wc = workCenters.find(w => w.id === item.work_center_id);
-                                return (
-                                    <TableRow key={item.id}>
-                                        <TableCell className="font-medium">{item.code}</TableCell>
-                                        <TableCell>{item.name}</TableCell>
-                                        <TableCell>{wc ? wc.name : "-"}</TableCell>
-                                        <TableCell>{item.is_qc_required ? <Badge variant="outline" className="border-blue-500 text-blue-600 bg-blue-50">Yes</Badge> : "No"}</TableCell>
-                                        <TableCell><StatusBadge status={item.status} /></TableCell>
-                                        <TableCell className="text-right">
-                                            <div className="flex justify-end gap-2">
-                                                <Button variant="ghost" size="icon" className="h-8 w-8 hover:bg-muted" onClick={() => handleEditClick(item)}>
-                                                    <Pencil className="h-4 w-4" />
-                                                </Button>
-                                                <Button variant="ghost" size="icon" className="h-8 w-8 text-destructive hover:bg-destructive/10" onClick={() => handleDeleteClick(item.id)}>
-                                                    <Trash2 className="h-4 w-4" />
-                                                </Button>
-                                            </div>
-                                        </TableCell>
-                                    </TableRow>
-                                );
-                            })
-                        )}
+                        <TableRow>
+                            <TableCell>Operations Table Debug Mode</TableCell>
+                        </TableRow>
                     </TableBody>
                 </Table>
             );
@@ -645,14 +719,49 @@ export default function ProductionMasters() {
                         </div>
                         <div className="space-y-2">
                             <Label>Location *</Label>
-                            <Select value={formData.location} onValueChange={(val: any) => setFormData({ ...formData, location: val })}>
-                                <SelectTrigger><SelectValue placeholder="Select Location" /></SelectTrigger>
-                                <SelectContent>
-                                    {LOCATIONS.map(loc => (
-                                        <SelectItem key={loc} value={loc}>{loc}</SelectItem>
-                                    ))}
-                                </SelectContent>
-                            </Select>
+                            <Popover open={isLocationComboboxOpen} onOpenChange={setIsLocationComboboxOpen}>
+                                <PopoverTrigger asChild>
+                                    <Button
+                                        variant="outline"
+                                        role="combobox"
+                                        aria-expanded={isLocationComboboxOpen}
+                                        className="w-full justify-between font-normal"
+                                    >
+                                        {formData.location
+                                            ? formData.location
+                                            : "Select Location..."}
+                                        <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
+                                    </Button>
+                                </PopoverTrigger>
+                                <PopoverContent className="p-0" style={{ width: "var(--radix-popover-trigger-width)" }}>
+                                    <Command className="h-auto overflow-visible">
+                                        <CommandInputBorderless placeholder="Search location..." />
+                                        <CommandList className="max-h-[130px] overflow-y-auto">
+                                            <CommandEmpty>No location found.</CommandEmpty>
+                                            <CommandGroup>
+                                                {LOCATIONS.map((loc) => (
+                                                    <CommandItem
+                                                        key={loc}
+                                                        value={loc}
+                                                        onSelect={(currentValue) => {
+                                                            setFormData({ ...formData, location: currentValue });
+                                                            setIsLocationComboboxOpen(false);
+                                                        }}
+                                                    >
+                                                        <Check
+                                                            className={cn(
+                                                                "mr-2 h-4 w-4",
+                                                                formData.location === loc ? "opacity-100" : "opacity-0"
+                                                            )}
+                                                        />
+                                                        {loc}
+                                                    </CommandItem>
+                                                ))}
+                                            </CommandGroup>
+                                        </CommandList>
+                                    </Command>
+                                </PopoverContent>
+                            </Popover>
                         </div>
                         <div className="space-y-2">
                             <Label>Status *</Label>
@@ -667,6 +776,109 @@ export default function ProductionMasters() {
                         <div className="col-span-2 space-y-2">
                             <Label htmlFor="description">Description</Label>
                             <Textarea id="description" value={formData.description || ""} onChange={e => setFormData({ ...formData, description: e.target.value })} placeholder="Work center description..." />
+                        </div>
+                    </div>
+
+                    {/* Operations Section */}
+                    <div className="mt-8">
+                        <SectionHeader title="Operations" />
+
+                        {/* Add Operation Control */}
+                        <div className="flex gap-4 items-end mb-4">
+                            <div className="flex-1 space-y-2">
+                                <Label>Select Operation</Label>
+                                <Popover open={isWCOpComboboxOpen} onOpenChange={setIsWCOpComboboxOpen}>
+                                    <PopoverTrigger asChild>
+                                        <Button
+                                            variant="outline"
+                                            role="combobox"
+                                            aria-expanded={isWCOpComboboxOpen}
+                                            className="w-full justify-between font-normal"
+                                        >
+                                            {selectedWCOperationId
+                                                ? operations.find((item) => item.id.toString() === selectedWCOperationId)?.name
+                                                : "Choose Operation..."}
+                                            <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
+                                        </Button>
+                                    </PopoverTrigger>
+                                    <PopoverContent className="p-0" style={{ width: "var(--radix-popover-trigger-width)" }}>
+                                        <Command className="h-auto overflow-visible">
+                                            <CommandInputBorderless placeholder="Search operation..." />
+                                            <CommandList className="max-h-[130px] overflow-y-auto">
+                                                <CommandEmpty>No operation found.</CommandEmpty>
+                                                <CommandGroup>
+                                                    {operations.map((item) => {
+                                                        const isAdded = formData.operations?.some((op: any) => op.operation_id === item.id);
+                                                        return (
+                                                            <CommandItem
+                                                                key={item.id}
+                                                                value={item.name}
+                                                                onSelect={() => {
+                                                                    if (!isAdded) {
+                                                                        setSelectedWCOperationId(item.id.toString());
+                                                                        setIsWCOpComboboxOpen(false);
+                                                                    }
+                                                                }}
+                                                                disabled={isAdded}
+                                                                className={isAdded ? "opacity-50 cursor-not-allowed" : ""}
+                                                            >
+                                                                <Check
+                                                                    className={cn(
+                                                                        "mr-2 h-4 w-4",
+                                                                        selectedWCOperationId === item.id.toString() ? "opacity-100" : "opacity-0"
+                                                                    )}
+                                                                />
+                                                                {item.code} - {item.name}
+                                                            </CommandItem>
+                                                        );
+                                                    })}
+                                                </CommandGroup>
+                                            </CommandList>
+                                        </Command>
+                                    </PopoverContent>
+                                </Popover>
+                            </div>
+                            <Button onClick={addWorkCenterOperation} disabled={!selectedWCOperationId}>
+                                <Plus className="h-4 w-4 mr-2" /> Add
+                            </Button>
+                        </div>
+
+                        {/* Operations Table */}
+                        <div className="rounded-md border">
+                            <Table>
+                                <TableHeader>
+                                    <TableRow className="bg-muted/50">
+                                        <TableHead>Operation Details</TableHead>
+                                        <TableHead className="w-[50px]"></TableHead>
+                                    </TableRow>
+                                </TableHeader>
+                                <TableBody>
+                                    {(!formData.operations || formData.operations.length === 0) ? (
+                                        <TableRow>
+                                            <TableCell colSpan={2} className="h-24 text-center text-muted-foreground">
+                                                No operations configured.
+                                            </TableCell>
+                                        </TableRow>
+                                    ) : (
+                                        formData.operations.map((item: any) => {
+                                            const originalItem = operations.find(o => o.id === item.operation_id);
+                                            return (
+                                                <TableRow key={item.id}>
+                                                    <TableCell>
+                                                        <div className="font-medium">{originalItem?.name}</div>
+                                                        <div className="text-xs text-muted-foreground">{originalItem?.code}</div>
+                                                    </TableCell>
+                                                    <TableCell>
+                                                        <Button variant="ghost" size="icon" className="h-8 w-8 text-destructive" onClick={() => removeWorkCenterOperation(item.id)}>
+                                                            <Trash2 className="h-4 w-4" />
+                                                        </Button>
+                                                    </TableCell>
+                                                </TableRow>
+                                            );
+                                        })
+                                    )}
+                                </TableBody>
+                            </Table>
                         </div>
                     </div>
                 </div>
@@ -686,14 +898,49 @@ export default function ProductionMasters() {
                         </div>
                         <div className="space-y-2">
                             <Label>Work Center *</Label>
-                            <Select value={formData.work_center_id} onValueChange={(val: any) => setFormData({ ...formData, work_center_id: val })}>
-                                <SelectTrigger><SelectValue placeholder="Select Work Center" /></SelectTrigger>
-                                <SelectContent>
-                                    {workCenters.map(wc => (
-                                        <SelectItem key={wc.id} value={wc.id.toString()}>{wc.name}</SelectItem>
-                                    ))}
-                                </SelectContent>
-                            </Select>
+                            <Popover open={isMachineWCComboboxOpen} onOpenChange={setIsMachineWCComboboxOpen}>
+                                <PopoverTrigger asChild>
+                                    <Button
+                                        variant="outline"
+                                        role="combobox"
+                                        aria-expanded={isMachineWCComboboxOpen}
+                                        className="w-full justify-between font-normal"
+                                    >
+                                        {formData.work_center_id
+                                            ? workCenters.find((wc) => wc.id.toString() === formData.work_center_id)?.name
+                                            : "Select Work Center..."}
+                                        <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
+                                    </Button>
+                                </PopoverTrigger>
+                                <PopoverContent className="p-0" style={{ width: "var(--radix-popover-trigger-width)" }}>
+                                    <Command className="h-auto overflow-visible">
+                                        <CommandInputBorderless placeholder="Search work center..." />
+                                        <CommandList className="max-h-[130px] overflow-y-auto">
+                                            <CommandEmpty>No work center found.</CommandEmpty>
+                                            <CommandGroup>
+                                                {workCenters.map((wc) => (
+                                                    <CommandItem
+                                                        key={wc.id}
+                                                        value={wc.name}
+                                                        onSelect={() => {
+                                                            setFormData({ ...formData, work_center_id: wc.id.toString() });
+                                                            setIsMachineWCComboboxOpen(false);
+                                                        }}
+                                                    >
+                                                        <Check
+                                                            className={cn(
+                                                                "mr-2 h-4 w-4",
+                                                                formData.work_center_id === wc.id.toString() ? "opacity-100" : "opacity-0"
+                                                            )}
+                                                        />
+                                                        {wc.name}
+                                                    </CommandItem>
+                                                ))}
+                                            </CommandGroup>
+                                        </CommandList>
+                                    </Command>
+                                </PopoverContent>
+                            </Popover>
                         </div>
                         <div className="space-y-2">
                             <Label>Status *</Label>
@@ -728,14 +975,49 @@ export default function ProductionMasters() {
                         </div>
                         <div className="space-y-2">
                             <Label>Work Center</Label>
-                            <Select value={formData.work_center_id} onValueChange={(val: any) => setFormData({ ...formData, work_center_id: val })}>
-                                <SelectTrigger><SelectValue placeholder="Select Work Center" /></SelectTrigger>
-                                <SelectContent>
-                                    {workCenters.map(wc => (
-                                        <SelectItem key={wc.id} value={wc.id.toString()}>{wc.name}</SelectItem>
-                                    ))}
-                                </SelectContent>
-                            </Select>
+                            <Popover open={isOpWCComboboxOpen} onOpenChange={setIsOpWCComboboxOpen}>
+                                <PopoverTrigger asChild>
+                                    <Button
+                                        variant="outline"
+                                        role="combobox"
+                                        aria-expanded={isOpWCComboboxOpen}
+                                        className="w-full justify-between font-normal"
+                                    >
+                                        {formData.work_center_id
+                                            ? workCenters.find((wc) => wc.id.toString() === formData.work_center_id)?.name
+                                            : "Select Work Center..."}
+                                        <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
+                                    </Button>
+                                </PopoverTrigger>
+                                <PopoverContent className="p-0" style={{ width: "var(--radix-popover-trigger-width)" }}>
+                                    <Command className="h-auto overflow-visible">
+                                        <CommandInputBorderless placeholder="Search work center..." />
+                                        <CommandList className="max-h-[130px] overflow-y-auto">
+                                            <CommandEmpty>No work center found.</CommandEmpty>
+                                            <CommandGroup>
+                                                {workCenters.map((wc) => (
+                                                    <CommandItem
+                                                        key={wc.id}
+                                                        value={wc.name}
+                                                        onSelect={() => {
+                                                            setFormData({ ...formData, work_center_id: wc.id.toString() });
+                                                            setIsOpWCComboboxOpen(false);
+                                                        }}
+                                                    >
+                                                        <Check
+                                                            className={cn(
+                                                                "mr-2 h-4 w-4",
+                                                                formData.work_center_id === wc.id.toString() ? "opacity-100" : "opacity-0"
+                                                            )}
+                                                        />
+                                                        {wc.name}
+                                                    </CommandItem>
+                                                ))}
+                                            </CommandGroup>
+                                        </CommandList>
+                                    </Command>
+                                </PopoverContent>
+                            </Popover>
                         </div>
 
                         <div className="space-y-2">
@@ -770,7 +1052,9 @@ export default function ProductionMasters() {
                                     <SelectContent>
                                         <SelectItem value="RM">RM</SelectItem>
                                         <SelectItem value="SFG">SFG</SelectItem>
+                                        <SelectItem value="FG">FG</SelectItem>
                                         <SelectItem value="Waste">Waste</SelectItem>
+                                        <SelectItem value="Consumable">Consumable</SelectItem>
                                     </SelectContent>
                                 </Select>
                             </div>
@@ -792,9 +1076,9 @@ export default function ProductionMasters() {
                                         </Button>
                                     </PopoverTrigger>
                                     <PopoverContent className="p-0" style={{ width: "var(--radix-popover-trigger-width)" }}>
-                                        <Command>
+                                        <Command className="h-auto overflow-visible">
                                             <CommandInputBorderless placeholder="Search item..." />
-                                            <CommandList>
+                                            <CommandList className="max-h-[130px] overflow-y-auto">
                                                 <CommandEmpty>No item found.</CommandEmpty>
                                                 <CommandGroup>
                                                     {MOCK_ITEMS.filter(i => i.type === selectedInputType).map((item) => {
@@ -902,6 +1186,7 @@ export default function ProductionMasters() {
                                 }}>
                                     <SelectTrigger><SelectValue /></SelectTrigger>
                                     <SelectContent>
+                                        <SelectItem value="RM">RM</SelectItem>
                                         <SelectItem value="SFG">SFG</SelectItem>
                                         <SelectItem value="FG">FG</SelectItem>
                                         <SelectItem value="Waste">Waste</SelectItem>
@@ -926,9 +1211,9 @@ export default function ProductionMasters() {
                                         </Button>
                                     </PopoverTrigger>
                                     <PopoverContent className="p-0" style={{ width: "var(--radix-popover-trigger-width)" }}>
-                                        <Command>
+                                        <Command className="h-auto overflow-visible">
                                             <CommandInputBorderless placeholder="Search item..." />
-                                            <CommandList>
+                                            <CommandList className="max-h-[130px] overflow-y-auto">
                                                 <CommandEmpty>No item found.</CommandEmpty>
                                                 <CommandGroup>
                                                     {MOCK_ITEMS.filter(i => i.type === selectedOutputType).map((item) => {
@@ -1023,110 +1308,7 @@ export default function ProductionMasters() {
                         </div>
                     </div>
 
-                    {/* Machines Section */}
-                    <div className="mt-10">
-                        <SectionHeader title="Machines" />
 
-                        {/* Add Machine Control */}
-                        <div className="flex gap-4 items-end mb-4">
-                            <div className="flex-1 space-y-2">
-                                <Label>Select Machine</Label>
-                                <Popover open={isMachineComboboxOpen} onOpenChange={setIsMachineComboboxOpen}>
-                                    <PopoverTrigger asChild>
-                                        <Button
-                                            variant="outline"
-                                            role="combobox"
-                                            aria-expanded={isMachineComboboxOpen}
-                                            className="w-full justify-between font-normal"
-                                        >
-                                            {selectedMachineId
-                                                ? machines.find((item) => item.id.toString() === selectedMachineId)?.name
-                                                : "Choose Machine..."}
-                                            <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
-                                        </Button>
-                                    </PopoverTrigger>
-                                    <PopoverContent className="p-0" style={{ width: "var(--radix-popover-trigger-width)" }}>
-                                        <Command>
-                                            <CommandInputBorderless placeholder="Search machine..." />
-                                            <CommandList>
-                                                <CommandEmpty>No machine found.</CommandEmpty>
-                                                <CommandGroup>
-                                                    {machines
-                                                        .filter(m => !formData.work_center_id || m.work_center_id.toString() === formData.work_center_id)
-                                                        .map((item) => {
-                                                            const isAdded = formData.machines?.some((m: any) => m.machine_id === item.id);
-                                                            return (
-                                                                <CommandItem
-                                                                    key={item.id}
-                                                                    value={item.name}
-                                                                    onSelect={() => {
-                                                                        if (!isAdded) {
-                                                                            setSelectedMachineId(item.id.toString());
-                                                                            setIsMachineComboboxOpen(false);
-                                                                        }
-                                                                    }}
-                                                                    disabled={isAdded}
-                                                                    className={isAdded ? "opacity-50 cursor-not-allowed" : ""}
-                                                                >
-                                                                    <Check
-                                                                        className={cn(
-                                                                            "mr-2 h-4 w-4",
-                                                                            selectedMachineId === item.id.toString() ? "opacity-100" : "opacity-0"
-                                                                        )}
-                                                                    />
-                                                                    {item.code} - {item.name}
-                                                                </CommandItem>
-                                                            );
-                                                        })}
-                                                </CommandGroup>
-                                            </CommandList>
-                                        </Command>
-                                    </PopoverContent>
-                                </Popover>
-                            </div>
-                            <Button onClick={addOperationMachine} disabled={!selectedMachineId}>
-                                <Plus className="h-4 w-4 mr-2" /> Add
-                            </Button>
-                        </div>
-
-                        {/* Machines Table */}
-                        <div className="rounded-md border">
-                            <Table>
-                                <TableHeader>
-                                    <TableRow className="bg-muted/50">
-                                        <TableHead>Machine Details</TableHead>
-                                        <TableHead className="w-[50px]"></TableHead>
-                                    </TableRow>
-                                </TableHeader>
-                                <TableBody>
-                                    {(!formData.machines || formData.machines.length === 0) ? (
-                                        <TableRow>
-                                            <TableCell colSpan={2} className="h-24 text-center text-muted-foreground">
-                                                No machines configured.
-                                            </TableCell>
-                                        </TableRow>
-                                    ) : (
-                                        formData.machines.map((item: any) => {
-                                            const originalItem = machines.find(m => m.id === item.machine_id);
-                                            return (
-                                                <TableRow key={item.id}>
-                                                    <TableCell>
-                                                        <div className="font-medium">{originalItem?.name}</div>
-                                                        <div className="text-xs text-muted-foreground">{originalItem?.code}</div>
-                                                    </TableCell>
-                                                    <TableCell>
-                                                        <Button variant="ghost" size="icon" className="h-8 w-8 text-destructive" onClick={() => removeOperationMachine(item.id)}>
-                                                            <Trash2 className="h-4 w-4" />
-                                                        </Button>
-                                                    </TableCell>
-                                                </TableRow>
-                                            );
-                                        })
-                                    )}
-                                </TableBody>
-                            </Table>
-                        </div>
-                    </div>
 
                     {/* QC Section */}
                     <div className="flex items-center gap-2 mt-6 mb-2">
@@ -1302,7 +1484,7 @@ export default function ProductionMasters() {
                             <div className="rounded-md border">
                                 {renderTable()}
                             </div>
-                            
+
                             {/* Pagination */}
                             <div className="flex justify-between items-center px-1 mt-4">
                                 <div className="text-sm text-muted-foreground">
@@ -1356,8 +1538,7 @@ export default function ProductionMasters() {
                             } else if (selectedMaster === "Operations") {
                                 return !formData.code || !formData.name ||
                                     (!formData.inputs || formData.inputs.length === 0) ||
-                                    (!formData.outputs || formData.outputs.length === 0) ||
-                                    (!formData.machines || formData.machines.length === 0);
+                                    (!formData.outputs || formData.outputs.length === 0);
                             }
                             return false;
                         })()}>

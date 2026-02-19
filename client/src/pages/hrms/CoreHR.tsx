@@ -79,6 +79,11 @@ interface ExtendedEmployee {
     shift?: string; // UI Only
 
     documents?: any[]; // UI Only
+
+    // System Access Associations
+    assignedWorkCenters?: string[]; // IDs
+    assignedWarehouses?: string[]; // IDs
+    assignedOperations?: string[]; // IDs
 }
 
 // --- Reusable Searchable Combobox Component ---
@@ -171,11 +176,31 @@ const shiftOptions: string[] = ["General Shift (9 AM - 6 PM)", "Night Shift (10 
 const employmentTypeOptions: string[] = ["Full Time", "Part Time", "Contract", "Intern"];
 const employmentStatusOptions: string[] = ["Active", "Inactive", "Terminated"];
 const probationPeriodOptions: Array<{ value: string; label: string }> = [
-  { value: "3", label: "3 Months" },
-  { value: "6", label: "6 Months" },
-  { value: "12", label: "12 Months" }
+    { value: "3", label: "3 Months" },
+    { value: "6", label: "6 Months" },
+    { value: "12", label: "12 Months" }
 ];
 const genderOptions: string[] = ["Male", "Female", "Other"];
+
+// --- Mock Data for System Access ---
+// Copied from respective master files to support dropdowns
+const initialWorkCenters = [
+    { id: 1, name: "Assembly Line 1" },
+    { id: 2, name: "Packaging Unit" },
+];
+
+const initialWarehouses = [
+    { id: 1, name: "Main Warehouse" },
+    { id: 2, name: "Cold Storage" },
+];
+
+const initialOperations = [
+    { id: 1, name: "Molding" },
+    { id: 2, name: "Cutting" },
+    { id: 3, name: "Welding" },
+    { id: 4, name: "Painting" },
+];
+
 
 // --- Components ---
 
@@ -252,7 +277,7 @@ export default function CoreHR() {
         { id: "dept-002", name: "Human Resources", code: "HR" },
         { id: "dept-003", name: "Finance", code: "FIN" }
     ];
-    
+
     const createEmployeeMutation = {
         mutateAsync: async (payload: any) => {
             // ⚠️ UNNECESSARY: Console log for debugging - remove in production
@@ -483,6 +508,9 @@ export default function CoreHR() {
                     newData.username = "";
                     newData.password = "";
                     newData.selectedRoles = [];
+                    newData.assignedWorkCenters = [];
+                    newData.assignedWarehouses = [];
+                    newData.assignedOperations = [];
                 }
             }
 
@@ -1010,7 +1038,7 @@ export default function CoreHR() {
             "Designation",
             "Grade/Level",
             "Reporting Manager",
-            "Work Location",
+            "Location",
             "Shift"
         ];
 
@@ -1200,7 +1228,7 @@ export default function CoreHR() {
             shift: "",
 
             documents: [],
-            
+
             // System Access fields
             enableLoginAccess: false,
             username: "",
@@ -1429,7 +1457,7 @@ export default function CoreHR() {
                 if (formData.enableLoginAccess && formData.username && formData.password && formData.selectedRoles && formData.selectedRoles.length > 0) {
                     const savedUsers = localStorage.getItem("system_users");
                     const users = savedUsers ? JSON.parse(savedUsers) : [];
-                    
+
                     const newUser = {
                         id: `user_${Date.now()}`,
                         employeeId: newEmployee.id,
@@ -1439,10 +1467,10 @@ export default function CoreHR() {
                         createdAt: new Date().toISOString(),
                         isActive: true
                     };
-                    
+
                     users.push(newUser);
                     localStorage.setItem("system_users", JSON.stringify(users));
-                    
+
                     toast({
                         title: "User Account Created",
                         description: `Login credentials created for ${formData.username}`,
@@ -1466,13 +1494,13 @@ export default function CoreHR() {
             } else if (viewMode === 'edit' && editingId) {
                 console.log('🔄 Updating existing employee with ID:', editingId);
                 await updateEmployeeMutation.mutateAsync({ id: editingId, data: payload });
-                
+
                 // Update user account if it exists and roles changed
                 if (formData.enableLoginAccess && formData.selectedRoles && formData.selectedRoles.length > 0) {
                     const savedUsers = localStorage.getItem("system_users");
                     const users = savedUsers ? JSON.parse(savedUsers) : [];
                     const userIndex = users.findIndex((u: any) => u.employeeId === editingId);
-                    
+
                     if (userIndex !== -1) {
                         // Update existing user roles and password if provided
                         users[userIndex].roles = formData.selectedRoles;
@@ -1491,10 +1519,10 @@ export default function CoreHR() {
                             createdAt: new Date().toISOString(),
                             isActive: true
                         };
-                        
+
                         users.push(newUser);
                         localStorage.setItem("system_users", JSON.stringify(users));
-                        
+
                         toast({
                             title: "User Account Created",
                             description: `Login credentials created for ${formData.username}`,
@@ -1502,7 +1530,7 @@ export default function CoreHR() {
                         });
                     }
                 }
-                
+
                 toast({
                     title: "Employee Updated",
                     description: "Employee information updated successfully.",
@@ -1843,29 +1871,29 @@ export default function CoreHR() {
 
                         <div className="p-4 border-t bg-muted/20 flex justify-end gap-3 shrink-0">
                             {(isEditing || viewMode === 'add') && (
-                                <Button 
-                                    variant="outline" 
+                                <Button
+                                    variant="outline"
                                     onClick={handleClear}
                                     disabled={activeTab === 'docs'}
                                 >
                                     Clear
                                 </Button>
                             )}
-                            
+
                             {/* Save & Next button - show for Personal and Employment tabs only */}
                             {(isEditing || viewMode === 'add') && (activeTab === 'personal' || activeTab === 'job') && (
                                 <Button
                                     onClick={() => handleSave(false)}
                                     disabled={!isCurrentTabValid()}
                                     className={`${isCurrentTabValid()
-                                            ? "bg-blue-600 hover:bg-blue-700 text-white"
-                                            : "bg-gray-300 text-gray-500 cursor-not-allowed"
+                                        ? "bg-blue-600 hover:bg-blue-700 text-white"
+                                        : "bg-gray-300 text-gray-500 cursor-not-allowed"
                                         }`}
                                 >
                                     Save & Next
                                 </Button>
                             )}
-                            
+
                             {/* Save & Next button for Documents tab - navigates to System Access */}
                             {(isEditing || viewMode === 'add') && activeTab === 'docs' && (
                                 <Button
@@ -1875,8 +1903,8 @@ export default function CoreHR() {
                                     }}
                                     disabled={!isCurrentTabValid()}
                                     className={`${isCurrentTabValid()
-                                            ? "bg-blue-600 hover:bg-blue-700 text-white"
-                                            : "bg-gray-300 text-gray-500 cursor-not-allowed"
+                                        ? "bg-blue-600 hover:bg-blue-700 text-white"
+                                        : "bg-gray-300 text-gray-500 cursor-not-allowed"
                                         }`}
                                 >
                                     Save & Next
@@ -1889,8 +1917,8 @@ export default function CoreHR() {
                                     onClick={() => handleSave(true)}
                                     disabled={!areAllTabsValid()}
                                     className={`${areAllTabsValid()
-                                            ? "bg-blue-600 hover:bg-blue-700 text-white"
-                                            : "bg-gray-300 text-gray-500 cursor-not-allowed"
+                                        ? "bg-blue-600 hover:bg-blue-700 text-white"
+                                        : "bg-gray-300 text-gray-500 cursor-not-allowed"
                                         }`}
                                 >
                                     {viewMode === 'edit' ? 'Update Info' : 'Save Employee'}
@@ -1949,8 +1977,8 @@ export default function CoreHR() {
                         {/* Validation Message Area */}
                         {validationMessage && (
                             <div className={`p-3 rounded-md text-sm ${validationMessage.includes('✅')
-                                    ? 'bg-green-50 border border-green-200 text-green-800'
-                                    : 'bg-red-50 border border-red-200 text-red-800'
+                                ? 'bg-green-50 border border-green-200 text-green-800'
+                                : 'bg-red-50 border border-red-200 text-red-800'
                                 }`}>
                                 {validationMessage}
                             </div>
@@ -2357,7 +2385,7 @@ function EmploymentDetailsForm({ data, updateData, departments, employees, readO
             if (doj) {
                 const exitDateOnly = new Date(exitDate.getFullYear(), exitDate.getMonth(), exitDate.getDate());
                 const dojDateOnly = new Date(doj.getFullYear(), doj.getMonth(), doj.getDate());
-                
+
                 if (exitDateOnly <= dojDateOnly) {
                     return "Exit Date cannot be earlier than Date of Joining";
                 }
@@ -2367,7 +2395,7 @@ function EmploymentDetailsForm({ data, updateData, departments, employees, readO
             if (confirmationDate) {
                 const exitDateOnly = new Date(exitDate.getFullYear(), exitDate.getMonth(), exitDate.getDate());
                 const confirmDateOnly = new Date(confirmationDate.getFullYear(), confirmationDate.getMonth(), confirmationDate.getDate());
-                
+
                 if (exitDateOnly <= confirmDateOnly) {
                     return "Exit Date cannot be earlier than Confirmation Date";
                 }
@@ -2417,7 +2445,7 @@ function EmploymentDetailsForm({ data, updateData, departments, employees, readO
             // Clear/Auto-fix behavior when DOJ changes
             if (field === "dateOfJoining" && value) {
                 const dojDate = new Date(value.getFullYear(), value.getMonth(), value.getDate());
-                
+
                 // Clear Confirmation Date if it becomes invalid
                 if (newData.confirmationDate) {
                     const confirmDate = new Date(newData.confirmationDate.getFullYear(), newData.confirmationDate.getMonth(), newData.confirmationDate.getDate());
@@ -2430,7 +2458,7 @@ function EmploymentDetailsForm({ data, updateData, departments, employees, readO
                         });
                     }
                 }
-                
+
                 // Clear Exit Date if it becomes invalid
                 if (newData.exitDate) {
                     const exitDate = new Date(newData.exitDate.getFullYear(), newData.exitDate.getMonth(), newData.exitDate.getDate());
@@ -2449,7 +2477,7 @@ function EmploymentDetailsForm({ data, updateData, departments, employees, readO
             if (field === "confirmationDate" && value && newData.exitDate) {
                 const confirmDate = new Date(value.getFullYear(), value.getMonth(), value.getDate());
                 const exitDate = new Date(newData.exitDate.getFullYear(), newData.exitDate.getMonth(), newData.exitDate.getDate());
-                
+
                 if (exitDate <= confirmDate) {
                     newData.exitDate = undefined;
                     toast({
@@ -2614,9 +2642,9 @@ function EmploymentDetailsForm({ data, updateData, departments, employees, readO
                     <SearchableSelect
                         label="Reporting Manager"
                         required
-                        value={data.reportingManager ? 
-                            employees?.find((e: any) => e.id === data.reportingManager) ? 
-                                `${employees.find((e: any) => e.id === data.reportingManager).firstName} ${employees.find((e: any) => e.id === data.reportingManager).lastName}` 
+                        value={data.reportingManager ?
+                            employees?.find((e: any) => e.id === data.reportingManager) ?
+                                `${employees.find((e: any) => e.id === data.reportingManager).firstName} ${employees.find((e: any) => e.id === data.reportingManager).lastName}`
                                 : data.reportingManager
                             : ""}
                         options={employees?.map((e: any) => `${e.firstName} ${e.lastName}`) || []}
@@ -2627,7 +2655,7 @@ function EmploymentDetailsForm({ data, updateData, departments, employees, readO
                         disabled={readOnly}
                     />
                     <SearchableSelect
-                        label="Work Location"
+                        label="Location"
                         required
                         value={data.workLocation}
                         options={workLocationOptions}
@@ -3306,7 +3334,16 @@ function SystemAccessForm({ data, updateData, readOnly }: any) {
     const [selectedRoles, setSelectedRoles] = useState<string[]>(data.selectedRoles || []);
     const [roleDropdownOpen, setRoleDropdownOpen] = useState(false);
     const [userExists, setUserExists] = useState(false);
-    
+
+    // System Access Association State
+    const [selectedWorkCenterId, setSelectedWorkCenterId] = useState("");
+    const [selectedWarehouseId, setSelectedWarehouseId] = useState("");
+    const [selectedOperationId, setSelectedOperationId] = useState("");
+
+    const [isWorkCenterOpen, setIsWorkCenterOpen] = useState(false);
+    const [isWarehouseOpen, setIsWarehouseOpen] = useState(false);
+    const [isOperationOpen, setIsOperationOpen] = useState(false);
+
     // Mock roles - in production, fetch from Users & Roles module
     const availableRoles = [
         { id: "admin", name: "Administrator" },
@@ -3315,7 +3352,7 @@ function SystemAccessForm({ data, updateData, readOnly }: any) {
         { id: "hr", name: "HR Staff" },
         { id: "accountant", name: "Accountant" }
     ];
-    
+
     // Check if user account already exists (for edit mode)
     useEffect(() => {
         if (data.id) {
@@ -3323,7 +3360,7 @@ function SystemAccessForm({ data, updateData, readOnly }: any) {
             const savedUsers = localStorage.getItem("system_users");
             const users = savedUsers ? JSON.parse(savedUsers) : [];
             const existingUser = users.find((u: any) => u.employeeId === data.id);
-            
+
             if (existingUser) {
                 setUserExists(true);
                 setEnableLoginAccess(true);
@@ -3335,7 +3372,7 @@ function SystemAccessForm({ data, updateData, readOnly }: any) {
             }
         }
     }, [data.id]);
-    
+
     // Generate username from employee name
     useEffect(() => {
         if (enableLoginAccess && !userExists && data.firstName && data.lastName) {
@@ -3343,7 +3380,7 @@ function SystemAccessForm({ data, updateData, readOnly }: any) {
             setUsername(generatedUsername);
         }
     }, [enableLoginAccess, data.firstName, data.lastName, userExists]);
-    
+
     // Update parent form data
     useEffect(() => {
         updateData((prev: any) => ({
@@ -3354,7 +3391,7 @@ function SystemAccessForm({ data, updateData, readOnly }: any) {
             selectedRoles
         }));
     }, [enableLoginAccess, username, password, selectedRoles]);
-    
+
     const handleToggleAccess = (checked: boolean) => {
         setEnableLoginAccess(checked);
         if (!checked) {
@@ -3367,39 +3404,363 @@ function SystemAccessForm({ data, updateData, readOnly }: any) {
             setSelectedRoles([]);
         }
     };
-    
+
     const handleAddRole = (roleId: string) => {
         if (!roleId) return;
-        
+
         // Add role to list (duplicate check handled by UI)
         setSelectedRoles(prev => [...prev, roleId]);
     };
-    
+
     const handleDeleteRole = (roleId: string) => {
         setSelectedRoles(prev => prev.filter(r => r !== roleId));
     };
-    
+
     const getRoleName = (roleId: string) => {
         const role = availableRoles.find(r => r.id === roleId);
         return role ? role.name : roleId;
     };
-    
+
     const handleResetPassword = () => {
         setPassword("");
-        
+
         toast({
             title: "Password Reset",
             description: "Please enter a new password for this user.",
             className: "bg-blue-50 border-blue-200 text-blue-900"
         });
     };
-    
+
     return (
         <div className="space-y-3">
+            {/* System Access Associations */}
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
+                {/* Work Centers */}
+                <div className="space-y-3">
+                    <Label>Assigned Work Centers</Label>
+                    <div className="flex gap-2">
+                        <Popover open={isWorkCenterOpen} onOpenChange={setIsWorkCenterOpen}>
+                            <PopoverTrigger asChild>
+                                <Button
+                                    variant="outline"
+                                    role="combobox"
+                                    aria-expanded={isWorkCenterOpen}
+                                    className="w-full justify-between"
+                                    disabled={readOnly}
+                                >
+                                    {selectedWorkCenterId
+                                        ? initialWorkCenters.find((wc) => wc.id.toString() === selectedWorkCenterId)?.name
+                                        : "Select Work Center..."}
+                                    <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
+                                </Button>
+                            </PopoverTrigger>
+                            <PopoverContent className="p-0" style={{ width: "var(--radix-popover-trigger-width)" }}>
+                                <Command>
+                                    <CommandInputBorderless placeholder="Search work center..." />
+                                    <CommandList className="max-h-[200px] overflow-y-auto">
+                                        <CommandEmpty>No work center found.</CommandEmpty>
+                                        <CommandGroup>
+                                            {initialWorkCenters.map((wc) => {
+                                                const isAdded = data.assignedWorkCenters?.includes(wc.id.toString());
+                                                return (
+                                                    <CommandItem
+                                                        key={wc.id}
+                                                        value={wc.name}
+                                                        onSelect={() => {
+                                                            if (!isAdded) {
+                                                                setSelectedWorkCenterId(wc.id.toString());
+                                                                setIsWorkCenterOpen(false);
+                                                            }
+                                                        }}
+                                                        disabled={isAdded}
+                                                        className={isAdded ? "opacity-50 cursor-not-allowed" : ""}
+                                                    >
+                                                        <Check
+                                                            className={cn(
+                                                                "mr-2 h-4 w-4",
+                                                                selectedWorkCenterId === wc.id.toString() ? "opacity-100" : "opacity-0"
+                                                            )}
+                                                        />
+                                                        {wc.name}
+                                                    </CommandItem>
+                                                );
+                                            })}
+                                        </CommandGroup>
+                                    </CommandList>
+                                </Command>
+                            </PopoverContent>
+                        </Popover>
+                        <Button
+                            onClick={() => {
+                                if (selectedWorkCenterId) {
+                                    const current = data.assignedWorkCenters || [];
+                                    updateData((prev: any) => ({ ...prev, assignedWorkCenters: [...current, selectedWorkCenterId] }));
+                                    setSelectedWorkCenterId("");
+                                }
+                            }}
+                            disabled={!selectedWorkCenterId || readOnly}
+                        >
+                            <Plus className="h-4 w-4" />
+                        </Button>
+                    </div>
+
+                    {/* Work Centers List */}
+                    <div className="border rounded-md overflow-hidden">
+                        <Table>
+                            <TableBody>
+                                {(!data.assignedWorkCenters || data.assignedWorkCenters.length === 0) ? (
+                                    <TableRow>
+                                        <TableCell className="text-center py-3 text-xs text-muted-foreground">
+                                            No work centers assigned
+                                        </TableCell>
+                                    </TableRow>
+                                ) : (
+                                    data.assignedWorkCenters.map((id: string) => (
+                                        <TableRow key={id}>
+                                            <TableCell className="py-2 text-sm">
+                                                {initialWorkCenters.find(w => w.id.toString() === id)?.name}
+                                            </TableCell>
+                                            <TableCell className="py-2 w-[40px]">
+                                                <Button
+                                                    variant="ghost"
+                                                    size="icon"
+                                                    className="h-6 w-6 text-destructive"
+                                                    onClick={() => {
+                                                        const current = data.assignedWorkCenters || [];
+                                                        updateData((prev: any) => ({ ...prev, assignedWorkCenters: current.filter((c: string) => c !== id) }));
+                                                    }}
+                                                    disabled={readOnly}
+                                                >
+                                                    <Trash2 className="h-3 w-3" />
+                                                </Button>
+                                            </TableCell>
+                                        </TableRow>
+                                    ))
+                                )}
+                            </TableBody>
+                        </Table>
+                    </div>
+                </div>
+
+                {/* Warehouses */}
+                <div className="space-y-3">
+                    <Label>Assigned Warehouses</Label>
+                    <div className="flex gap-2">
+                        <Popover open={isWarehouseOpen} onOpenChange={setIsWarehouseOpen}>
+                            <PopoverTrigger asChild>
+                                <Button
+                                    variant="outline"
+                                    role="combobox"
+                                    aria-expanded={isWarehouseOpen}
+                                    className="w-full justify-between"
+                                    disabled={readOnly}
+                                >
+                                    {selectedWarehouseId
+                                        ? initialWarehouses.find((w) => w.id.toString() === selectedWarehouseId)?.name
+                                        : "Select Warehouse..."}
+                                    <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
+                                </Button>
+                            </PopoverTrigger>
+                            <PopoverContent className="p-0" style={{ width: "var(--radix-popover-trigger-width)" }}>
+                                <Command>
+                                    <CommandInputBorderless placeholder="Search warehouse..." />
+                                    <CommandList className="max-h-[200px] overflow-y-auto">
+                                        <CommandEmpty>No warehouse found.</CommandEmpty>
+                                        <CommandGroup>
+                                            {initialWarehouses.map((w) => {
+                                                const isAdded = data.assignedWarehouses?.includes(w.id.toString());
+                                                return (
+                                                    <CommandItem
+                                                        key={w.id}
+                                                        value={w.name}
+                                                        onSelect={() => {
+                                                            if (!isAdded) {
+                                                                setSelectedWarehouseId(w.id.toString());
+                                                                setIsWarehouseOpen(false);
+                                                            }
+                                                        }}
+                                                        disabled={isAdded}
+                                                        className={isAdded ? "opacity-50 cursor-not-allowed" : ""}
+                                                    >
+                                                        <Check
+                                                            className={cn(
+                                                                "mr-2 h-4 w-4",
+                                                                selectedWarehouseId === w.id.toString() ? "opacity-100" : "opacity-0"
+                                                            )}
+                                                        />
+                                                        {w.name}
+                                                    </CommandItem>
+                                                );
+                                            })}
+                                        </CommandGroup>
+                                    </CommandList>
+                                </Command>
+                            </PopoverContent>
+                        </Popover>
+                        <Button
+                            onClick={() => {
+                                if (selectedWarehouseId) {
+                                    const current = data.assignedWarehouses || [];
+                                    updateData((prev: any) => ({ ...prev, assignedWarehouses: [...current, selectedWarehouseId] }));
+                                    setSelectedWarehouseId("");
+                                }
+                            }}
+                            disabled={!selectedWarehouseId || readOnly}
+                        >
+                            <Plus className="h-4 w-4" />
+                        </Button>
+                    </div>
+
+                    {/* Warehouses List */}
+                    <div className="border rounded-md overflow-hidden">
+                        <Table>
+                            <TableBody>
+                                {(!data.assignedWarehouses || data.assignedWarehouses.length === 0) ? (
+                                    <TableRow>
+                                        <TableCell className="text-center py-3 text-xs text-muted-foreground">
+                                            No warehouses assigned
+                                        </TableCell>
+                                    </TableRow>
+                                ) : (
+                                    data.assignedWarehouses.map((id: string) => (
+                                        <TableRow key={id}>
+                                            <TableCell className="py-2 text-sm">
+                                                {initialWarehouses.find(w => w.id.toString() === id)?.name}
+                                            </TableCell>
+                                            <TableCell className="py-2 w-[40px]">
+                                                <Button
+                                                    variant="ghost"
+                                                    size="icon"
+                                                    className="h-6 w-6 text-destructive"
+                                                    onClick={() => {
+                                                        const current = data.assignedWarehouses || [];
+                                                        updateData((prev: any) => ({ ...prev, assignedWarehouses: current.filter((c: string) => c !== id) }));
+                                                    }}
+                                                    disabled={readOnly}
+                                                >
+                                                    <Trash2 className="h-3 w-3" />
+                                                </Button>
+                                            </TableCell>
+                                        </TableRow>
+                                    ))
+                                )}
+                            </TableBody>
+                        </Table>
+                    </div>
+                </div>
+
+                {/* Operations */}
+                <div className="space-y-3">
+                    <Label>Assigned Operations</Label>
+                    <div className="flex gap-2">
+                        <Popover open={isOperationOpen} onOpenChange={setIsOperationOpen}>
+                            <PopoverTrigger asChild>
+                                <Button
+                                    variant="outline"
+                                    role="combobox"
+                                    aria-expanded={isOperationOpen}
+                                    className="w-full justify-between"
+                                    disabled={readOnly}
+                                >
+                                    {selectedOperationId
+                                        ? initialOperations.find((op) => op.id.toString() === selectedOperationId)?.name
+                                        : "Select Operation..."}
+                                    <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
+                                </Button>
+                            </PopoverTrigger>
+                            <PopoverContent className="p-0" style={{ width: "var(--radix-popover-trigger-width)" }}>
+                                <Command>
+                                    <CommandInputBorderless placeholder="Search operation..." />
+                                    <CommandList className="max-h-[200px] overflow-y-auto">
+                                        <CommandEmpty>No operation found.</CommandEmpty>
+                                        <CommandGroup>
+                                            {initialOperations.map((op) => {
+                                                const isAdded = data.assignedOperations?.includes(op.id.toString());
+                                                return (
+                                                    <CommandItem
+                                                        key={op.id}
+                                                        value={op.name}
+                                                        onSelect={() => {
+                                                            if (!isAdded) {
+                                                                setSelectedOperationId(op.id.toString());
+                                                                setIsOperationOpen(false);
+                                                            }
+                                                        }}
+                                                        disabled={isAdded}
+                                                        className={isAdded ? "opacity-50 cursor-not-allowed" : ""}
+                                                    >
+                                                        <Check
+                                                            className={cn(
+                                                                "mr-2 h-4 w-4",
+                                                                selectedOperationId === op.id.toString() ? "opacity-100" : "opacity-0"
+                                                            )}
+                                                        />
+                                                        {op.name}
+                                                    </CommandItem>
+                                                );
+                                            })}
+                                        </CommandGroup>
+                                    </CommandList>
+                                </Command>
+                            </PopoverContent>
+                        </Popover>
+                        <Button
+                            onClick={() => {
+                                if (selectedOperationId) {
+                                    const current = data.assignedOperations || [];
+                                    updateData((prev: any) => ({ ...prev, assignedOperations: [...current, selectedOperationId] }));
+                                    setSelectedOperationId("");
+                                }
+                            }}
+                            disabled={!selectedOperationId || readOnly}
+                        >
+                            <Plus className="h-4 w-4" />
+                        </Button>
+                    </div>
+
+                    {/* Operations List */}
+                    <div className="border rounded-md overflow-hidden">
+                        <Table>
+                            <TableBody>
+                                {(!data.assignedOperations || data.assignedOperations.length === 0) ? (
+                                    <TableRow>
+                                        <TableCell className="text-center py-3 text-xs text-muted-foreground">
+                                            No operations assigned
+                                        </TableCell>
+                                    </TableRow>
+                                ) : (
+                                    data.assignedOperations.map((id: string) => (
+                                        <TableRow key={id}>
+                                            <TableCell className="py-2 text-sm">
+                                                {initialOperations.find(op => op.id.toString() === id)?.name}
+                                            </TableCell>
+                                            <TableCell className="py-2 w-[40px]">
+                                                <Button
+                                                    variant="ghost"
+                                                    size="icon"
+                                                    className="h-6 w-6 text-destructive"
+                                                    onClick={() => {
+                                                        const current = data.assignedOperations || [];
+                                                        updateData((prev: any) => ({ ...prev, assignedOperations: current.filter((c: string) => c !== id) }));
+                                                    }}
+                                                    disabled={readOnly}
+                                                >
+                                                    <Trash2 className="h-3 w-3" />
+                                                </Button>
+                                            </TableCell>
+                                        </TableRow>
+                                    ))
+                                )}
+                            </TableBody>
+                        </Table>
+                    </div>
+                </div>
+            </div>
+
             <div className="flex justify-between items-center">
                 <h4 className="font-semibold text-primary text-sm">System Access Configuration</h4>
             </div>
-            
+
             {/* Enable Login Access Toggle */}
             <div className="flex items-center justify-between p-2.5 border rounded-md bg-muted/20">
                 <div className="space-y-0">
@@ -3414,7 +3775,7 @@ function SystemAccessForm({ data, updateData, readOnly }: any) {
                     disabled={readOnly || userExists}
                 />
             </div>
-            
+
             {/* Show fields only when toggle is ON */}
             {enableLoginAccess && (
                 <div className="space-y-2 p-2.5 border rounded-md bg-card">
@@ -3437,7 +3798,7 @@ function SystemAccessForm({ data, updateData, readOnly }: any) {
                             </p>
                         )}
                     </div>
-                    
+
                     {/* Password - Manual Entry with View Toggle */}
                     <div className="space-y-0.5">
                         <Label htmlFor="password" className="text-[11px] font-medium">
@@ -3470,7 +3831,7 @@ function SystemAccessForm({ data, updateData, readOnly }: any) {
                             </Button>
                         </div>
                     </div>
-                    
+
                     {/* Reset Password button - only show for existing users */}
                     {userExists && !readOnly && (
                         <div className="pt-1">
@@ -3486,7 +3847,7 @@ function SystemAccessForm({ data, updateData, readOnly }: any) {
                             </Button>
                         </div>
                     )}
-                    
+
                     {/* Role Selection Dropdown */}
                     <div className="space-y-0.5">
                         <Label className="text-[11px] font-medium block">
@@ -3548,7 +3909,7 @@ function SystemAccessForm({ data, updateData, readOnly }: any) {
                             </Popover>
                         </div>
                     </div>
-                    
+
                     {/* Selected Roles Table - ALWAYS VISIBLE but empty when toggle OFF */}
                     <div className="space-y-0.5">
                         <Label className="text-[11px] font-medium">Selected Roles</Label>
@@ -3594,7 +3955,9 @@ function SystemAccessForm({ data, updateData, readOnly }: any) {
                     </div>
                 </div>
             )}
-            
+
+
+
             {!enableLoginAccess && (
                 <div className="text-center py-6 text-muted-foreground">
                     <p className="text-sm">Login access is disabled for this employee.</p>

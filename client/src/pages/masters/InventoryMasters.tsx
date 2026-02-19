@@ -59,10 +59,13 @@ const MASTER_SLUGS: Record<MasterType, string> = {
 
 const MASTER_TYPES: MasterType[] = ["Warehouses", "Bins"];
 
+const LOCATIONS = ["Plant A", "Plant B", "Plant C", "Plant D"];
+
 interface Warehouse {
     id: number;
     code: string;
     name: string;
+    location: string;
     status: "Active" | "Inactive";
     address_notes?: string;
     created_at?: string;
@@ -84,8 +87,8 @@ interface Bin {
 // --- Mock Data ---
 
 const initialWarehouses: Warehouse[] = [
-    { id: 1, code: "WH01", name: "Main Warehouse", status: "Active", address_notes: "Building A, Industrial Estate" },
-    { id: 2, code: "WH02", name: "Cold Storage", status: "Active", address_notes: "Zone B, Temperature Controlled" },
+    { id: 1, code: "WH01", name: "Main Warehouse", location: "Plant A", status: "Active", address_notes: "Building A, Industrial Estate" },
+    { id: 2, code: "WH02", name: "Cold Storage", location: "Plant B", status: "Active", address_notes: "Zone B, Temperature Controlled" },
 ];
 
 const initialBins: Bin[] = [
@@ -237,7 +240,7 @@ export default function InventoryMasters() {
         const now = new Date().toISOString();
 
         if (selectedMaster === "Warehouses") {
-            if (!formData.code || !formData.name || !formData.status) {
+            if (!formData.code || !formData.name || !formData.status || !formData.location) {
                 toast({ variant: "destructive", title: "Validation Error", description: "Please fill all required fields." });
                 return;
             }
@@ -293,6 +296,7 @@ export default function InventoryMasters() {
                         <TableRow className="bg-muted/50">
                             <TableHead>Code</TableHead>
                             <TableHead>Warehouse Name</TableHead>
+                            <TableHead>Location</TableHead>
                             <TableHead>Status</TableHead>
                             <TableHead className="text-right">Actions</TableHead>
                         </TableRow>
@@ -300,7 +304,7 @@ export default function InventoryMasters() {
                     <TableBody>
                         {paginatedData.length === 0 ? (
                             <TableRow>
-                                <TableCell colSpan={4} className="h-24 text-center text-muted-foreground">
+                                <TableCell colSpan={5} className="h-24 text-center text-muted-foreground">
                                     No warehouses found.
                                 </TableCell>
                             </TableRow>
@@ -309,6 +313,7 @@ export default function InventoryMasters() {
                                 <TableRow key={item.id}>
                                     <TableCell className="font-medium">{item.code}</TableCell>
                                     <TableCell>{item.name}</TableCell>
+                                    <TableCell>{item.location}</TableCell>
                                     <TableCell><StatusBadge status={item.status} /></TableCell>
                                     <TableCell className="text-right">
                                         <div className="flex justify-end gap-2">
@@ -388,6 +393,17 @@ export default function InventoryMasters() {
                         <div className="space-y-2">
                             <Label htmlFor="name">Warehouse Name *</Label>
                             <Input id="name" value={formData.name || ""} onChange={e => setFormData({ ...formData, name: e.target.value })} placeholder="Main Warehouse" />
+                        </div>
+                        <div className="space-y-2">
+                            <Label>Location *</Label>
+                            <Select value={formData.location} onValueChange={(val: any) => setFormData({ ...formData, location: val })}>
+                                <SelectTrigger><SelectValue placeholder="Select Location" /></SelectTrigger>
+                                <SelectContent>
+                                    {LOCATIONS.map(loc => (
+                                        <SelectItem key={loc} value={loc}>{loc}</SelectItem>
+                                    ))}
+                                </SelectContent>
+                            </Select>
                         </div>
                         <div className="space-y-2">
                             <Label>Status *</Label>
