@@ -1038,7 +1038,7 @@ export default function CoreHR() {
             "Designation",
             "Grade/Level",
             "Reporting Manager",
-            "Location",
+            "Work Location",
             "Shift"
         ];
 
@@ -3433,330 +3433,6 @@ function SystemAccessForm({ data, updateData, readOnly }: any) {
 
     return (
         <div className="space-y-3">
-            {/* System Access Associations */}
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
-                {/* Work Centers */}
-                <div className="space-y-3">
-                    <Label>Assigned Work Centers</Label>
-                    <div className="flex gap-2">
-                        <Popover open={isWorkCenterOpen} onOpenChange={setIsWorkCenterOpen}>
-                            <PopoverTrigger asChild>
-                                <Button
-                                    variant="outline"
-                                    role="combobox"
-                                    aria-expanded={isWorkCenterOpen}
-                                    className="w-full justify-between"
-                                    disabled={readOnly}
-                                >
-                                    {selectedWorkCenterId
-                                        ? initialWorkCenters.find((wc) => wc.id.toString() === selectedWorkCenterId)?.name
-                                        : "Select Work Center..."}
-                                    <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
-                                </Button>
-                            </PopoverTrigger>
-                            <PopoverContent className="p-0" style={{ width: "var(--radix-popover-trigger-width)" }}>
-                                <Command>
-                                    <CommandInputBorderless placeholder="Search work center..." />
-                                    <CommandList className="max-h-[200px] overflow-y-auto">
-                                        <CommandEmpty>No work center found.</CommandEmpty>
-                                        <CommandGroup>
-                                            {initialWorkCenters.map((wc) => {
-                                                const isAdded = data.assignedWorkCenters?.includes(wc.id.toString());
-                                                return (
-                                                    <CommandItem
-                                                        key={wc.id}
-                                                        value={wc.name}
-                                                        onSelect={() => {
-                                                            if (!isAdded) {
-                                                                setSelectedWorkCenterId(wc.id.toString());
-                                                                setIsWorkCenterOpen(false);
-                                                            }
-                                                        }}
-                                                        disabled={isAdded}
-                                                        className={isAdded ? "opacity-50 cursor-not-allowed" : ""}
-                                                    >
-                                                        <Check
-                                                            className={cn(
-                                                                "mr-2 h-4 w-4",
-                                                                selectedWorkCenterId === wc.id.toString() ? "opacity-100" : "opacity-0"
-                                                            )}
-                                                        />
-                                                        {wc.name}
-                                                    </CommandItem>
-                                                );
-                                            })}
-                                        </CommandGroup>
-                                    </CommandList>
-                                </Command>
-                            </PopoverContent>
-                        </Popover>
-                        <Button
-                            onClick={() => {
-                                if (selectedWorkCenterId) {
-                                    const current = data.assignedWorkCenters || [];
-                                    updateData((prev: any) => ({ ...prev, assignedWorkCenters: [...current, selectedWorkCenterId] }));
-                                    setSelectedWorkCenterId("");
-                                }
-                            }}
-                            disabled={!selectedWorkCenterId || readOnly}
-                        >
-                            <Plus className="h-4 w-4" />
-                        </Button>
-                    </div>
-
-                    {/* Work Centers List */}
-                    <div className="border rounded-md overflow-hidden">
-                        <Table>
-                            <TableBody>
-                                {(!data.assignedWorkCenters || data.assignedWorkCenters.length === 0) ? (
-                                    <TableRow>
-                                        <TableCell className="text-center py-3 text-xs text-muted-foreground">
-                                            No work centers assigned
-                                        </TableCell>
-                                    </TableRow>
-                                ) : (
-                                    data.assignedWorkCenters.map((id: string) => (
-                                        <TableRow key={id}>
-                                            <TableCell className="py-2 text-sm">
-                                                {initialWorkCenters.find(w => w.id.toString() === id)?.name}
-                                            </TableCell>
-                                            <TableCell className="py-2 w-[40px]">
-                                                <Button
-                                                    variant="ghost"
-                                                    size="icon"
-                                                    className="h-6 w-6 text-destructive"
-                                                    onClick={() => {
-                                                        const current = data.assignedWorkCenters || [];
-                                                        updateData((prev: any) => ({ ...prev, assignedWorkCenters: current.filter((c: string) => c !== id) }));
-                                                    }}
-                                                    disabled={readOnly}
-                                                >
-                                                    <Trash2 className="h-3 w-3" />
-                                                </Button>
-                                            </TableCell>
-                                        </TableRow>
-                                    ))
-                                )}
-                            </TableBody>
-                        </Table>
-                    </div>
-                </div>
-
-                {/* Warehouses */}
-                <div className="space-y-3">
-                    <Label>Assigned Warehouses</Label>
-                    <div className="flex gap-2">
-                        <Popover open={isWarehouseOpen} onOpenChange={setIsWarehouseOpen}>
-                            <PopoverTrigger asChild>
-                                <Button
-                                    variant="outline"
-                                    role="combobox"
-                                    aria-expanded={isWarehouseOpen}
-                                    className="w-full justify-between"
-                                    disabled={readOnly}
-                                >
-                                    {selectedWarehouseId
-                                        ? initialWarehouses.find((w) => w.id.toString() === selectedWarehouseId)?.name
-                                        : "Select Warehouse..."}
-                                    <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
-                                </Button>
-                            </PopoverTrigger>
-                            <PopoverContent className="p-0" style={{ width: "var(--radix-popover-trigger-width)" }}>
-                                <Command>
-                                    <CommandInputBorderless placeholder="Search warehouse..." />
-                                    <CommandList className="max-h-[200px] overflow-y-auto">
-                                        <CommandEmpty>No warehouse found.</CommandEmpty>
-                                        <CommandGroup>
-                                            {initialWarehouses.map((w) => {
-                                                const isAdded = data.assignedWarehouses?.includes(w.id.toString());
-                                                return (
-                                                    <CommandItem
-                                                        key={w.id}
-                                                        value={w.name}
-                                                        onSelect={() => {
-                                                            if (!isAdded) {
-                                                                setSelectedWarehouseId(w.id.toString());
-                                                                setIsWarehouseOpen(false);
-                                                            }
-                                                        }}
-                                                        disabled={isAdded}
-                                                        className={isAdded ? "opacity-50 cursor-not-allowed" : ""}
-                                                    >
-                                                        <Check
-                                                            className={cn(
-                                                                "mr-2 h-4 w-4",
-                                                                selectedWarehouseId === w.id.toString() ? "opacity-100" : "opacity-0"
-                                                            )}
-                                                        />
-                                                        {w.name}
-                                                    </CommandItem>
-                                                );
-                                            })}
-                                        </CommandGroup>
-                                    </CommandList>
-                                </Command>
-                            </PopoverContent>
-                        </Popover>
-                        <Button
-                            onClick={() => {
-                                if (selectedWarehouseId) {
-                                    const current = data.assignedWarehouses || [];
-                                    updateData((prev: any) => ({ ...prev, assignedWarehouses: [...current, selectedWarehouseId] }));
-                                    setSelectedWarehouseId("");
-                                }
-                            }}
-                            disabled={!selectedWarehouseId || readOnly}
-                        >
-                            <Plus className="h-4 w-4" />
-                        </Button>
-                    </div>
-
-                    {/* Warehouses List */}
-                    <div className="border rounded-md overflow-hidden">
-                        <Table>
-                            <TableBody>
-                                {(!data.assignedWarehouses || data.assignedWarehouses.length === 0) ? (
-                                    <TableRow>
-                                        <TableCell className="text-center py-3 text-xs text-muted-foreground">
-                                            No warehouses assigned
-                                        </TableCell>
-                                    </TableRow>
-                                ) : (
-                                    data.assignedWarehouses.map((id: string) => (
-                                        <TableRow key={id}>
-                                            <TableCell className="py-2 text-sm">
-                                                {initialWarehouses.find(w => w.id.toString() === id)?.name}
-                                            </TableCell>
-                                            <TableCell className="py-2 w-[40px]">
-                                                <Button
-                                                    variant="ghost"
-                                                    size="icon"
-                                                    className="h-6 w-6 text-destructive"
-                                                    onClick={() => {
-                                                        const current = data.assignedWarehouses || [];
-                                                        updateData((prev: any) => ({ ...prev, assignedWarehouses: current.filter((c: string) => c !== id) }));
-                                                    }}
-                                                    disabled={readOnly}
-                                                >
-                                                    <Trash2 className="h-3 w-3" />
-                                                </Button>
-                                            </TableCell>
-                                        </TableRow>
-                                    ))
-                                )}
-                            </TableBody>
-                        </Table>
-                    </div>
-                </div>
-
-                {/* Operations */}
-                <div className="space-y-3">
-                    <Label>Assigned Operations</Label>
-                    <div className="flex gap-2">
-                        <Popover open={isOperationOpen} onOpenChange={setIsOperationOpen}>
-                            <PopoverTrigger asChild>
-                                <Button
-                                    variant="outline"
-                                    role="combobox"
-                                    aria-expanded={isOperationOpen}
-                                    className="w-full justify-between"
-                                    disabled={readOnly}
-                                >
-                                    {selectedOperationId
-                                        ? initialOperations.find((op) => op.id.toString() === selectedOperationId)?.name
-                                        : "Select Operation..."}
-                                    <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
-                                </Button>
-                            </PopoverTrigger>
-                            <PopoverContent className="p-0" style={{ width: "var(--radix-popover-trigger-width)" }}>
-                                <Command>
-                                    <CommandInputBorderless placeholder="Search operation..." />
-                                    <CommandList className="max-h-[200px] overflow-y-auto">
-                                        <CommandEmpty>No operation found.</CommandEmpty>
-                                        <CommandGroup>
-                                            {initialOperations.map((op) => {
-                                                const isAdded = data.assignedOperations?.includes(op.id.toString());
-                                                return (
-                                                    <CommandItem
-                                                        key={op.id}
-                                                        value={op.name}
-                                                        onSelect={() => {
-                                                            if (!isAdded) {
-                                                                setSelectedOperationId(op.id.toString());
-                                                                setIsOperationOpen(false);
-                                                            }
-                                                        }}
-                                                        disabled={isAdded}
-                                                        className={isAdded ? "opacity-50 cursor-not-allowed" : ""}
-                                                    >
-                                                        <Check
-                                                            className={cn(
-                                                                "mr-2 h-4 w-4",
-                                                                selectedOperationId === op.id.toString() ? "opacity-100" : "opacity-0"
-                                                            )}
-                                                        />
-                                                        {op.name}
-                                                    </CommandItem>
-                                                );
-                                            })}
-                                        </CommandGroup>
-                                    </CommandList>
-                                </Command>
-                            </PopoverContent>
-                        </Popover>
-                        <Button
-                            onClick={() => {
-                                if (selectedOperationId) {
-                                    const current = data.assignedOperations || [];
-                                    updateData((prev: any) => ({ ...prev, assignedOperations: [...current, selectedOperationId] }));
-                                    setSelectedOperationId("");
-                                }
-                            }}
-                            disabled={!selectedOperationId || readOnly}
-                        >
-                            <Plus className="h-4 w-4" />
-                        </Button>
-                    </div>
-
-                    {/* Operations List */}
-                    <div className="border rounded-md overflow-hidden">
-                        <Table>
-                            <TableBody>
-                                {(!data.assignedOperations || data.assignedOperations.length === 0) ? (
-                                    <TableRow>
-                                        <TableCell className="text-center py-3 text-xs text-muted-foreground">
-                                            No operations assigned
-                                        </TableCell>
-                                    </TableRow>
-                                ) : (
-                                    data.assignedOperations.map((id: string) => (
-                                        <TableRow key={id}>
-                                            <TableCell className="py-2 text-sm">
-                                                {initialOperations.find(op => op.id.toString() === id)?.name}
-                                            </TableCell>
-                                            <TableCell className="py-2 w-[40px]">
-                                                <Button
-                                                    variant="ghost"
-                                                    size="icon"
-                                                    className="h-6 w-6 text-destructive"
-                                                    onClick={() => {
-                                                        const current = data.assignedOperations || [];
-                                                        updateData((prev: any) => ({ ...prev, assignedOperations: current.filter((c: string) => c !== id) }));
-                                                    }}
-                                                    disabled={readOnly}
-                                                >
-                                                    <Trash2 className="h-3 w-3" />
-                                                </Button>
-                                            </TableCell>
-                                        </TableRow>
-                                    ))
-                                )}
-                            </TableBody>
-                        </Table>
-                    </div>
-                </div>
-            </div>
-
             <div className="flex justify-between items-center">
                 <h4 className="font-semibold text-primary text-sm">System Access Configuration</h4>
             </div>
@@ -3956,7 +3632,342 @@ function SystemAccessForm({ data, updateData, readOnly }: any) {
                 </div>
             )}
 
+            {/* System Access Associations */}
+            <Label className="text-sm font-semibold mb-4 block text-primary">Employee Allocation Details</Label>
+            <div className="rounded-md border p-4 bg-muted/20 mb-8">
+                {/* Location Dropdown - Synced with Employment & Job Details */}
+                <div className="mb-6 grid grid-cols-1 md:grid-cols-3">
+                    <SearchableSelect
+                        label="Location"
+                        value={data.workLocation}
+                        options={workLocationOptions}
+                        onChange={(val) => updateData((prev: any) => ({ ...prev, workLocation: val }))}
+                        disabled={readOnly}
+                    />
+                </div>
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                    {/* Work Centers */}
+                    <div className="space-y-3">
+                        <Label>Assigned Work Centers</Label>
+                        <div className="flex gap-2">
+                            <Popover open={isWorkCenterOpen} onOpenChange={setIsWorkCenterOpen}>
+                                <PopoverTrigger asChild>
+                                    <Button
+                                        variant="outline"
+                                        role="combobox"
+                                        aria-expanded={isWorkCenterOpen}
+                                        className="w-full justify-between"
+                                        disabled={readOnly}
+                                    >
+                                        {selectedWorkCenterId
+                                            ? initialWorkCenters.find((wc) => wc.id.toString() === selectedWorkCenterId)?.name
+                                            : "Select Work Center..."}
+                                        <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
+                                    </Button>
+                                </PopoverTrigger>
+                                <PopoverContent className="p-0" style={{ width: "var(--radix-popover-trigger-width)" }}>
+                                    <Command>
+                                        <CommandInputBorderless placeholder="Search work center..." />
+                                        <CommandList className="max-h-[200px] overflow-y-auto">
+                                            <CommandEmpty>No work center found.</CommandEmpty>
+                                            <CommandGroup>
+                                                {initialWorkCenters.map((wc) => {
+                                                    const isAdded = data.assignedWorkCenters?.includes(wc.id.toString());
+                                                    return (
+                                                        <CommandItem
+                                                            key={wc.id}
+                                                            value={wc.name}
+                                                            onSelect={() => {
+                                                                if (!isAdded) {
+                                                                    setSelectedWorkCenterId(wc.id.toString());
+                                                                    setIsWorkCenterOpen(false);
+                                                                }
+                                                            }}
+                                                            disabled={isAdded}
+                                                            className={isAdded ? "opacity-50 cursor-not-allowed" : ""}
+                                                        >
+                                                            <Check
+                                                                className={cn(
+                                                                    "mr-2 h-4 w-4",
+                                                                    selectedWorkCenterId === wc.id.toString() ? "opacity-100" : "opacity-0"
+                                                                )}
+                                                            />
+                                                            {wc.name}
+                                                        </CommandItem>
+                                                    );
+                                                })}
+                                            </CommandGroup>
+                                        </CommandList>
+                                    </Command>
+                                </PopoverContent>
+                            </Popover>
+                            <Button
+                                onClick={() => {
+                                    if (selectedWorkCenterId) {
+                                        const current = data.assignedWorkCenters || [];
+                                        updateData((prev: any) => ({ ...prev, assignedWorkCenters: [...current, selectedWorkCenterId] }));
+                                        setSelectedWorkCenterId("");
+                                    }
+                                }}
+                                disabled={!selectedWorkCenterId || readOnly}
+                            >
+                                <Plus className="h-4 w-4" />
+                            </Button>
+                        </div>
 
+                        {/* Work Centers List */}
+                        <div className="border rounded-md overflow-hidden">
+                            <Table>
+                                <TableBody>
+                                    {(!data.assignedWorkCenters || data.assignedWorkCenters.length === 0) ? (
+                                        <TableRow>
+                                            <TableCell className="text-center py-3 text-xs text-muted-foreground">
+                                                No work centers assigned
+                                            </TableCell>
+                                        </TableRow>
+                                    ) : (
+                                        data.assignedWorkCenters.map((id: string) => (
+                                            <TableRow key={id}>
+                                                <TableCell className="py-2 text-sm">
+                                                    {initialWorkCenters.find(w => w.id.toString() === id)?.name}
+                                                </TableCell>
+                                                <TableCell className="py-2 w-[40px]">
+                                                    <Button
+                                                        variant="ghost"
+                                                        size="icon"
+                                                        className="h-6 w-6 text-destructive"
+                                                        onClick={() => {
+                                                            const current = data.assignedWorkCenters || [];
+                                                            updateData((prev: any) => ({ ...prev, assignedWorkCenters: current.filter((c: string) => c !== id) }));
+                                                        }}
+                                                        disabled={readOnly}
+                                                    >
+                                                        <Trash2 className="h-3 w-3" />
+                                                    </Button>
+                                                </TableCell>
+                                            </TableRow>
+                                        ))
+                                    )}
+                                </TableBody>
+                            </Table>
+                        </div>
+                    </div>
+
+                    {/* Warehouses */}
+                    <div className="space-y-3">
+                        <Label>Assigned Warehouses</Label>
+                        <div className="flex gap-2">
+                            <Popover open={isWarehouseOpen} onOpenChange={setIsWarehouseOpen}>
+                                <PopoverTrigger asChild>
+                                    <Button
+                                        variant="outline"
+                                        role="combobox"
+                                        aria-expanded={isWarehouseOpen}
+                                        className="w-full justify-between"
+                                        disabled={readOnly}
+                                    >
+                                        {selectedWarehouseId
+                                            ? initialWarehouses.find((w) => w.id.toString() === selectedWarehouseId)?.name
+                                            : "Select Warehouse..."}
+                                        <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
+                                    </Button>
+                                </PopoverTrigger>
+                                <PopoverContent className="p-0" style={{ width: "var(--radix-popover-trigger-width)" }}>
+                                    <Command>
+                                        <CommandInputBorderless placeholder="Search warehouse..." />
+                                        <CommandList className="max-h-[200px] overflow-y-auto">
+                                            <CommandEmpty>No warehouse found.</CommandEmpty>
+                                            <CommandGroup>
+                                                {initialWarehouses.map((w) => {
+                                                    const isAdded = data.assignedWarehouses?.includes(w.id.toString());
+                                                    return (
+                                                        <CommandItem
+                                                            key={w.id}
+                                                            value={w.name}
+                                                            onSelect={() => {
+                                                                if (!isAdded) {
+                                                                    setSelectedWarehouseId(w.id.toString());
+                                                                    setIsWarehouseOpen(false);
+                                                                }
+                                                            }}
+                                                            disabled={isAdded}
+                                                            className={isAdded ? "opacity-50 cursor-not-allowed" : ""}
+                                                        >
+                                                            <Check
+                                                                className={cn(
+                                                                    "mr-2 h-4 w-4",
+                                                                    selectedWarehouseId === w.id.toString() ? "opacity-100" : "opacity-0"
+                                                                )}
+                                                            />
+                                                            {w.name}
+                                                        </CommandItem>
+                                                    );
+                                                })}
+                                            </CommandGroup>
+                                        </CommandList>
+                                    </Command>
+                                </PopoverContent>
+                            </Popover>
+                            <Button
+                                onClick={() => {
+                                    if (selectedWarehouseId) {
+                                        const current = data.assignedWarehouses || [];
+                                        updateData((prev: any) => ({ ...prev, assignedWarehouses: [...current, selectedWarehouseId] }));
+                                        setSelectedWarehouseId("");
+                                    }
+                                }}
+                                disabled={!selectedWarehouseId || readOnly}
+                            >
+                                <Plus className="h-4 w-4" />
+                            </Button>
+                        </div>
+
+                        {/* Warehouses List */}
+                        <div className="border rounded-md overflow-hidden">
+                            <Table>
+                                <TableBody>
+                                    {(!data.assignedWarehouses || data.assignedWarehouses.length === 0) ? (
+                                        <TableRow>
+                                            <TableCell className="text-center py-3 text-xs text-muted-foreground">
+                                                No warehouses assigned
+                                            </TableCell>
+                                        </TableRow>
+                                    ) : (
+                                        data.assignedWarehouses.map((id: string) => (
+                                            <TableRow key={id}>
+                                                <TableCell className="py-2 text-sm">
+                                                    {initialWarehouses.find(w => w.id.toString() === id)?.name}
+                                                </TableCell>
+                                                <TableCell className="py-2 w-[40px]">
+                                                    <Button
+                                                        variant="ghost"
+                                                        size="icon"
+                                                        className="h-6 w-6 text-destructive"
+                                                        onClick={() => {
+                                                            const current = data.assignedWarehouses || [];
+                                                            updateData((prev: any) => ({ ...prev, assignedWarehouses: current.filter((c: string) => c !== id) }));
+                                                        }}
+                                                        disabled={readOnly}
+                                                    >
+                                                        <Trash2 className="h-3 w-3" />
+                                                    </Button>
+                                                </TableCell>
+                                            </TableRow>
+                                        ))
+                                    )}
+                                </TableBody>
+                            </Table>
+                        </div>
+                    </div>
+
+                    {/* Operations */}
+                    <div className="space-y-3">
+                        <Label>Assigned Operations</Label>
+                        <div className="flex gap-2">
+                            <Popover open={isOperationOpen} onOpenChange={setIsOperationOpen}>
+                                <PopoverTrigger asChild>
+                                    <Button
+                                        variant="outline"
+                                        role="combobox"
+                                        aria-expanded={isOperationOpen}
+                                        className="w-full justify-between"
+                                        disabled={readOnly}
+                                    >
+                                        {selectedOperationId
+                                            ? initialOperations.find((op) => op.id.toString() === selectedOperationId)?.name
+                                            : "Select Operation..."}
+                                        <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
+                                    </Button>
+                                </PopoverTrigger>
+                                <PopoverContent className="p-0" style={{ width: "var(--radix-popover-trigger-width)" }}>
+                                    <Command>
+                                        <CommandInputBorderless placeholder="Search operation..." />
+                                        <CommandList className="max-h-[200px] overflow-y-auto">
+                                            <CommandEmpty>No operation found.</CommandEmpty>
+                                            <CommandGroup>
+                                                {initialOperations.map((op) => {
+                                                    const isAdded = data.assignedOperations?.includes(op.id.toString());
+                                                    return (
+                                                        <CommandItem
+                                                            key={op.id}
+                                                            value={op.name}
+                                                            onSelect={() => {
+                                                                if (!isAdded) {
+                                                                    setSelectedOperationId(op.id.toString());
+                                                                    setIsOperationOpen(false);
+                                                                }
+                                                            }}
+                                                            disabled={isAdded}
+                                                            className={isAdded ? "opacity-50 cursor-not-allowed" : ""}
+                                                        >
+                                                            <Check
+                                                                className={cn(
+                                                                    "mr-2 h-4 w-4",
+                                                                    selectedOperationId === op.id.toString() ? "opacity-100" : "opacity-0"
+                                                                )}
+                                                            />
+                                                            {op.name}
+                                                        </CommandItem>
+                                                    );
+                                                })}
+                                            </CommandGroup>
+                                        </CommandList>
+                                    </Command>
+                                </PopoverContent>
+                            </Popover>
+                            <Button
+                                onClick={() => {
+                                    if (selectedOperationId) {
+                                        const current = data.assignedOperations || [];
+                                        updateData((prev: any) => ({ ...prev, assignedOperations: [...current, selectedOperationId] }));
+                                        setSelectedOperationId("");
+                                    }
+                                }}
+                                disabled={!selectedOperationId || readOnly}
+                            >
+                                <Plus className="h-4 w-4" />
+                            </Button>
+                        </div>
+
+                        {/* Operations List */}
+                        <div className="border rounded-md overflow-hidden">
+                            <Table>
+                                <TableBody>
+                                    {(!data.assignedOperations || data.assignedOperations.length === 0) ? (
+                                        <TableRow>
+                                            <TableCell className="text-center py-3 text-xs text-muted-foreground">
+                                                No operations assigned
+                                            </TableCell>
+                                        </TableRow>
+                                    ) : (
+                                        data.assignedOperations.map((id: string) => (
+                                            <TableRow key={id}>
+                                                <TableCell className="py-2 text-sm">
+                                                    {initialOperations.find(op => op.id.toString() === id)?.name}
+                                                </TableCell>
+                                                <TableCell className="py-2 w-[40px]">
+                                                    <Button
+                                                        variant="ghost"
+                                                        size="icon"
+                                                        className="h-6 w-6 text-destructive"
+                                                        onClick={() => {
+                                                            const current = data.assignedOperations || [];
+                                                            updateData((prev: any) => ({ ...prev, assignedOperations: current.filter((c: string) => c !== id) }));
+                                                        }}
+                                                        disabled={readOnly}
+                                                    >
+                                                        <Trash2 className="h-3 w-3" />
+                                                    </Button>
+                                                </TableCell>
+                                            </TableRow>
+                                        ))
+                                    )}
+                                </TableBody>
+                            </Table>
+                        </div>
+                    </div>
+                </div>
+            </div>
 
             {!enableLoginAccess && (
                 <div className="text-center py-6 text-muted-foreground">
