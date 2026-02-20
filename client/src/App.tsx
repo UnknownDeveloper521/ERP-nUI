@@ -23,7 +23,7 @@ import SuperAdminDashboard from "@/pages/super-admin/Dashboard";
 import TenantManagement from "@/pages/super-admin/TenantManagement";
 import CompanyManagement from "@/pages/super-admin/CompanyManagement";
 
-import Inventory from "@/pages/Inventory";
+
 import Products from "@/pages/Products";
 import Sales from "@/pages/Sales";
 import Purchases from "@/pages/Purchases";
@@ -43,20 +43,12 @@ import LeaveManagement from "@/pages/hrms/LeaveManagement";
 import PayrollManagement from "@/pages/hrms/PayrollManagement";
 
 import InventoryDashboard from "@/pages/inventory/InventoryDashboard";
-import RawMaterialReceipt from "@/pages/inventory/RawMaterialReceipt";
-import RMIssue from "@/pages/inventory/RMIssue";
-import RMLedger from "@/pages/inventory/RMLedger";
-import FGStock from "@/pages/inventory/FGStock";
-import StockAdjustment from "@/pages/inventory/StockAdjustment";
-import AlertsThresholds from "@/pages/inventory/AlertsThresholds";
+import Materials from "@/pages/inventory/Materials";
+import MaterialLedger from "@/pages/inventory/MaterialLedger";
 
-import ProductionDashboard from "@/pages/production/ProductionDashboard";
-import ProductionEntry from "@/pages/production/ProductionEntry";
-import ProductionHistory from "@/pages/production/ProductionHistory";
 import QualityCheck from "@/pages/production/QualityCheck";
-import WasteTracking from "@/pages/production/WasteTracking";
-import MachinePerformance from "@/pages/production/MachinePerformance";
-import ShiftSummary from "@/pages/production/ShiftSummary";
+import MaterialOperation from "@/pages/production/MaterialOperation";
+import MaterialRelease from "@/pages/production/MaterialRelease";
 
 import SalesDashboard from "@/pages/sales-invoicing/SalesDashboard";
 import SalesOrder from "@/pages/sales-invoicing/SalesOrder";
@@ -301,89 +293,129 @@ function Router() {
           </ProtectedRoute>
         )}
       </Route>
-      <Route path="/inventory/rm-receipt">
+
+      <Route path="/inventory/materials">
         {() => (
           <ProtectedRoute>
             <MainLayout>
-              <RawMaterialReceipt />
-            </MainLayout>
-          </ProtectedRoute>
-        )}
-      </Route>
-      <Route path="/inventory/rm-issue">
-        {() => (
-          <ProtectedRoute>
-            <MainLayout>
-              <RMIssue />
-            </MainLayout>
-          </ProtectedRoute>
-        )}
-      </Route>
-      <Route path="/inventory/rm-ledger">
-        {() => (
-          <ProtectedRoute>
-            <MainLayout>
-              <RMLedger />
-            </MainLayout>
-          </ProtectedRoute>
-        )}
-      </Route>
-      <Route path="/inventory/fg-stock">
-        {() => (
-          <ProtectedRoute>
-            <MainLayout>
-              <FGStock />
-            </MainLayout>
-          </ProtectedRoute>
-        )}
-      </Route>
-      <Route path="/inventory/stock-adjustment">
-        {() => (
-          <ProtectedRoute>
-            <MainLayout>
-              <StockAdjustment />
-            </MainLayout>
-          </ProtectedRoute>
-        )}
-      </Route>
-      <Route path="/inventory/alerts">
-        {() => (
-          <ProtectedRoute>
-            <MainLayout>
-              <AlertsThresholds />
+              <Materials />
             </MainLayout>
           </ProtectedRoute>
         )}
       </Route>
 
+      <Route path="/inventory/material-ledger">
+        {() => (
+          <ProtectedRoute>
+            <MainLayout>
+              <MaterialLedger />
+            </MainLayout>
+          </ProtectedRoute>
+        )}
+      </Route>
+
+
+
       <Route path="/production">
         {() => (
           <ProtectedRoute>
             <MainLayout>
-              <ProductionDashboard />
+              <MaterialOperation />
             </MainLayout>
           </ProtectedRoute>
         )}
       </Route>
-      <Route path="/production/entry">
+      <Route path="/production/material-operation/mr-request">
         {() => (
           <ProtectedRoute>
             <MainLayout>
-              <ProductionEntry />
+              <MaterialOperation />
             </MainLayout>
           </ProtectedRoute>
         )}
       </Route>
-      <Route path="/production/history">
+      <Route path="/production/material-operation/mr-request">
         {() => (
           <ProtectedRoute>
             <MainLayout>
-              <ProductionHistory />
+              <MaterialOperation />
             </MainLayout>
           </ProtectedRoute>
         )}
       </Route>
-      <Route path="/production/quality">
+      <Route path="/production/material-operation/new">
+        {() => (
+          <ProtectedRoute>
+            <MainLayout>
+              <MaterialOperation />
+            </MainLayout>
+          </ProtectedRoute>
+        )}
+      </Route>
+      <Route path="/production/material-operation/pre-procure/new">
+        {() => (
+          <ProtectedRoute>
+            <MainLayout>
+              <MaterialOperation />
+            </MainLayout>
+          </ProtectedRoute>
+        )}
+      </Route>
+      <Route path="/production/material-operation/pre-procure">
+        {() => (
+          <ProtectedRoute>
+            <MainLayout>
+              <MaterialOperation />
+            </MainLayout>
+          </ProtectedRoute>
+        )}
+      </Route>
+      <Route path="/production/material-operation/batch-tracking/:id/edit">
+        {() => (
+          <ProtectedRoute>
+            <MainLayout>
+              <MaterialOperation />
+            </MainLayout>
+          </ProtectedRoute>
+        )}
+      </Route>
+      <Route path="/production/material-operation/batch-tracking/new">
+        {() => (
+          <ProtectedRoute>
+            <MainLayout>
+              <MaterialOperation />
+            </MainLayout>
+          </ProtectedRoute>
+        )}
+      </Route>
+      <Route path="/production/material-operation/batch-tracking">
+        {() => (
+          <ProtectedRoute>
+            <MainLayout>
+              <MaterialOperation />
+            </MainLayout>
+          </ProtectedRoute>
+        )}
+      </Route>
+      <Route path="/production/material-operation/:id">
+        {() => (
+          <ProtectedRoute>
+            <MainLayout>
+              <MaterialOperation />
+            </MainLayout>
+          </ProtectedRoute>
+        )}
+      </Route>
+      <Route path="/production/material-operation">
+        {() => (
+          <ProtectedRoute>
+            <MainLayout>
+              <MaterialOperation />
+            </MainLayout>
+          </ProtectedRoute>
+        )}
+      </Route>
+      <Route path="/production/quality-check">
         {() => (
           <ProtectedRoute>
             <MainLayout>
@@ -392,29 +424,11 @@ function Router() {
           </ProtectedRoute>
         )}
       </Route>
-      <Route path="/production/waste">
+      <Route path="/production/material-release">
         {() => (
           <ProtectedRoute>
             <MainLayout>
-              <WasteTracking />
-            </MainLayout>
-          </ProtectedRoute>
-        )}
-      </Route>
-      <Route path="/production/machines">
-        {() => (
-          <ProtectedRoute>
-            <MainLayout>
-              <MachinePerformance />
-            </MainLayout>
-          </ProtectedRoute>
-        )}
-      </Route>
-      <Route path="/production/shifts">
-        {() => (
-          <ProtectedRoute>
-            <MainLayout>
-              <ShiftSummary />
+              <MaterialRelease />
             </MainLayout>
           </ProtectedRoute>
         )}

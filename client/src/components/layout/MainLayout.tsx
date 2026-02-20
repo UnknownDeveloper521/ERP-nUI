@@ -144,12 +144,8 @@ const Sidebar = ({ className }: SidebarProps) => {
       path: "/inventory",
       subItems: [
         { name: "Dashboard", path: "/inventory" },
-        { name: "RM Receipt", path: "/inventory/rm-receipt" },
-        { name: "RM Issue", path: "/inventory/rm-issue" },
-        { name: "RM Ledger", path: "/inventory/rm-ledger" },
-        { name: "FG Stock", path: "/inventory/fg-stock" },
-        { name: "Stock Adjustment", path: "/inventory/stock-adjustment" },
-        { name: "Alerts & Thresholds", path: "/inventory/alerts" },
+        { name: "Materials", path: "/inventory/materials" },
+        { name: "Material Ledger", path: "/inventory/material-ledger" },
       ]
     },
     "Production": {
@@ -157,13 +153,9 @@ const Sidebar = ({ className }: SidebarProps) => {
       icon: Briefcase,
       path: "/production",
       subItems: [
-        { name: "Dashboard", path: "/production" },
-        { name: "Production Entry", path: "/production/entry" },
-        { name: "History", path: "/production/history" },
-        { name: "Quality Check", path: "/production/quality" },
-        { name: "Waste Tracking", path: "/production/waste" },
-        { name: "Machine Performance", path: "/production/machines" },
-        { name: "Shift Summary", path: "/production/shifts" },
+        { name: "Material & Operation", path: "/production/material-operation/mr-request" },
+        { name: "Quality Check", path: "/production/quality-check" },
+        { name: "Material Release", path: "/production/material-release" },
       ]
     },
     "Sales": {
