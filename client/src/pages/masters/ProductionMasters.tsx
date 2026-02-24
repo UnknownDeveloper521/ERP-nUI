@@ -113,7 +113,6 @@ interface Operation {
     id: number;
     code: string;
     name: string;
-    work_center_id?: number;
     description?: string;
     inputs: OperationItem[];
     outputs: OperationItem[];
@@ -153,7 +152,6 @@ const initialOperations: Operation[] = [
         id: 1,
         code: "OP001",
         name: "Molding",
-        work_center_id: 1,
         description: "Initial molding process",
         inputs: [{ id: 1, item_id: 102, type: "RM", quantity: 10 }],
         outputs: [{ id: 1, item_id: 201, type: "SFG", quantity: 1 }],
@@ -511,9 +509,6 @@ export default function ProductionMasters() {
             }
 
             const operationData = { ...formData };
-            if (operationData.work_center_id) {
-                operationData.work_center_id = parseInt(operationData.work_center_id);
-            }
 
             if (editingId) {
                 setOperations(prev => prev.map(item => item.id === editingId ? { ...item, ...operationData, updated_at: now } as Operation : item));
@@ -634,8 +629,8 @@ export default function ProductionMasters() {
                         <TableRow className="bg-muted/50">
                             <TableHead>Code</TableHead>
                             <TableHead>Operation Name</TableHead>
-                            <TableHead>Work Center</TableHead>
                             <TableHead className="text-center">QC Required</TableHead>
+                            <TableHead className="text-center">Batchwise Tracking</TableHead>
                             <TableHead>Status</TableHead>
                             <TableHead className="text-right">Actions</TableHead>
                         </TableRow>
@@ -649,15 +644,20 @@ export default function ProductionMasters() {
                             </TableRow>
                         ) : (
                             paginatedData.map((item: any) => {
-                                const wc = workCenters.find(w => w.id === item.work_center_id);
                                 return (
                                     <TableRow key={item.id}>
                                         <TableCell className="font-medium">{item.code}</TableCell>
                                         <TableCell>{item.name}</TableCell>
-                                        <TableCell>{wc ? wc.name : "-"}</TableCell>
                                         <TableCell className="text-center">
                                             {item.is_qc_required ? (
                                                 <Badge variant="secondary" className="bg-blue-50 text-blue-700 border-blue-200">Yes</Badge>
+                                            ) : (
+                                                <span className="text-muted-foreground text-sm">No</span>
+                                            )}
+                                        </TableCell>
+                                        <TableCell className="text-center">
+                                            {item.is_qc_required_batch_wise ? (
+                                                <Badge variant="secondary" className="bg-purple-50 text-purple-700 border-purple-200">Yes</Badge>
                                             ) : (
                                                 <span className="text-muted-foreground text-sm">No</span>
                                             )}
@@ -931,52 +931,6 @@ export default function ProductionMasters() {
                                 <Input id="name" value={formData.name || ""} onChange={e => setFormData({ ...formData, name: e.target.value })} placeholder="Operation Name" />
                             </div>
                             <div className="space-y-2">
-                                <Label>Work Center</Label>
-                                <Popover open={isOpWCComboboxOpen} onOpenChange={setIsOpWCComboboxOpen}>
-                                    <PopoverTrigger asChild>
-                                        <Button
-                                            variant="outline"
-                                            role="combobox"
-                                            aria-expanded={isOpWCComboboxOpen}
-                                            className="w-full justify-between font-normal"
-                                        >
-                                            {formData.work_center_id
-                                                ? workCenters.find((wc) => wc.id.toString() === formData.work_center_id)?.name
-                                                : "Select Work Center..."}
-                                            <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
-                                        </Button>
-                                    </PopoverTrigger>
-                                    <PopoverContent className="p-0" style={{ width: "var(--radix-popover-trigger-width)" }}>
-                                        <Command className="h-auto overflow-visible">
-                                            <CommandInputBorderless placeholder="Search work center..." />
-                                            <CommandList className="max-h-[130px] overflow-y-auto">
-                                                <CommandEmpty>No work center found.</CommandEmpty>
-                                                <CommandGroup>
-                                                    {workCenters.map((wc) => (
-                                                        <CommandItem
-                                                            key={wc.id}
-                                                            value={wc.name}
-                                                            onSelect={() => {
-                                                                setFormData({ ...formData, work_center_id: wc.id.toString() });
-                                                                setIsOpWCComboboxOpen(false);
-                                                            }}
-                                                        >
-                                                            <Check
-                                                                className={cn(
-                                                                    "mr-2 h-4 w-4",
-                                                                    formData.work_center_id === wc.id.toString() ? "opacity-100" : "opacity-0"
-                                                                )}
-                                                            />
-                                                            {wc.name}
-                                                        </CommandItem>
-                                                    ))}
-                                                </CommandGroup>
-                                            </CommandList>
-                                        </Command>
-                                    </PopoverContent>
-                                </Popover>
-                            </div>
-                            <div className="space-y-2">
                                 <Label>Status *</Label>
                                 <Select value={formData.status || ""} onValueChange={(val: any) => setFormData({ ...formData, status: val })}>
                                     <SelectTrigger><SelectValue placeholder="Select Status" /></SelectTrigger>
@@ -1210,7 +1164,7 @@ export default function ProductionMasters() {
                                         onChange={(e) => setFormData({ ...formData, is_qc_required_batch_wise: e.target.checked })}
                                     />
                                     <Label htmlFor="is_qc_required_batch_wise" className="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70">
-                                        Batch wise QC
+                                        Batchwise tracking
                                     </Label>
                                 </div>
 

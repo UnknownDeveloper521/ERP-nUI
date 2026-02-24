@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { useLocation } from "wouter";
+import { useLocation, useRoute } from "wouter";
 import { Card, CardContent } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Button } from "@/components/ui/button";
@@ -45,6 +45,8 @@ import { Search, ChevronLeft, ChevronRight, ChevronsUpDown, Check, CalendarIcon,
 import { useToast } from "@/hooks/use-toast";
 import { cn } from "@/lib/utils";
 import { format } from "date-fns";
+import GRN from "./GRN";
+import WHReceive from "./WHReceive";
 
 // ============================================================================
 // HELPER FUNCTIONS
@@ -81,6 +83,46 @@ interface MaterialRequest {
     operation: string;
     status: "Requested to Warehouse" | "Issued by Warehouse" | "Received by Production";
     items: MaterialRequestItem[];
+}
+
+// GRN Types
+interface GRNItem {
+    id: number;
+    itemCode: string;
+    itemName: string;
+    uom: string;
+    receivedQty: number;
+    orderedQty?: number;
+    previouslyReceivedQty?: number;
+    pendingQty?: number;
+    batchNo?: string;
+    lineRemarks?: string;
+}
+
+interface GRN {
+    id: number;
+    grnNo: string;
+    grnDate: string;
+    grnType: "Non-PO" | "PO-Based";
+    warehouse: string;
+    receivedBy: string;
+    receivedDate: string;
+    supplier?: string;
+    invoiceNo?: string;
+    poNo?: string;
+    poDate?: string;
+    receiptType?: "Scrap" | "Invoice";
+    remarks?: string;
+    status: "Draft" | "Posted" | "Cancelled";
+    totalItems: number;
+    items: GRNItem[];
+}
+
+interface POData {
+    poNo: string;
+    supplier: string;
+    poDate: string;
+    items: GRNItem[];
 }
 
 // ============================================================================
@@ -128,6 +170,95 @@ const MOCK_MR_REQUESTS: MaterialRequest[] = [
 ];
 
 const WORK_CENTERS = ["WC-001 Cutting Bay", "WC-002 Welding Station", "WC-003 Assembly Line", "WC-004 Paint Shop"];
+
+// GRN Constants
+const WAREHOUSES = ["Main Warehouse", "Production Store", "Raw Material Store", "Finished Goods Store"];
+const SUPPLIERS = ["ABC Suppliers Ltd", "XYZ Trading Co", "Global Materials Inc", "Local Vendors"];
+const ITEMS_MASTER = [
+    { code: "RM-STL-001", name: "Steel Sheet 2mm", uom: "KG", isBatchTracked: true },
+    { code: "RM-ALU-002", name: "Aluminum Plate", uom: "KG", isBatchTracked: false },
+    { code: "RM-WLD-003", name: "Welding Rods", uom: "PKT", isBatchTracked: true },
+    { code: "RM-SCR-004", name: "Screws M4", uom: "NOS", isBatchTracked: false },
+    { code: "RM-BOL-005", name: "Bolts M10", uom: "NOS", isBatchTracked: false },
+];
+
+// Mock PO Data
+const MOCK_PO_DATA: { [key: string]: POData } = {
+    "PO-2024-001": {
+        poNo: "PO-2024-001",
+        supplier: "ABC Suppliers Ltd",
+        poDate: "2024-02-10",
+        items: [
+            { id: 1, itemCode: "RM-STL-001", itemName: "Steel Sheet 2mm", uom: "KG", orderedQty: 500, previouslyReceivedQty: 200, pendingQty: 300, receivedQty: 0 },
+            { id: 2, itemCode: "RM-ALU-002", itemName: "Aluminum Plate", uom: "KG", orderedQty: 200, previouslyReceivedQty: 0, pendingQty: 200, receivedQty: 0 },
+        ]
+    },
+    "PO-2024-002": {
+        poNo: "PO-2024-002",
+        supplier: "XYZ Trading Co",
+        poDate: "2024-02-12",
+        items: [
+            { id: 3, itemCode: "RM-WLD-003", itemName: "Welding Rods", uom: "PKT", orderedQty: 100, previouslyReceivedQty: 50, pendingQty: 50, receivedQty: 0 },
+        ]
+    }
+};
+
+// Mock GRN Data
+const MOCK_GRN_DATA: GRN[] = [
+    {
+        id: 1,
+        grnNo: "GRN-2024-001",
+        grnDate: "2024-02-20",
+        grnType: "PO-Based",
+        warehouse: "Main Warehouse",
+        receivedBy: "Admin User",
+        receivedDate: "2024-02-20",
+        supplier: "ABC Suppliers Ltd",
+        poNo: "PO-2024-001",
+        poDate: "2024-02-10",
+        remarks: "First batch received",
+        status: "Posted",
+        totalItems: 2,
+        items: [
+            { id: 1, itemCode: "RM-STL-001", itemName: "Steel Sheet 2mm", uom: "KG", receivedQty: 200, orderedQty: 500, previouslyReceivedQty: 0, pendingQty: 300, batchNo: "BATCH-001" },
+            { id: 2, itemCode: "RM-ALU-002", itemName: "Aluminum Plate", uom: "KG", receivedQty: 100, orderedQty: 200, previouslyReceivedQty: 0, pendingQty: 100 },
+        ]
+    },
+    {
+        id: 2,
+        grnNo: "GRN-2024-002",
+        grnDate: "2024-02-21",
+        grnType: "Non-PO",
+        warehouse: "Raw Material Store",
+        receivedBy: "Admin User",
+        receivedDate: "2024-02-21",
+        receiptType: "Scrap",
+        remarks: "Scrap material from production",
+        status: "Draft",
+        totalItems: 1,
+        items: [
+            { id: 3, itemCode: "RM-STL-001", itemName: "Steel Sheet 2mm", uom: "KG", receivedQty: 50, batchNo: "SCRAP-001" },
+        ]
+    },
+    {
+        id: 3,
+        grnNo: "GRN-2024-003",
+        grnDate: "2024-02-19",
+        grnType: "Non-PO",
+        warehouse: "Main Warehouse",
+        receivedBy: "Admin User",
+        receivedDate: "2024-02-19",
+        receiptType: "Invoice",
+        supplier: "Local Vendors",
+        invoiceNo: "INV-2024-123",
+        remarks: "Emergency purchase",
+        status: "Posted",
+        totalItems: 1,
+        items: [
+            { id: 4, itemCode: "RM-BOL-005", itemName: "Bolts M10", uom: "NOS", receivedQty: 1000 },
+        ]
+    }
+];
 
 // ============================================================================
 // DATE PICKER COMPONENT (Standardized)
@@ -511,6 +642,30 @@ function SearchableSelect({ label, value, options, onChange, required = false }:
 
 export default function Materials() {
     const { toast } = useToast();
+    const [location, setLocation] = useLocation();
+
+    // Route matching for tabs
+    const [matchMaterialRequests] = useRoute("/inventory/materials/material-requests");
+    const [matchGRN] = useRoute("/inventory/materials/grn");
+    const [matchWHReceive] = useRoute("/inventory/materials/wh-receive");
+
+    // Determine active tab based on route
+    const [activeTab, setActiveTab] = useState("material-requests");
+
+    // Redirect default route to material-requests
+    useEffect(() => {
+        if (location === "/inventory/materials") {
+            setLocation("/inventory/materials/material-requests");
+        }
+        // Update active tab based on route
+        if (matchMaterialRequests) {
+            setActiveTab("material-requests");
+        } else if (matchGRN) {
+            setActiveTab("grn");
+        } else if (matchWHReceive) {
+            setActiveTab("wh-receive");
+        }
+    }, [location, matchMaterialRequests, matchGRN, matchWHReceive, setLocation]);
 
     // Listing State
     const [searchTerm, setSearchTerm] = useState("");
@@ -523,6 +678,20 @@ export default function Materials() {
     // Detail View State (Popup)
     const [isViewModalOpen, setIsViewModalOpen] = useState(false);
     const [selectedMR, setSelectedMR] = useState<MaterialRequest | null>(null);
+
+    // GRN State
+    const [grnList, setGrnList] = useState<GRN[]>(MOCK_GRN_DATA);
+    const [grnSearchTerm, setGrnSearchTerm] = useState("");
+    const [grnWarehouseFilter, setGrnWarehouseFilter] = useState("");
+    const [grnTypeFilter, setGrnTypeFilter] = useState("");
+    const [grnStatusFilter, setGrnStatusFilter] = useState("");
+    const [grnCurrentPage, setGrnCurrentPage] = useState(1);
+    const grnItemsPerPage = 10;
+
+    // GRN Form State
+    const [isGRNModalOpen, setIsGRNModalOpen] = useState(false);
+    const [grnFormMode, setGrnFormMode] = useState<"create" | "edit" | "view">("create");
+    const [currentGRN, setCurrentGRN] = useState<GRN | null>(null);
 
     // Filter Logic
     const filteredRequests = MOCK_MR_REQUESTS.filter(mr => {
@@ -560,7 +729,17 @@ export default function Materials() {
 
     const handleIssueQtyChange = (itemId: number, value: string) => {
         if (!selectedMR) return;
-        const qty = parseFloat(value) || 0;
+        
+        // Remove non-numeric characters except decimal point
+        const numericValue = value.replace(/[^0-9.]/g, '');
+        
+        // Check if value exceeds 5 digits (before decimal point)
+        const integerPart = numericValue.split('.')[0];
+        if (integerPart.length > 5) {
+            return; // Prevent update if exceeds max length
+        }
+        
+        const qty = parseFloat(numericValue) || 0;
         setSelectedMR({
             ...selectedMR,
             items: selectedMR.items.map(item =>
@@ -576,6 +755,259 @@ export default function Materials() {
         });
         setIsViewModalOpen(false);
         setSelectedMR(null);
+    };
+
+    // ============================================================================
+    // GRN HANDLERS
+    // ============================================================================
+
+    const handleCreateGRN = () => {
+        const newGRN: GRN = {
+            id: Date.now(),
+            grnNo: `GRN-2024-${String(grnList.length + 1).padStart(3, '0')}`,
+            grnDate: formatDate(new Date()),
+            grnType: "Non-PO",
+            warehouse: "",
+            receivedBy: "Admin User",
+            receivedDate: formatDate(new Date()),
+            remarks: "",
+            status: "Draft",
+            totalItems: 0,
+            items: []
+        };
+        setCurrentGRN(newGRN);
+        setGrnFormMode("create");
+        setIsGRNModalOpen(true);
+    };
+
+    const handleEditGRN = (grn: GRN) => {
+        setCurrentGRN({ ...grn });
+        setGrnFormMode("edit");
+        setIsGRNModalOpen(true);
+    };
+
+    const handleViewGRN = (grn: GRN) => {
+        setCurrentGRN({ ...grn });
+        setGrnFormMode("view");
+        setIsGRNModalOpen(true);
+    };
+
+    const handleSaveDraft = () => {
+        if (!currentGRN) return;
+
+        if (!currentGRN.warehouse || !currentGRN.grnType) {
+            toast({
+                title: "Validation Error",
+                description: "Please fill all required fields.",
+                variant: "destructive"
+            });
+            return;
+        }
+
+        if (currentGRN.grnType === "PO-Based" && !currentGRN.poNo) {
+            toast({
+                title: "Validation Error",
+                description: "Please select a PO Number.",
+                variant: "destructive"
+            });
+            return;
+        }
+
+        if (currentGRN.grnType === "Non-PO" && currentGRN.receiptType === "Invoice" && (!currentGRN.supplier || !currentGRN.invoiceNo)) {
+            toast({
+                title: "Validation Error",
+                description: "Please fill Supplier and Invoice No for Invoice type.",
+                variant: "destructive"
+            });
+            return;
+        }
+
+        const updatedGRN = {
+            ...currentGRN,
+            totalItems: currentGRN.items.length,
+            status: "Draft" as const
+        };
+
+        if (grnFormMode === "create") {
+            setGrnList([...grnList, updatedGRN]);
+        } else {
+            setGrnList(grnList.map(g => g.id === updatedGRN.id ? updatedGRN : g));
+        }
+
+        toast({
+            title: "Success",
+            description: `GRN ${updatedGRN.grnNo} saved as draft.`
+        });
+        setIsGRNModalOpen(false);
+        setCurrentGRN(null);
+    };
+
+    const handlePostGRN = () => {
+        if (!currentGRN) return;
+
+        if (!currentGRN.warehouse || !currentGRN.grnType || currentGRN.items.length === 0) {
+            toast({
+                title: "Validation Error",
+                description: "Please fill all required fields and add at least one item.",
+                variant: "destructive"
+            });
+            return;
+        }
+
+        const hasInvalidQty = currentGRN.items.some(item => {
+            if (currentGRN.grnType === "PO-Based") {
+                return item.receivedQty <= 0 || (item.pendingQty !== undefined && item.receivedQty > item.pendingQty);
+            }
+            return item.receivedQty <= 0;
+        });
+
+        if (hasInvalidQty) {
+            toast({
+                title: "Validation Error",
+                description: "Please check receiving quantities. Must be > 0 and <= Pending Qty for PO-Based GRN.",
+                variant: "destructive"
+            });
+            return;
+        }
+
+        const updatedGRN = {
+            ...currentGRN,
+            totalItems: currentGRN.items.length,
+            status: "Posted" as const
+        };
+
+        if (grnFormMode === "create") {
+            setGrnList([...grnList, updatedGRN]);
+        } else {
+            setGrnList(grnList.map(g => g.id === updatedGRN.id ? updatedGRN : g));
+        }
+
+        toast({
+            title: "Success",
+            description: `GRN ${updatedGRN.grnNo} posted successfully. Stock updated.`
+        });
+        setIsGRNModalOpen(false);
+        setCurrentGRN(null);
+    };
+
+    const handleCancelGRN = () => {
+        if (!currentGRN) return;
+
+        const updatedGRN = {
+            ...currentGRN,
+            status: "Cancelled" as const
+        };
+
+        setGrnList(grnList.map(g => g.id === updatedGRN.id ? updatedGRN : g));
+
+        toast({
+            title: "Success",
+            description: `GRN ${updatedGRN.grnNo} cancelled.`
+        });
+        setIsGRNModalOpen(false);
+        setCurrentGRN(null);
+    };
+
+    const handleGRNFieldChange = (field: keyof GRN, value: any) => {
+        if (!currentGRN) return;
+
+        const updates: Partial<GRN> = { [field]: value };
+
+        // Reset dependent fields when GRN Type changes
+        if (field === "grnType") {
+            if (value === "Non-PO") {
+                updates.poNo = undefined;
+                updates.poDate = undefined;
+                updates.items = [];
+            } else if (value === "PO-Based") {
+                updates.receiptType = undefined;
+                updates.invoiceNo = undefined;
+                updates.items = [];
+            }
+        }
+
+        // Reset fields when Receipt Type changes
+        if (field === "receiptType") {
+            if (value === "Scrap") {
+                updates.supplier = undefined;
+                updates.invoiceNo = undefined;
+            }
+        }
+
+        // Load PO items when PO is selected
+        if (field === "poNo" && value) {
+            const poData = MOCK_PO_DATA[value];
+            if (poData) {
+                updates.supplier = poData.supplier;
+                updates.poDate = poData.poDate;
+                updates.items = poData.items.map(item => ({ ...item }));
+            }
+        }
+
+        setCurrentGRN({ ...currentGRN, ...updates });
+    };
+
+    const handleAddGRNItem = () => {
+        if (!currentGRN) return;
+
+        const newItem: GRNItem = {
+            id: Date.now(),
+            itemCode: "",
+            itemName: "",
+            uom: "",
+            receivedQty: 0,
+            batchNo: "",
+            lineRemarks: ""
+        };
+
+        setCurrentGRN({
+            ...currentGRN,
+            items: [...currentGRN.items, newItem]
+        });
+    };
+
+    const handleGRNItemChange = (itemId: number, field: keyof GRNItem, value: any) => {
+        if (!currentGRN) return;
+
+        const updatedItems = currentGRN.items.map(item => {
+            if (item.id === itemId) {
+                const updates: Partial<GRNItem> = { [field]: value };
+
+                // Auto-fill item details when item code is selected
+                if (field === "itemCode") {
+                    const itemMaster = ITEMS_MASTER.find(im => im.code === value);
+                    if (itemMaster) {
+                        updates.itemName = itemMaster.name;
+                        updates.uom = itemMaster.uom;
+                    }
+                }
+
+                return { ...item, ...updates };
+            }
+            return item;
+        });
+
+        setCurrentGRN({
+            ...currentGRN,
+            items: updatedItems
+        });
+    };
+
+    const handleDeleteGRNItem = (itemId: number) => {
+        if (!currentGRN) return;
+
+        setCurrentGRN({
+            ...currentGRN,
+            items: currentGRN.items.filter(item => item.id !== itemId)
+        });
+    };
+
+    const handleClearGRNFilters = () => {
+        setGrnSearchTerm("");
+        setGrnWarehouseFilter("");
+        setGrnTypeFilter("");
+        setGrnStatusFilter("");
+        setGrnCurrentPage(1);
     };
 
     // --------------------------------------------------------------------------
@@ -786,11 +1218,27 @@ export default function Materials() {
                                                 <TableCell className="text-right text-xs font-medium text-primary">{item.availableQty} {item.uom}</TableCell>
                                                 <TableCell className="text-right py-1">
                                                     <Input
-                                                        type="number"
+                                                        type="text"
+                                                        inputMode="numeric"
                                                         className="h-7 text-right text-xs font-medium px-2"
                                                         value={item.issueQty}
                                                         onChange={(e) => handleIssueQtyChange(item.id, e.target.value)}
-                                                        max={item.availableQty}
+                                                        onKeyPress={(e) => {
+                                                            // Allow only numbers and decimal point
+                                                            if (!/[0-9.]/.test(e.key)) {
+                                                                e.preventDefault();
+                                                            }
+                                                        }}
+                                                        onPaste={(e) => {
+                                                            // Prevent paste if value exceeds 5 digits
+                                                            const pastedText = e.clipboardData.getData('text');
+                                                            const numericValue = pastedText.replace(/[^0-9.]/g, '');
+                                                            const integerPart = numericValue.split('.')[0];
+                                                            if (integerPart.length > 5) {
+                                                                e.preventDefault();
+                                                            }
+                                                        }}
+                                                        maxLength={7}
                                                     />
                                                 </TableCell>
                                             </TableRow>
@@ -837,6 +1285,562 @@ export default function Materials() {
         );
     };
 
+    // ============================================================================
+    // RENDER: GRN TAB
+    // ============================================================================
+
+    const renderGRNTab = () => {
+        // Filter GRN list
+        const filteredGRNs = grnList.filter(grn => {
+            const matchesSearch = grn.grnNo.toLowerCase().includes(grnSearchTerm.toLowerCase()) ||
+                (grn.poNo && grn.poNo.toLowerCase().includes(grnSearchTerm.toLowerCase())) ||
+                (grn.invoiceNo && grn.invoiceNo.toLowerCase().includes(grnSearchTerm.toLowerCase()));
+            const matchesWarehouse = !grnWarehouseFilter || grn.warehouse === grnWarehouseFilter;
+            const matchesType = !grnTypeFilter || grn.grnType === grnTypeFilter;
+            const matchesStatus = !grnStatusFilter || grn.status === grnStatusFilter;
+
+            return matchesSearch && matchesWarehouse && matchesType && matchesStatus;
+        });
+
+        const totalGRNPages = Math.ceil(filteredGRNs.length / grnItemsPerPage);
+        const paginatedGRNs = filteredGRNs.slice((grnCurrentPage - 1) * grnItemsPerPage, grnCurrentPage * grnItemsPerPage);
+
+        return (
+            <div className="flex flex-col gap-6">
+                {/* Filter Bar */}
+                <div className="flex flex-col gap-4 bg-card p-4 rounded-lg border shadow-sm">
+                    <div className="flex flex-col sm:flex-row items-end gap-4">
+                        <div className="w-full sm:w-1/4">
+                            <Label className="text-xs font-medium text-muted-foreground uppercase tracking-wider mb-1.5 block">Search</Label>
+                            <div className="relative">
+                                <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
+                                <Input
+                                    placeholder="GRN No / PO No / Invoice No / Item"
+                                    className="pl-9 h-10"
+                                    value={grnSearchTerm}
+                                    onChange={(e) => setGrnSearchTerm(e.target.value)}
+                                />
+                            </div>
+                        </div>
+
+                        <div className="w-full sm:w-1/5">
+                            <SearchableSelect
+                                label="Warehouse"
+                                options={WAREHOUSES}
+                                value={grnWarehouseFilter}
+                                onChange={setGrnWarehouseFilter}
+                            />
+                        </div>
+
+                        <div className="w-full sm:w-1/5">
+                            <Label className="text-xs font-medium text-muted-foreground uppercase tracking-wider mb-1.5 block">GRN Type</Label>
+                            <Select value={grnTypeFilter} onValueChange={setGrnTypeFilter}>
+                                <SelectTrigger className="h-10">
+                                    <SelectValue placeholder="All Types" />
+                                </SelectTrigger>
+                                <SelectContent>
+                                    <SelectItem value="">All Types</SelectItem>
+                                    <SelectItem value="Non-PO">Non-PO</SelectItem>
+                                    <SelectItem value="PO-Based">PO-Based</SelectItem>
+                                </SelectContent>
+                            </Select>
+                        </div>
+
+                        <div className="w-full sm:w-1/5">
+                            <Label className="text-xs font-medium text-muted-foreground uppercase tracking-wider mb-1.5 block">Status</Label>
+                            <Select value={grnStatusFilter} onValueChange={setGrnStatusFilter}>
+                                <SelectTrigger className="h-10">
+                                    <SelectValue placeholder="All Status" />
+                                </SelectTrigger>
+                                <SelectContent>
+                                    <SelectItem value="">All Status</SelectItem>
+                                    <SelectItem value="Draft">Draft</SelectItem>
+                                    <SelectItem value="Posted">Posted</SelectItem>
+                                    <SelectItem value="Cancelled">Cancelled</SelectItem>
+                                </SelectContent>
+                            </Select>
+                        </div>
+
+                        <div className="flex gap-2">
+                            <Button variant="outline" size="sm" className="h-10" onClick={handleClearGRNFilters}>
+                                Clear
+                            </Button>
+                            <Button variant="default" size="sm" className="h-10" onClick={handleCreateGRN}>
+                                Create GRN
+                            </Button>
+                        </div>
+                    </div>
+                </div>
+
+                {/* GRN Table */}
+                <Card>
+                    <CardContent className="pt-6">
+                        <div className="rounded-md border">
+                            <Table>
+                                <TableHeader>
+                                    <TableRow className="bg-muted/50 hover:bg-muted/50">
+                                        <TableHead className="font-semibold text-xs uppercase tracking-wider">GRN No</TableHead>
+                                        <TableHead className="font-semibold text-xs uppercase tracking-wider">GRN Date</TableHead>
+                                        <TableHead className="font-semibold text-xs uppercase tracking-wider">GRN Type</TableHead>
+                                        <TableHead className="font-semibold text-xs uppercase tracking-wider">Warehouse</TableHead>
+                                        <TableHead className="font-semibold text-xs uppercase tracking-wider">Supplier/Source</TableHead>
+                                        <TableHead className="font-semibold text-xs uppercase tracking-wider">Total Items</TableHead>
+                                        <TableHead className="font-semibold text-xs uppercase tracking-wider">Status</TableHead>
+                                        <TableHead className="text-right font-semibold text-xs uppercase tracking-wider pr-6">Action</TableHead>
+                                    </TableRow>
+                                </TableHeader>
+                                <TableBody>
+                                    {paginatedGRNs.length === 0 ? (
+                                        <TableRow>
+                                            <TableCell colSpan={8} className="h-32 text-center text-muted-foreground">
+                                                No GRN records found.
+                                            </TableCell>
+                                        </TableRow>
+                                    ) : (
+                                        paginatedGRNs.map((grn) => (
+                                            <TableRow key={grn.id} className="hover:bg-muted/30 transition-colors border-b">
+                                                <TableCell className="py-4 font-medium text-primary">{grn.grnNo}</TableCell>
+                                                <TableCell>{formatDate(grn.grnDate)}</TableCell>
+                                                <TableCell>
+                                                    <Badge variant="outline" className={cn(
+                                                        grn.grnType === "PO-Based" ? "border-blue-500 text-blue-600 bg-blue-50" : "border-purple-500 text-purple-600 bg-purple-50"
+                                                    )}>
+                                                        {grn.grnType}
+                                                    </Badge>
+                                                </TableCell>
+                                                <TableCell>{grn.warehouse}</TableCell>
+                                                <TableCell>{grn.supplier || (grn.receiptType === "Scrap" ? "Scrap" : "-")}</TableCell>
+                                                <TableCell>{grn.totalItems}</TableCell>
+                                                <TableCell>
+                                                    <Badge variant="outline" className={cn(
+                                                        grn.status === "Draft" && "border-amber-500 text-amber-600 bg-amber-50",
+                                                        grn.status === "Posted" && "border-green-500 text-green-600 bg-green-50",
+                                                        grn.status === "Cancelled" && "border-red-500 text-red-600 bg-red-50"
+                                                    )}>
+                                                        {grn.status}
+                                                    </Badge>
+                                                </TableCell>
+                                                <TableCell className="text-right pr-6">
+                                                    <div className="flex gap-2 justify-end">
+                                                        <Button variant="outline" size="sm" className="h-8" onClick={() => handleViewGRN(grn)}>
+                                                            View
+                                                        </Button>
+                                                        {grn.status === "Draft" && (
+                                                            <>
+                                                                <Button variant="outline" size="sm" className="h-8" onClick={() => handleEditGRN(grn)}>
+                                                                    Edit
+                                                                </Button>
+                                                                <Button variant="default" size="sm" className="h-8" onClick={() => {
+                                                                    setCurrentGRN(grn);
+                                                                    handlePostGRN();
+                                                                }}>
+                                                                    Post GRN
+                                                                </Button>
+                                                            </>
+                                                        )}
+                                                    </div>
+                                                </TableCell>
+                                            </TableRow>
+                                        ))
+                                    )}
+                                </TableBody>
+                            </Table>
+                        </div>
+
+                        {filteredGRNs.length > 0 && (
+                            <div className="flex justify-between items-center px-1 mt-4">
+                                <div className="text-sm text-muted-foreground">
+                                    Showing {(grnCurrentPage - 1) * grnItemsPerPage + 1} to {Math.min(grnCurrentPage * grnItemsPerPage, filteredGRNs.length)} of {filteredGRNs.length} entries
+                                </div>
+                                <div className="flex gap-2">
+                                    <Button
+                                        variant="outline"
+                                        size="sm"
+                                        onClick={() => setGrnCurrentPage(p => Math.max(1, p - 1))}
+                                        disabled={grnCurrentPage === 1}
+                                    >
+                                        <ChevronLeft className="h-4 w-4" />
+                                    </Button>
+                                    <Button
+                                        variant="outline"
+                                        size="sm"
+                                        onClick={() => setGrnCurrentPage(p => Math.min(totalGRNPages, p + 1))}
+                                        disabled={grnCurrentPage >= totalGRNPages || totalGRNPages === 0}
+                                    >
+                                        <ChevronRight className="h-4 w-4" />
+                                    </Button>
+                                </div>
+                            </div>
+                        )}
+                    </CardContent>
+                </Card>
+
+                {/* GRN Form Modal */}
+                {renderGRNFormModal()}
+            </div>
+        );
+    };
+
+    const renderGRNFormModal = () => {
+        if (!currentGRN) return null;
+
+        const isReadOnly = grnFormMode === "view" || currentGRN.status === "Posted" || currentGRN.status === "Cancelled";
+        const isDraft = currentGRN.status === "Draft";
+
+        return (
+            <Dialog open={isGRNModalOpen} onOpenChange={setIsGRNModalOpen}>
+                <DialogContent className="max-w-6xl max-h-[90vh] overflow-y-auto">
+                    <DialogHeader className="border-b pb-4">
+                        <DialogTitle className="text-xl font-bold">
+                            {grnFormMode === "create" ? "Create GRN" : grnFormMode === "edit" ? "Edit GRN" : "View GRN"} - {currentGRN.grnNo}
+                        </DialogTitle>
+                        <DialogDescription>
+                            {grnFormMode === "view" ? "View goods receipt note details" : "Fill in the details to create or update a GRN"}
+                        </DialogDescription>
+                    </DialogHeader>
+
+                    <div className="space-y-6 py-4">
+                        {/* Section A: Basic Details */}
+                        <Card>
+                            <CardContent className="pt-6">
+                                <h3 className="text-sm font-semibold uppercase tracking-wider text-muted-foreground mb-4">Basic Details</h3>
+                                <div className="grid grid-cols-4 gap-4">
+                                    <div>
+                                        <Label className="text-xs font-medium text-muted-foreground uppercase tracking-wider">GRN Type <span className="text-red-500">*</span></Label>
+                                        <Select
+                                            value={currentGRN.grnType}
+                                            onValueChange={(val) => handleGRNFieldChange("grnType", val)}
+                                            disabled={isReadOnly}
+                                        >
+                                            <SelectTrigger className="h-10 mt-1.5">
+                                                <SelectValue />
+                                            </SelectTrigger>
+                                            <SelectContent>
+                                                <SelectItem value="Non-PO">Non-PO</SelectItem>
+                                                <SelectItem value="PO-Based">PO-Based</SelectItem>
+                                            </SelectContent>
+                                        </Select>
+                                    </div>
+
+                                    <div>
+                                        <SearchableSelect
+                                            label="Warehouse / Location *"
+                                            options={WAREHOUSES}
+                                            value={currentGRN.warehouse}
+                                            onChange={(val) => handleGRNFieldChange("warehouse", val)}
+                                            required
+                                        />
+                                    </div>
+
+                                    <div>
+                                        <Label className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Received Date <span className="text-red-500">*</span></Label>
+                                        <Input
+                                            value={currentGRN.receivedDate}
+                                            readOnly
+                                            className="h-10 mt-1.5 bg-muted"
+                                        />
+                                    </div>
+
+                                    <div>
+                                        <Label className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Received By</Label>
+                                        <Input
+                                            value={currentGRN.receivedBy}
+                                            readOnly
+                                            className="h-10 mt-1.5 bg-muted"
+                                        />
+                                    </div>
+                                </div>
+
+                                <div className="mt-4">
+                                    <Label className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Remarks</Label>
+                                    <Input
+                                        value={currentGRN.remarks || ""}
+                                        onChange={(e) => handleGRNFieldChange("remarks", e.target.value)}
+                                        disabled={isReadOnly}
+                                        className="h-10 mt-1.5"
+                                        placeholder="Optional remarks"
+                                    />
+                                </div>
+                            </CardContent>
+                        </Card>
+
+                        {/* Section B: Conditional Details */}
+                        {currentGRN.grnType === "Non-PO" && (
+                            <Card>
+                                <CardContent className="pt-6">
+                                    <h3 className="text-sm font-semibold uppercase tracking-wider text-muted-foreground mb-4">Receipt Details</h3>
+                                    <div className="grid grid-cols-4 gap-4">
+                                        <div>
+                                            <Label className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Receipt Type <span className="text-red-500">*</span></Label>
+                                            <Select
+                                                value={currentGRN.receiptType || ""}
+                                                onValueChange={(val) => handleGRNFieldChange("receiptType", val)}
+                                                disabled={isReadOnly}
+                                            >
+                                                <SelectTrigger className="h-10 mt-1.5">
+                                                    <SelectValue placeholder="Select Type" />
+                                                </SelectTrigger>
+                                                <SelectContent>
+                                                    <SelectItem value="Scrap">Scrap</SelectItem>
+                                                    <SelectItem value="Invoice">Invoice</SelectItem>
+                                                </SelectContent>
+                                            </Select>
+                                        </div>
+
+                                        {currentGRN.receiptType === "Invoice" && (
+                                            <>
+                                                <div>
+                                                    <SearchableSelect
+                                                        label="Supplier *"
+                                                        options={SUPPLIERS}
+                                                        value={currentGRN.supplier || ""}
+                                                        onChange={(val) => handleGRNFieldChange("supplier", val)}
+                                                        required
+                                                    />
+                                                </div>
+                                                <div>
+                                                    <Label className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Invoice No <span className="text-red-500">*</span></Label>
+                                                    <Input
+                                                        value={currentGRN.invoiceNo || ""}
+                                                        onChange={(e) => handleGRNFieldChange("invoiceNo", e.target.value)}
+                                                        disabled={isReadOnly}
+                                                        className="h-10 mt-1.5"
+                                                        placeholder="Enter Invoice No"
+                                                    />
+                                                </div>
+                                            </>
+                                        )}
+                                    </div>
+                                </CardContent>
+                            </Card>
+                        )}
+
+                        {currentGRN.grnType === "PO-Based" && (
+                            <Card>
+                                <CardContent className="pt-6">
+                                    <h3 className="text-sm font-semibold uppercase tracking-wider text-muted-foreground mb-4">PO Details</h3>
+                                    <div className="grid grid-cols-4 gap-4">
+                                        <div>
+                                            <Label className="text-xs font-medium text-muted-foreground uppercase tracking-wider">PO No <span className="text-red-500">*</span></Label>
+                                            <Select
+                                                value={currentGRN.poNo || ""}
+                                                onValueChange={(val) => handleGRNFieldChange("poNo", val)}
+                                                disabled={isReadOnly}
+                                            >
+                                                <SelectTrigger className="h-10 mt-1.5">
+                                                    <SelectValue placeholder="Select PO" />
+                                                </SelectTrigger>
+                                                <SelectContent>
+                                                    {Object.keys(MOCK_PO_DATA).map(poNo => (
+                                                        <SelectItem key={poNo} value={poNo}>{poNo}</SelectItem>
+                                                    ))}
+                                                </SelectContent>
+                                            </Select>
+                                        </div>
+
+                                        {currentGRN.poNo && (
+                                            <>
+                                                <div>
+                                                    <Label className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Supplier</Label>
+                                                    <Input
+                                                        value={currentGRN.supplier || ""}
+                                                        readOnly
+                                                        className="h-10 mt-1.5 bg-muted"
+                                                    />
+                                                </div>
+                                                <div>
+                                                    <Label className="text-xs font-medium text-muted-foreground uppercase tracking-wider">PO Date</Label>
+                                                    <Input
+                                                        value={currentGRN.poDate ? formatDate(currentGRN.poDate) : ""}
+                                                        readOnly
+                                                        className="h-10 mt-1.5 bg-muted"
+                                                    />
+                                                </div>
+                                            </>
+                                        )}
+                                    </div>
+                                </CardContent>
+                            </Card>
+                        )}
+
+                        {/* Items Table */}
+                        <Card>
+                            <CardContent className="pt-6">
+                                <div className="flex justify-between items-center mb-4">
+                                    <h3 className="text-sm font-semibold uppercase tracking-wider text-muted-foreground">Items</h3>
+                                    {currentGRN.grnType === "Non-PO" && !isReadOnly && (
+                                        <Button variant="outline" size="sm" onClick={handleAddGRNItem}>
+                                            Add Item
+                                        </Button>
+                                    )}
+                                </div>
+
+                                <div className="border rounded-md overflow-x-auto">
+                                    <Table>
+                                        <TableHeader>
+                                            <TableRow className="bg-muted/30 hover:bg-muted/30">
+                                                {currentGRN.grnType === "Non-PO" && <TableHead className="text-[10px] uppercase font-bold py-2">Item</TableHead>}
+                                                <TableHead className="text-[10px] uppercase font-bold py-2">Item Name</TableHead>
+                                                <TableHead className="text-[10px] uppercase font-bold py-2">UOM</TableHead>
+                                                {currentGRN.grnType === "PO-Based" && (
+                                                    <>
+                                                        <TableHead className="text-[10px] uppercase font-bold py-2 text-right">Ordered Qty</TableHead>
+                                                        <TableHead className="text-[10px] uppercase font-bold py-2 text-right">Prev Received</TableHead>
+                                                        <TableHead className="text-[10px] uppercase font-bold py-2 text-right">Pending Qty</TableHead>
+                                                    </>
+                                                )}
+                                                <TableHead className="text-[10px] uppercase font-bold py-2 text-right">Receiving Now <span className="text-red-500">*</span></TableHead>
+                                                {currentGRN.grnType === "Non-PO" && <TableHead className="text-[10px] uppercase font-bold py-2">Batch / Lot No</TableHead>}
+                                                <TableHead className="text-[10px] uppercase font-bold py-2">Line Remarks</TableHead>
+                                                {!isReadOnly && <TableHead className="text-[10px] uppercase font-bold py-2 text-center">Action</TableHead>}
+                                            </TableRow>
+                                        </TableHeader>
+                                        <TableBody>
+                                            {currentGRN.items.length === 0 ? (
+                                                <TableRow>
+                                                    <TableCell colSpan={currentGRN.grnType === "PO-Based" ? 10 : 7} className="h-20 text-center text-muted-foreground text-xs">
+                                                        {currentGRN.grnType === "PO-Based" ? "Select a PO to load items" : "No items added. Click 'Add Item' to begin."}
+                                                    </TableCell>
+                                                </TableRow>
+                                            ) : (
+                                                currentGRN.items.map((item) => {
+                                                    const itemMaster = ITEMS_MASTER.find(im => im.code === item.itemCode);
+                                                    const isBatchTracked = itemMaster?.isBatchTracked || false;
+
+                                                    return (
+                                                        <TableRow key={item.id} className="border-b last:border-0">
+                                                            {currentGRN.grnType === "Non-PO" && (
+                                                                <TableCell className="py-2">
+                                                                    {!isReadOnly ? (
+                                                                        <Select
+                                                                            value={item.itemCode}
+                                                                            onValueChange={(val) => handleGRNItemChange(item.id, "itemCode", val)}
+                                                                        >
+                                                                            <SelectTrigger className="h-8 text-xs w-32">
+                                                                                <SelectValue placeholder="Select" />
+                                                                            </SelectTrigger>
+                                                                            <SelectContent>
+                                                                                {ITEMS_MASTER.map(im => (
+                                                                                    <SelectItem key={im.code} value={im.code}>{im.code}</SelectItem>
+                                                                                ))}
+                                                                            </SelectContent>
+                                                                        </Select>
+                                                                    ) : (
+                                                                        <span className="text-xs">{item.itemCode}</span>
+                                                                    )}
+                                                                </TableCell>
+                                                            )}
+                                                            <TableCell className="text-xs">{item.itemName}</TableCell>
+                                                            <TableCell className="text-xs">{item.uom}</TableCell>
+                                                            {currentGRN.grnType === "PO-Based" && (
+                                                                <>
+                                                                    <TableCell className="text-xs text-right">{item.orderedQty}</TableCell>
+                                                                    <TableCell className="text-xs text-right">{item.previouslyReceivedQty}</TableCell>
+                                                                    <TableCell className="text-xs text-right font-medium text-primary">{item.pendingQty}</TableCell>
+                                                                </>
+                                                            )}
+                                                            <TableCell className="text-right">
+                                                                <Input
+                                                                    type="number"
+                                                                    value={item.receivedQty}
+                                                                    onChange={(e) => handleGRNItemChange(item.id, "receivedQty", parseFloat(e.target.value) || 0)}
+                                                                    disabled={isReadOnly}
+                                                                    className="h-8 text-xs text-right w-20"
+                                                                    min="0"
+                                                                    max={currentGRN.grnType === "PO-Based" ? item.pendingQty : undefined}
+                                                                />
+                                                            </TableCell>
+                                                            {currentGRN.grnType === "Non-PO" && (
+                                                                <TableCell>
+                                                                    {isBatchTracked ? (
+                                                                        <Input
+                                                                            value={item.batchNo || ""}
+                                                                            onChange={(e) => handleGRNItemChange(item.id, "batchNo", e.target.value)}
+                                                                            disabled={isReadOnly}
+                                                                            className="h-8 text-xs w-24"
+                                                                            placeholder="Batch"
+                                                                        />
+                                                                    ) : (
+                                                                        <span className="text-xs text-muted-foreground">-</span>
+                                                                    )}
+                                                                </TableCell>
+                                                            )}
+                                                            <TableCell>
+                                                                <Input
+                                                                    value={item.lineRemarks || ""}
+                                                                    onChange={(e) => handleGRNItemChange(item.id, "lineRemarks", e.target.value)}
+                                                                    disabled={isReadOnly}
+                                                                    className="h-8 text-xs w-32"
+                                                                    placeholder="Optional"
+                                                                />
+                                                            </TableCell>
+                                                            {!isReadOnly && (
+                                                                <TableCell className="text-center">
+                                                                    {currentGRN.grnType === "Non-PO" && (
+                                                                        <Button
+                                                                            variant="ghost"
+                                                                            size="sm"
+                                                                            className="h-7 w-7 p-0 text-red-500 hover:text-red-700 hover:bg-red-50"
+                                                                            onClick={() => handleDeleteGRNItem(item.id)}
+                                                                        >
+                                                                            <X className="h-4 w-4" />
+                                                                        </Button>
+                                                                    )}
+                                                                </TableCell>
+                                                            )}
+                                                        </TableRow>
+                                                    );
+                                                })
+                                            )}
+                                        </TableBody>
+                                    </Table>
+                                </div>
+
+                                {/* Summary */}
+                                {currentGRN.items.length > 0 && (
+                                    <div className="mt-4 flex justify-between items-center px-2">
+                                        <div className="text-sm text-muted-foreground">
+                                            Total Items: <span className="font-semibold">{currentGRN.items.length}</span>
+                                        </div>
+                                        <div className="text-sm text-muted-foreground">
+                                            Total Qty: <span className="font-semibold">{currentGRN.items.reduce((sum, item) => sum + item.receivedQty, 0)}</span>
+                                        </div>
+                                    </div>
+                                )}
+                            </CardContent>
+                        </Card>
+                    </div>
+
+                    {/* Bottom Action Buttons */}
+                    <div className="flex justify-end gap-2 pt-4 border-t">
+                        {isReadOnly ? (
+                            <Button variant="outline" onClick={() => setIsGRNModalOpen(false)}>
+                                Close
+                            </Button>
+                        ) : (
+                            <>
+                                <Button variant="outline" onClick={() => setIsGRNModalOpen(false)}>
+                                    Cancel
+                                </Button>
+                                {isDraft && (
+                                    <Button variant="outline" onClick={handleCancelGRN}>
+                                        Cancel GRN
+                                    </Button>
+                                )}
+                                <Button variant="outline" onClick={handleSaveDraft}>
+                                    Save Draft
+                                </Button>
+                                <Button variant="default" onClick={handlePostGRN}>
+                                    Post GRN
+                                </Button>
+                            </>
+                        )}
+                    </div>
+                </DialogContent>
+            </Dialog>
+        );
+    };
+
     return (
         <div className="flex flex-col gap-6 h-full min-h-0">
             <div className="flex flex-col gap-2">
@@ -844,7 +1848,16 @@ export default function Materials() {
                 <p className="text-muted-foreground">Manage material requests and store operations.</p>
             </div>
 
-            <Tabs defaultValue="material-requests" className="w-full flex-1 flex flex-col min-h-0">
+            <Tabs value={activeTab} onValueChange={(value) => {
+                setActiveTab(value);
+                if (value === "material-requests") {
+                    setLocation("/inventory/materials/material-requests");
+                } else if (value === "grn") {
+                    setLocation("/inventory/materials/grn");
+                } else if (value === "wh-receive") {
+                    setLocation("/inventory/materials/wh-receive");
+                }
+            }} className="w-full flex-1 flex flex-col min-h-0">
                 <div className="border-b border-border">
                     <TabsList className="h-auto w-full justify-start gap-0 bg-transparent p-0 overflow-x-auto">
                         <TabsTrigger
@@ -852,6 +1865,18 @@ export default function Materials() {
                             className="data-[state=active]:bg-transparent data-[state=active]:shadow-none data-[state=active]:border-primary data-[state=active]:text-primary px-4 py-2 text-sm font-medium border-b-2 border-transparent transition-colors rounded-none text-muted-foreground hover:text-foreground hover:border-muted-foreground/30 whitespace-nowrap"
                         >
                             Material Requests
+                        </TabsTrigger>
+                        <TabsTrigger
+                            value="grn"
+                            className="data-[state=active]:bg-transparent data-[state=active]:shadow-none data-[state=active]:border-primary data-[state=active]:text-primary px-4 py-2 text-sm font-medium border-b-2 border-transparent transition-colors rounded-none text-muted-foreground hover:text-foreground hover:border-muted-foreground/30 whitespace-nowrap"
+                        >
+                            GRN
+                        </TabsTrigger>
+                        <TabsTrigger
+                            value="wh-receive"
+                            className="data-[state=active]:bg-transparent data-[state=active]:shadow-none data-[state=active]:border-primary data-[state=active]:text-primary px-4 py-2 text-sm font-medium border-b-2 border-transparent transition-colors rounded-none text-muted-foreground hover:text-foreground hover:border-muted-foreground/30 whitespace-nowrap"
+                        >
+                            WH Receive
                         </TabsTrigger>
                         <TabsTrigger
                             value="stock-status"
@@ -865,6 +1890,14 @@ export default function Materials() {
 
                 <TabsContent value="material-requests" className="m-0 pt-6 h-full min-h-0 overflow-auto">
                     {renderListing()}
+                </TabsContent>
+
+                <TabsContent value="grn" className="m-0 pt-6 h-full min-h-0 overflow-auto">
+                    <GRN />
+                </TabsContent>
+
+                <TabsContent value="wh-receive" className="m-0 pt-6 h-full min-h-0 overflow-auto">
+                    <WHReceive />
                 </TabsContent>
             </Tabs>
 

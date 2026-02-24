@@ -304,6 +304,36 @@ function Router() {
         )}
       </Route>
 
+      <Route path="/inventory/materials/material-requests">
+        {() => (
+          <ProtectedRoute>
+            <MainLayout>
+              <Materials />
+            </MainLayout>
+          </ProtectedRoute>
+        )}
+      </Route>
+
+      <Route path="/inventory/materials/grn">
+        {() => (
+          <ProtectedRoute>
+            <MainLayout>
+              <Materials />
+            </MainLayout>
+          </ProtectedRoute>
+        )}
+      </Route>
+
+      <Route path="/inventory/materials/wh-receive">
+        {() => (
+          <ProtectedRoute>
+            <MainLayout>
+              <Materials />
+            </MainLayout>
+          </ProtectedRoute>
+        )}
+      </Route>
+
       <Route path="/inventory/material-ledger">
         {() => (
           <ProtectedRoute>
@@ -420,6 +450,15 @@ function Router() {
           <ProtectedRoute>
             <MainLayout>
               <QualityCheck />
+            </MainLayout>
+          </ProtectedRoute>
+        )}
+      </Route>
+      <Route path="/production/material-release/new">
+        {() => (
+          <ProtectedRoute>
+            <MainLayout>
+              <MaterialRelease />
             </MainLayout>
           </ProtectedRoute>
         )}

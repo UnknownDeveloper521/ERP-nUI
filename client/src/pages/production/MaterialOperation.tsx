@@ -228,13 +228,13 @@ function SearchableSelect({
             variant="outline"
             role="combobox"
             aria-expanded={open}
-            className="w-full justify-between h-10 font-normal border-input"
+            className="w-full justify-between h-10 font-normal border-input overflow-hidden"
             disabled={disabled}
           >
-            <span className={cn(!value && "text-muted-foreground")}>
+            <span className={cn("truncate mr-2", !value && "text-muted-foreground")}>
               {value || `Select ${label}`}
             </span>
-            <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
+            <ChevronsUpDown className="h-4 w-4 shrink-0 opacity-50 flex-shrink-0" />
           </Button>
         </PopoverTrigger>
         <PopoverContent className="w-[var(--radix-popover-trigger-width)] p-0" align="start">
@@ -381,7 +381,7 @@ export default function MaterialOperation() {
   const [searchTerm, setSearchTerm] = useState("");
   const [currentPage, setCurrentPage] = useState(1);
   const itemsPerPage = 10;
-  const [statusFilter, setStatusFilter] = useState("Submitted"); // Default to Submitted for MR Request
+  const [statusFilter, setStatusFilter] = useState("Request to Warehouse"); // Default to Request to Warehouse for MR Request
   const [batchStatusFilter, setBatchStatusFilter] = useState("In Process"); // Status filter for Batch Tracking
 
   // Modal state for viewing MR
@@ -748,7 +748,7 @@ export default function MaterialOperation() {
   
   /**
    * Filter MR requests by search term (MR Number and Operation) and status
-   * Status filter: "Submitted" = not received (isFinalized false), "Received" = received (isFinalized true)
+   * Status filter: "Request to Warehouse" = not received (isFinalized false), "Received by Production" = received (isFinalized true)
    */
   const filteredRequests = mrRequests.filter(item => {
     // Search filter
@@ -756,9 +756,9 @@ export default function MaterialOperation() {
       item.operation.toLowerCase().includes(searchTerm.toLowerCase());
     
     // Status filter
-    const matchesStatus = statusFilter === "Submitted" 
-      ? !item.isFinalized  // Submitted = not finalized yet
-      : item.isFinalized;  // Received = finalized
+    const matchesStatus = statusFilter === "Request to Warehouse" 
+      ? !item.isFinalized  // Request to Warehouse = not finalized yet
+      : item.isFinalized;  // Received by Production = finalized
     
     return matchesSearch && matchesStatus;
   });
@@ -2251,7 +2251,7 @@ export default function MaterialOperation() {
         setActiveTab(value);
         setSearchTerm("");
         setCurrentPage(1);
-        setStatusFilter("Submitted");
+        setStatusFilter("Request to Warehouse");
         setBatchStatusFilter("In Process");
         if (value === "mr-request") {
           setLocation("/production/material-operation/mr-request");
@@ -2306,7 +2306,7 @@ export default function MaterialOperation() {
               <SearchableSelect
                 label="Status"
                 value={statusFilter}
-                options={["Submitted", "Received"]}
+                options={["Request to Warehouse", "Received by Production"]}
                 onChange={(value) => {
                   setStatusFilter(value);
                   setCurrentPage(1); // Reset to page 1 when filter changes
