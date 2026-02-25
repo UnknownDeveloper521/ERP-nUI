@@ -100,7 +100,7 @@ interface GRN {
     warehouse: string;
     supplier: string;
     totalItems: number;
-    status: "Draft" | "Submitted GRN" | "Cancelled";
+    status: "GRN Drafts" | "Submitted GRN" | "Cancelled GRN";
     receivedBy: string;
     remarks?: string;
     receiptType?: "Scrap" | "Invoice";
@@ -141,7 +141,7 @@ const MOCK_GRNS: GRN[] = [
         warehouse: "Production Store",
         supplier: "Scrap",
         totalItems: 1,
-        status: "Draft",
+        status: "GRN Drafts",
         receivedBy: "Admin User",
         receiptType: "Scrap",
         remarks: "Scrap material from production",
@@ -157,7 +157,7 @@ const MOCK_GRNS: GRN[] = [
         warehouse: "Main Warehouse",
         supplier: "DEF Suppliers",
         totalItems: 1,
-        status: "Draft",
+        status: "GRN Drafts",
         receivedBy: "Admin User",
         receiptType: "Invoice",
         invoiceNo: "INV-2024-123",
@@ -592,7 +592,7 @@ export default function GRN() {
         invoiceNo: "",
         poNo: "",
         items: [],
-        status: "Draft"
+        status: "GRN Drafts"
     });
 
     // Filter Logic
@@ -633,7 +633,7 @@ export default function GRN() {
             invoiceNo: "",
             poNo: "",
             items: [],
-            status: "Draft"
+            status: "GRN Drafts"
         });
         setIsModalOpen(true);
     };
@@ -670,7 +670,7 @@ export default function GRN() {
                 warehouse: formData.warehouse || "",
                 supplier: formData.supplier || "",
                 totalItems: formData.items?.length || 0,
-                status: "Draft",
+                status: "GRN Drafts",
                 receivedBy: formData.receivedBy || "Admin User",
                 remarks: formData.remarks,
                 receiptType: formData.receiptType,
@@ -722,7 +722,7 @@ export default function GRN() {
 
     const handleCancelGRN = () => {
         if (selectedGRN) {
-            setGrns(grns.map(g => g.id === selectedGRN.id ? { ...g, status: "Cancelled" } : g));
+            setGrns(grns.map(g => g.id === selectedGRN.id ? { ...g, status: "Cancelled GRN" } : g));
             toast({
                 title: "Success",
                 description: `GRN ${selectedGRN.grnNo} has been cancelled.`,
@@ -767,27 +767,43 @@ export default function GRN() {
     };
 
     const handleItemChange = (itemId: number, field: keyof GRNItem, value: any) => {
+        let finalValue = value;
+        if (field === "receivedQty") {
+            finalValue = Math.max(0, parseFloat(value) || 0);
+        }
         setFormData({
             ...formData,
             items: formData.items?.map(item =>
-                item.id === itemId ? { ...item, [field]: value } : item
+                item.id === itemId ? { ...item, [field]: finalValue } : item
             ) || []
         });
     };
 
     // Validation function to check if form is valid for submission
     const isFormValid = (): boolean => {
-        // Basic validation - can add more checks here if needed
-        return true;
+        // Header Validation
+        if (!formData.warehouse) return false;
+        if (formData.grnType === "PO-Based" && !formData.poNo) return false;
+        if (formData.grnType === "Non-PO" && formData.receiptType === "Invoice") {
+            if (!formData.supplier || !formData.invoiceNo) return false;
+        }
+
+        // Items Validation
+        if (!formData.items || formData.items.length === 0) return false;
+
+        // Ensure every item has a name/code and quantity > 0
+        return formData.items.every(item =>
+            item.itemCode !== "" && item.receivedQty > 0
+        );
     };
 
     const handleItemSelect = (itemId: number, itemCode: string) => {
         // Check for duplicate item (only for Non-PO GRN)
         if (formData.grnType === "Non-PO") {
-            const isDuplicate = formData.items?.some(item => 
+            const isDuplicate = formData.items?.some(item =>
                 item.id !== itemId && item.itemCode === itemCode
             );
-            
+
             if (isDuplicate) {
                 toast({
                     title: "Duplicate Item",
@@ -873,7 +889,7 @@ export default function GRN() {
                     <div className="w-full sm:w-1/5">
                         <SearchableSelect
                             label="Status"
-                            options={["Draft", "Submitted GRN", "Cancelled"]}
+                            options={["GRN Drafts", "Submitted GRN", "Cancelled GRN"]}
                             value={statusFilter}
                             onChange={setStatusFilter}
                         />
@@ -929,9 +945,9 @@ export default function GRN() {
                                             <TableCell>{grn.totalItems}</TableCell>
                                             <TableCell>
                                                 <Badge variant="outline" className={cn(
-                                                    grn.status === "Draft" && "border-amber-500 text-amber-600 bg-amber-50",
+                                                    grn.status === "GRN Drafts" && "border-amber-500 text-amber-600 bg-amber-50",
                                                     grn.status === "Submitted GRN" && "border-green-500 text-green-600 bg-green-50",
-                                                    grn.status === "Cancelled" && "border-red-500 text-red-600 bg-red-50"
+                                                    grn.status === "Cancelled GRN" && "border-red-500 text-red-600 bg-red-50"
                                                 )}>
                                                     {grn.status}
                                                 </Badge>
@@ -941,7 +957,7 @@ export default function GRN() {
                                                     <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => handleView(grn)}>
                                                         <Eye className="h-4 w-4" />
                                                     </Button>
-                                                    {grn.status === "Draft" && (
+                                                    {grn.status === "GRN Drafts" && (
                                                         <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => handleEdit(grn)}>
                                                             <Edit className="h-4 w-4" />
                                                         </Button>
@@ -992,416 +1008,417 @@ export default function GRN() {
 
     const renderModal = () => {
         const isViewMode = modalMode === "view";
-        const isDraft = formData.status === "Draft";
+        const isDraft = formData.status === "GRN Drafts";
         const isNonPO = formData.grnType === "Non-PO";
         const isPOBased = formData.grnType === "PO-Based";
         const isInvoice = formData.receiptType === "Invoice";
 
         return (
             <>
-            <Dialog open={isModalOpen} onOpenChange={setIsModalOpen}>
-                <DialogContent className="max-w-6xl max-h-[90vh] overflow-y-auto">
-                    <DialogHeader className="border-b pb-4">
-                        <DialogTitle className="text-xl font-bold">
-                            {modalMode === "create" && "Create GRN"}
-                            {modalMode === "edit" && `Edit GRN - ${selectedGRN?.grnNo}`}
-                            {modalMode === "view" && `View GRN - ${selectedGRN?.grnNo}`}
-                        </DialogTitle>
-                    </DialogHeader>
+                <Dialog open={isModalOpen} onOpenChange={setIsModalOpen}>
+                    <DialogContent className="max-w-6xl max-h-[90vh] overflow-y-auto">
+                        <DialogHeader className="border-b pb-4">
+                            <DialogTitle className="text-xl font-bold">
+                                {modalMode === "create" && "Create GRN"}
+                                {modalMode === "edit" && `Edit GRN - ${selectedGRN?.grnNo}`}
+                                {modalMode === "view" && `View GRN - ${selectedGRN?.grnNo}`}
+                            </DialogTitle>
+                        </DialogHeader>
 
-                    <div className="space-y-6 py-4">
-                        {/* SECTION A: BASIC DETAILS */}
-                        <Card>
-                            <CardContent className="pt-6">
-                                <h3 className="text-sm font-semibold uppercase tracking-wider text-muted-foreground mb-4">Basic Details</h3>
-                                <div className="grid grid-cols-4 gap-4">
-                                    <div>
-                                        <Label className="text-xs font-medium text-muted-foreground uppercase tracking-wider">GRN Type <span className="text-red-500">*</span></Label>
-                                        <Select
-                                            value={formData.grnType}
-                                            onValueChange={(val) => setFormData({ ...formData, grnType: val as "Non-PO" | "PO-Based", items: [] })}
-                                            disabled={isViewMode}
-                                        >
-                                            <SelectTrigger className="h-10 mt-2">
-                                                <SelectValue />
-                                            </SelectTrigger>
-                                            <SelectContent>
-                                                <SelectItem value="Non-PO">Non-PO</SelectItem>
-                                                <SelectItem value="PO-Based">PO-Based</SelectItem>
-                                            </SelectContent>
-                                        </Select>
-                                    </div>
-
-                                    <div>
-                                        <SearchableSelect
-                                            label="Warehouse / Location"
-                                            options={WAREHOUSES}
-                                            value={formData.warehouse}
-                                            onChange={(val) => setFormData({ ...formData, warehouse: val })}
-                                            required
-                                            disabled={isViewMode}
-                                        />
-                                    </div>
-
-                                    <div>
-                                        <Label className="text-xs font-medium text-muted-foreground uppercase tracking-wider mb-2 block">Received Date <span className="text-red-500">*</span></Label>
-                                        <DatePicker
-                                            date={formData.grnDate ? new Date(formData.grnDate) : undefined}
-                                            setDate={(d) => setFormData({ ...formData, grnDate: d ? format(d, "yyyy-MM-dd") : "" })}
-                                            disabled={isViewMode}
-                                        />
-                                    </div>
-
-                                    <div>
-                                        <Label className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Received By</Label>
-                                        <Input
-                                            value={formData.receivedBy}
-                                            readOnly
-                                            className="h-10 mt-2 bg-muted"
-                                        />
-                                    </div>
-                                </div>
-
-                                <div className="mt-4">
-                                    <Label className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Remarks</Label>
-                                    <Textarea
-                                        value={formData.remarks}
-                                        onChange={(e) => setFormData({ ...formData, remarks: e.target.value })}
-                                        disabled={isViewMode}
-                                        className="mt-2 min-h-[60px]"
-                                        placeholder="Enter any remarks..."
-                                    />
-                                </div>
-                            </CardContent>
-                        </Card>
-
-                        {/* SECTION B: CONDITIONAL DETAILS */}
-                        {isNonPO && (
+                        <div className="space-y-6 py-4">
+                            {/* SECTION A: BASIC DETAILS */}
                             <Card>
                                 <CardContent className="pt-6">
-                                    <h3 className="text-sm font-semibold uppercase tracking-wider text-muted-foreground mb-4">Receipt Details</h3>
+                                    <h3 className="text-sm font-semibold uppercase tracking-wider text-muted-foreground mb-4">Basic Details</h3>
                                     <div className="grid grid-cols-4 gap-4">
-                                        <div>
-                                            <Label className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Receipt Type <span className="text-red-500">*</span></Label>
+                                        <div className="space-y-2">
+                                            <Label className="text-xs font-medium text-muted-foreground uppercase tracking-wider">GRN Type <span className="text-red-500">*</span></Label>
                                             <Select
-                                                value={formData.receiptType}
-                                                onValueChange={(val) => setFormData({ ...formData, receiptType: val as "Scrap" | "Invoice" })}
+                                                value={formData.grnType}
+                                                onValueChange={(val) => setFormData({ ...formData, grnType: val as "Non-PO" | "PO-Based", items: [] })}
                                                 disabled={isViewMode}
                                             >
-                                                <SelectTrigger className="h-10 mt-2">
+                                                <SelectTrigger className="h-10">
                                                     <SelectValue />
                                                 </SelectTrigger>
                                                 <SelectContent>
-                                                    <SelectItem value="Scrap">Scrap</SelectItem>
-                                                    <SelectItem value="Invoice">Invoice</SelectItem>
+                                                    <SelectItem value="Non-PO">Non-PO</SelectItem>
+                                                    <SelectItem value="PO-Based">PO-Based</SelectItem>
                                                 </SelectContent>
                                             </Select>
                                         </div>
 
-                                        {isInvoice && (
-                                            <>
-                                                <div>
-                                                    <SearchableSelect
-                                                        label="Supplier"
-                                                        options={SUPPLIERS}
-                                                        value={formData.supplier}
-                                                        onChange={(val) => setFormData({ ...formData, supplier: val })}
-                                                        required
-                                                        disabled={isViewMode}
-                                                    />
-                                                </div>
-
-                                                <div>
-                                                    <Label className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Invoice No <span className="text-red-500">*</span></Label>
-                                                    <Input
-                                                        value={formData.invoiceNo}
-                                                        onChange={(e) => setFormData({ ...formData, invoiceNo: e.target.value })}
-                                                        disabled={isViewMode}
-                                                        className="h-10 mt-2"
-                                                        placeholder="Enter invoice number"
-                                                    />
-                                                </div>
-                                            </>
-                                        )}
-                                    </div>
-                                </CardContent>
-                            </Card>
-                        )}
-
-                        {isPOBased && (
-                            <Card>
-                                <CardContent className="pt-6">
-                                    <h3 className="text-sm font-semibold uppercase tracking-wider text-muted-foreground mb-4">PO Details</h3>
-                                    <div className="grid grid-cols-4 gap-4">
                                         <div>
                                             <SearchableSelect
-                                                label="PO No"
-                                                options={PO_NUMBERS}
-                                                value={formData.poNo}
-                                                onChange={handlePOSelect}
+                                                label="Warehouse / Location"
+                                                options={WAREHOUSES}
+                                                value={formData.warehouse}
+                                                onChange={(val) => setFormData({ ...formData, warehouse: val })}
                                                 required
                                                 disabled={isViewMode}
                                             />
                                         </div>
 
-                                        {formData.poNo && (
-                                            <>
-                                                <div>
-                                                    <Label className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Supplier</Label>
-                                                    <Input
-                                                        value={formData.supplier}
-                                                        readOnly
-                                                        className="h-10 mt-2 bg-muted"
-                                                    />
-                                                </div>
+                                        <div>
+                                            <Label className="text-xs font-medium text-muted-foreground uppercase tracking-wider mb-2 block">Received Date <span className="text-red-500">*</span></Label>
+                                            <DatePicker
+                                                date={formData.grnDate ? new Date(formData.grnDate) : undefined}
+                                                setDate={(d) => setFormData({ ...formData, grnDate: d ? format(d, "yyyy-MM-dd") : "" })}
+                                                disabled={isViewMode}
+                                            />
+                                        </div>
 
-                                                <div>
-                                                    <Label className="text-xs font-medium text-muted-foreground uppercase tracking-wider">PO Date</Label>
-                                                    <Input
-                                                        value={formData.poDate ? formatDate(formData.poDate) : ""}
-                                                        readOnly
-                                                        className="h-10 mt-2 bg-muted"
-                                                    />
-                                                </div>
-                                            </>
-                                        )}
+                                        <div className="space-y-2">
+                                            <Label className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Received By</Label>
+                                            <Input
+                                                value={formData.receivedBy}
+                                                readOnly
+                                                className="h-10 bg-muted"
+                                            />
+                                        </div>
+                                    </div>
+
+                                    <div className="mt-4">
+                                        <Label className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Remarks</Label>
+                                        <Textarea
+                                            value={formData.remarks}
+                                            onChange={(e) => setFormData({ ...formData, remarks: e.target.value })}
+                                            disabled={isViewMode}
+                                            className="mt-2 min-h-[60px]"
+                                            placeholder="Enter any remarks..."
+                                        />
                                     </div>
                                 </CardContent>
                             </Card>
-                        )}
 
-                        {/* ITEMS TABLE */}
-                        <Card>
-                            <CardContent className="pt-6">
-                                <div className="flex justify-between items-center mb-4">
-                                    <h3 className="text-sm font-semibold uppercase tracking-wider text-muted-foreground">Items</h3>
-                                    {isNonPO && !isViewMode && (
-                                        <Button size="sm" onClick={handleAddItem} className="h-8">
-                                            <Plus className="h-4 w-4 mr-1" />
-                                            Add Item
-                                        </Button>
-                                    )}
-                                </div>
+                            {/* SECTION B: CONDITIONAL DETAILS */}
+                            {isNonPO && (
+                                <Card>
+                                    <CardContent className="pt-6">
+                                        <h3 className="text-sm font-semibold uppercase tracking-wider text-muted-foreground mb-4">Receipt Details</h3>
+                                        <div className="grid grid-cols-4 gap-4">
+                                            <div className="space-y-2">
+                                                <Label className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Receipt Type <span className="text-red-500">*</span></Label>
+                                                <Select
+                                                    value={formData.receiptType}
+                                                    onValueChange={(val) => setFormData({ ...formData, receiptType: val as "Scrap" | "Invoice" })}
+                                                    disabled={isViewMode}
+                                                >
+                                                    <SelectTrigger className="h-10">
+                                                        <SelectValue />
+                                                    </SelectTrigger>
+                                                    <SelectContent>
+                                                        <SelectItem value="Scrap">Scrap</SelectItem>
+                                                        <SelectItem value="Invoice">Invoice</SelectItem>
+                                                    </SelectContent>
+                                                </Select>
+                                            </div>
 
-                                <div className="rounded-md border">
-                                    <Table>
-                                        <TableHeader>
-                                            <TableRow className="bg-muted/30 hover:bg-muted/30">
-                                                <TableHead className="text-[10px] uppercase font-bold">Item Name</TableHead>
-                                                <TableHead className="text-[10px] uppercase font-bold">UOM</TableHead>
-                                                {isPOBased && (
-                                                    <>
-                                                        <TableHead className="text-[10px] uppercase font-bold text-right">Ordered Qty</TableHead>
-                                                        <TableHead className="text-[10px] uppercase font-bold text-right">Prev Received</TableHead>
-                                                        <TableHead className="text-[10px] uppercase font-bold text-right">Pending Qty</TableHead>
-                                                    </>
-                                                )}
-                                                <TableHead className="text-[10px] uppercase font-bold text-right">
-                                                    {isPOBased ? "Receiving Now" : "Received Qty"} <span className="text-red-500">*</span>
-                                                </TableHead>
-                                                <TableHead className="text-[10px] uppercase font-bold">Line Remarks</TableHead>
-                                                {!isViewMode && <TableHead className="text-[10px] uppercase font-bold text-right">Action</TableHead>}
-                                            </TableRow>
-                                        </TableHeader>
-                                        <TableBody>
-                                            {(!formData.items || formData.items.length === 0) ? (
-                                                <TableRow>
-                                                    <TableCell colSpan={isPOBased ? 8 : 5} className="h-24 text-center text-muted-foreground">
-                                                        {isPOBased ? "Select a PO to load items" : "No items added. Click 'Add Item' to begin."}
-                                                    </TableCell>
+                                            {isInvoice && (
+                                                <>
+                                                    <div>
+                                                        <SearchableSelect
+                                                            label="Supplier"
+                                                            options={SUPPLIERS}
+                                                            value={formData.supplier}
+                                                            onChange={(val) => setFormData({ ...formData, supplier: val })}
+                                                            required
+                                                            disabled={isViewMode}
+                                                        />
+                                                    </div>
+
+                                                    <div className="space-y-2">
+                                                        <Label className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Invoice No <span className="text-red-500">*</span></Label>
+                                                        <Input
+                                                            value={formData.invoiceNo}
+                                                            onChange={(e) => setFormData({ ...formData, invoiceNo: e.target.value })}
+                                                            disabled={isViewMode}
+                                                            className="h-10"
+                                                            placeholder="Enter invoice number"
+                                                        />
+                                                    </div>
+                                                </>
+                                            )}
+                                        </div>
+                                    </CardContent>
+                                </Card>
+                            )}
+
+                            {isPOBased && (
+                                <Card>
+                                    <CardContent className="pt-6">
+                                        <h3 className="text-sm font-semibold uppercase tracking-wider text-muted-foreground mb-4">PO Details</h3>
+                                        <div className="grid grid-cols-4 gap-4">
+                                            <div>
+                                                <SearchableSelect
+                                                    label="PO No"
+                                                    options={PO_NUMBERS}
+                                                    value={formData.poNo}
+                                                    onChange={handlePOSelect}
+                                                    required
+                                                    disabled={isViewMode}
+                                                />
+                                            </div>
+
+                                            {formData.poNo && (
+                                                <>
+                                                    <div className="space-y-2">
+                                                        <Label className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Supplier</Label>
+                                                        <Input
+                                                            value={formData.supplier}
+                                                            readOnly
+                                                            className="h-10 bg-muted"
+                                                        />
+                                                    </div>
+
+                                                    <div className="space-y-2">
+                                                        <Label className="text-xs font-medium text-muted-foreground uppercase tracking-wider">PO Date</Label>
+                                                        <Input
+                                                            value={formData.poDate ? formatDate(formData.poDate) : ""}
+                                                            readOnly
+                                                            className="h-10 bg-muted"
+                                                        />
+                                                    </div>
+                                                </>
+                                            )}
+                                        </div>
+                                    </CardContent>
+                                </Card>
+                            )}
+
+                            {/* ITEMS TABLE */}
+                            <Card>
+                                <CardContent className="pt-6">
+                                    <div className="flex justify-between items-center mb-4">
+                                        <h3 className="text-sm font-semibold uppercase tracking-wider text-muted-foreground">Items</h3>
+                                        {isNonPO && !isViewMode && (
+                                            <Button size="sm" onClick={handleAddItem} className="h-8">
+                                                <Plus className="h-4 w-4 mr-1" />
+                                                Add Item
+                                            </Button>
+                                        )}
+                                    </div>
+
+                                    <div className="rounded-md border">
+                                        <Table>
+                                            <TableHeader>
+                                                <TableRow className="bg-muted/30 hover:bg-muted/30">
+                                                    <TableHead className="text-[10px] uppercase font-bold">Item Name</TableHead>
+                                                    <TableHead className="text-[10px] uppercase font-bold">UOM</TableHead>
+                                                    {isPOBased && (
+                                                        <>
+                                                            <TableHead className="text-[10px] uppercase font-bold text-right">Ordered Qty</TableHead>
+                                                            <TableHead className="text-[10px] uppercase font-bold text-right">Prev Received</TableHead>
+                                                            <TableHead className="text-[10px] uppercase font-bold text-right">Pending Qty</TableHead>
+                                                        </>
+                                                    )}
+                                                    <TableHead className="text-[10px] uppercase font-bold text-right">
+                                                        {isPOBased ? "Receiving Now" : "Received Qty"} <span className="text-red-500">*</span>
+                                                    </TableHead>
+                                                    <TableHead className="text-[10px] uppercase font-bold">Line Remarks</TableHead>
+                                                    {!isViewMode && <TableHead className="text-[10px] uppercase font-bold text-right">Action</TableHead>}
                                                 </TableRow>
-                                            ) : (
-                                                formData.items.map((item) => {
-                                                    const selectedItemData = ITEMS.find(i => i.code === item.itemCode);
-                                                    const isBatchTracked = selectedItemData?.isBatchTracked;
+                                            </TableHeader>
+                                            <TableBody>
+                                                {(!formData.items || formData.items.length === 0) ? (
+                                                    <TableRow>
+                                                        <TableCell colSpan={isPOBased ? 8 : 5} className="h-24 text-center text-muted-foreground">
+                                                            {isPOBased ? "Select a PO to load items" : "No items added. Click 'Add Item' to begin."}
+                                                        </TableCell>
+                                                    </TableRow>
+                                                ) : (
+                                                    formData.items.map((item) => {
+                                                        const selectedItemData = ITEMS.find(i => i.code === item.itemCode);
+                                                        const isBatchTracked = selectedItemData?.isBatchTracked;
 
-                                                    return (
-                                                        <TableRow key={item.id}>
-                                                            {/* Item Name column */}
-                                                            <TableCell className="py-2">
-                                                                {isNonPO && !isViewMode ? (
-                                                                    <Popover>
-                                                                        <PopoverTrigger asChild>
-                                                                            <Button
-                                                                                variant="outline"
-                                                                                role="combobox"
-                                                                                className="h-8 text-xs w-48 justify-between font-normal border-input"
-                                                                            >
-                                                                                <span className={cn(!item.itemName && "text-muted-foreground")}>
-                                                                                    {item.itemName || "Select item name"}
-                                                                                </span>
-                                                                                <ChevronsUpDown className="ml-2 h-3 w-3 shrink-0 opacity-50" />
-                                                                            </Button>
-                                                                        </PopoverTrigger>
-                                                                        <PopoverContent className="w-[var(--radix-popover-trigger-width)] p-0" align="start">
-                                                                            <Command>
-                                                                                <CommandInputBorderless placeholder="Search item..." className="h-9 text-xs" />
-                                                                                <CommandList className="max-h-[108px] overflow-y-auto">
-                                                                                    <CommandEmpty className="text-xs py-2">No item found.</CommandEmpty>
-                                                                                    <CommandGroup>
-                                                                                        {ITEMS.map((itm) => {
-                                                                                            // Check if item is already selected in other rows
-                                                                                            const isAlreadySelected = formData.items?.some(
-                                                                                                existingItem => existingItem.id !== item.id && existingItem.itemCode === itm.code
-                                                                                            );
-                                                                                            return (
-                                                                                                <CommandItem
-                                                                                                    key={itm.code}
-                                                                                                    value={itm.name}
-                                                                                                    onSelect={() => {
-                                                                                                        if (!isAlreadySelected) {
-                                                                                                            handleItemSelect(item.id, itm.code);
-                                                                                                        }
-                                                                                                    }}
-                                                                                                    disabled={isAlreadySelected}
-                                                                                                    className={cn(
-                                                                                                        "cursor-pointer text-xs",
-                                                                                                        isAlreadySelected && "opacity-50 cursor-not-allowed"
-                                                                                                    )}
-                                                                                                >
-                                                                                                    <Check className={cn("mr-2 h-3 w-3", item.itemName === itm.name ? "opacity-100" : "opacity-0")} />
-                                                                                                    {itm.name}
-                                                                                                </CommandItem>
-                                                                                            );
-                                                                                        })}
-                                                                                    </CommandGroup>
-                                                                                </CommandList>
-                                                                            </Command>
-                                                                        </PopoverContent>
-                                                                    </Popover>
-                                                                ) : (
-                                                                    <span className="text-xs">{item.itemName}</span>
-                                                                )}
-                                                            </TableCell>
-                                                            
-                                                            <TableCell className="text-xs">{item.uom}</TableCell>
-                                                            {isPOBased && (
-                                                                <>
-                                                                    <TableCell className="text-right text-xs">{item.orderedQty}</TableCell>
-                                                                    <TableCell className="text-right text-xs">{item.previouslyReceivedQty}</TableCell>
-                                                                    <TableCell className="text-right text-xs font-medium text-primary">{item.pendingQty}</TableCell>
-                                                                </>
-                                                            )}
-                                                            <TableCell className="py-1">
-                                                                <Input
-                                                                    type="number"
-                                                                    className="h-8 text-right text-xs w-20"
-                                                                    value={item.receivedQty || 0}
-                                                                    onChange={(e) => handleItemChange(item.id, "receivedQty", parseFloat(e.target.value) || 0)}
-                                                                    disabled={isViewMode}
-                                                                />
-                                                            </TableCell>
-                                                            
-                                                            <TableCell className="py-1">
-                                                                <Input
-                                                                    className="h-8 text-xs"
-                                                                    value={item.lineRemarks || ""}
-                                                                    onChange={(e) => handleItemChange(item.id, "lineRemarks", e.target.value)}
-                                                                    disabled={isViewMode}
-                                                                    placeholder="Remarks"
-                                                                />
-                                                            </TableCell>
-                                                            {!isViewMode && (
-                                                                <TableCell className="text-right py-1">
-                                                                    {isNonPO && (
-                                                                        <Button
-                                                                            variant="ghost"
-                                                                            size="icon"
-                                                                            className="h-8 w-8 text-red-600"
-                                                                            onClick={() => handleRemoveItem(item.id)}
-                                                                        >
-                                                                            <Trash2 className="h-4 w-4" />
-                                                                        </Button>
+                                                        return (
+                                                            <TableRow key={item.id}>
+                                                                {/* Item Name column */}
+                                                                <TableCell className="py-2">
+                                                                    {isNonPO && !isViewMode ? (
+                                                                        <Popover>
+                                                                            <PopoverTrigger asChild>
+                                                                                <Button
+                                                                                    variant="outline"
+                                                                                    role="combobox"
+                                                                                    className="h-8 text-xs w-48 justify-between font-normal border-input"
+                                                                                >
+                                                                                    <span className={cn(!item.itemName && "text-muted-foreground")}>
+                                                                                        {item.itemName || "Select item name"}
+                                                                                    </span>
+                                                                                    <ChevronsUpDown className="ml-2 h-3 w-3 shrink-0 opacity-50" />
+                                                                                </Button>
+                                                                            </PopoverTrigger>
+                                                                            <PopoverContent className="w-[var(--radix-popover-trigger-width)] p-0" align="start">
+                                                                                <Command>
+                                                                                    <CommandInputBorderless placeholder="Search item..." className="h-9 text-xs" />
+                                                                                    <CommandList className="max-h-[108px] overflow-y-auto">
+                                                                                        <CommandEmpty className="text-xs py-2">No item found.</CommandEmpty>
+                                                                                        <CommandGroup>
+                                                                                            {ITEMS.map((itm) => {
+                                                                                                // Check if item is already selected in other rows
+                                                                                                const isAlreadySelected = formData.items?.some(
+                                                                                                    existingItem => existingItem.id !== item.id && existingItem.itemCode === itm.code
+                                                                                                );
+                                                                                                return (
+                                                                                                    <CommandItem
+                                                                                                        key={itm.code}
+                                                                                                        value={itm.name}
+                                                                                                        onSelect={() => {
+                                                                                                            if (!isAlreadySelected) {
+                                                                                                                handleItemSelect(item.id, itm.code);
+                                                                                                            }
+                                                                                                        }}
+                                                                                                        disabled={isAlreadySelected}
+                                                                                                        className={cn(
+                                                                                                            "cursor-pointer text-xs",
+                                                                                                            isAlreadySelected && "opacity-50 cursor-not-allowed"
+                                                                                                        )}
+                                                                                                    >
+                                                                                                        <Check className={cn("mr-2 h-3 w-3", item.itemName === itm.name ? "opacity-100" : "opacity-0")} />
+                                                                                                        {itm.name}
+                                                                                                    </CommandItem>
+                                                                                                );
+                                                                                            })}
+                                                                                        </CommandGroup>
+                                                                                    </CommandList>
+                                                                                </Command>
+                                                                            </PopoverContent>
+                                                                        </Popover>
+                                                                    ) : (
+                                                                        <span className="text-xs">{item.itemName}</span>
                                                                     )}
                                                                 </TableCell>
-                                                            )}
-                                                        </TableRow>
-                                                    );
-                                                })
-                                            )}
-                                        </TableBody>
-                                    </Table>
-                                </div>
 
-                                {/* Summary */}
-                                {formData.items && formData.items.length > 0 && (
-                                    <div className="mt-4 flex justify-end">
-                                        <div className="bg-muted/20 p-4 rounded-lg border space-y-2 min-w-[250px]">
-                                            <div className="flex justify-between text-sm">
-                                                <span className="text-muted-foreground">Total Items:</span>
-                                                <span className="font-semibold">{formData.items.length}</span>
-                                            </div>
-                                            <div className="flex justify-between text-sm">
-                                                <span className="text-muted-foreground">Total Qty:</span>
-                                                <span className="font-semibold">{formData.items.reduce((sum, item) => sum + item.receivedQty, 0)}</span>
+                                                                <TableCell className="text-xs">{item.uom}</TableCell>
+                                                                {isPOBased && (
+                                                                    <>
+                                                                        <TableCell className="text-right text-xs">{item.orderedQty}</TableCell>
+                                                                        <TableCell className="text-right text-xs">{item.previouslyReceivedQty}</TableCell>
+                                                                        <TableCell className="text-right text-xs font-medium text-primary">{item.pendingQty}</TableCell>
+                                                                    </>
+                                                                )}
+                                                                <TableCell className="py-1">
+                                                                    <Input
+                                                                        type="number"
+                                                                        className="h-8 text-right text-xs w-20"
+                                                                        value={item.receivedQty || 0}
+                                                                        min="0"
+                                                                        onChange={(e) => handleItemChange(item.id, "receivedQty", e.target.value)}
+                                                                        disabled={isViewMode}
+                                                                    />
+                                                                </TableCell>
+
+                                                                <TableCell className="py-1">
+                                                                    <Input
+                                                                        className="h-8 text-xs"
+                                                                        value={item.lineRemarks || ""}
+                                                                        onChange={(e) => handleItemChange(item.id, "lineRemarks", e.target.value)}
+                                                                        disabled={isViewMode}
+                                                                        placeholder="Remarks"
+                                                                    />
+                                                                </TableCell>
+                                                                {!isViewMode && (
+                                                                    <TableCell className="text-right py-1">
+                                                                        {isNonPO && (
+                                                                            <Button
+                                                                                variant="ghost"
+                                                                                size="icon"
+                                                                                className="h-8 w-8 text-red-600"
+                                                                                onClick={() => handleRemoveItem(item.id)}
+                                                                            >
+                                                                                <Trash2 className="h-4 w-4" />
+                                                                            </Button>
+                                                                        )}
+                                                                    </TableCell>
+                                                                )}
+                                                            </TableRow>
+                                                        );
+                                                    })
+                                                )}
+                                            </TableBody>
+                                        </Table>
+                                    </div>
+
+                                    {/* Summary */}
+                                    {formData.items && formData.items.length > 0 && (
+                                        <div className="mt-4 flex justify-end">
+                                            <div className="bg-muted/20 p-4 rounded-lg border space-y-2 min-w-[250px]">
+                                                <div className="flex justify-between text-sm">
+                                                    <span className="text-muted-foreground">Total Items:</span>
+                                                    <span className="font-semibold">{formData.items.length}</span>
+                                                </div>
+                                                <div className="flex justify-between text-sm">
+                                                    <span className="text-muted-foreground">Total Qty:</span>
+                                                    <span className="font-semibold">{formData.items.reduce((sum, item) => sum + item.receivedQty, 0)}</span>
+                                                </div>
                                             </div>
                                         </div>
-                                    </div>
-                                )}
-                            </CardContent>
-                        </Card>
-                    </div>
+                                    )}
+                                </CardContent>
+                            </Card>
+                        </div>
 
-                    {/* Footer Actions */}
-                    <DialogFooter className="border-t pt-4">
-                        {isViewMode ? (
-                            <div className="flex justify-between w-full">
-                                <Button 
-                                    variant="destructive" 
-                                    onClick={() => setIsDeleteDialogOpen(true)}
-                                >
-                                    Delete GRN
-                                </Button>
-                                <Button variant="outline" onClick={() => setIsModalOpen(false)}>
-                                    Close
-                                </Button>
-                            </div>
-                        ) : (
-                            <div className="flex justify-end gap-2 w-full">
-                                {isDraft && modalMode === "edit" && (
-                                    <Button variant="destructive" onClick={handleCancelGRN}>
-                                        Cancel GRN
+                        {/* Footer Actions */}
+                        <DialogFooter className="border-t pt-4">
+                            {isViewMode ? (
+                                <div className="flex justify-between w-full">
+                                    <Button
+                                        variant="destructive"
+                                        onClick={() => setIsDeleteDialogOpen(true)}
+                                    >
+                                        Delete GRN
                                     </Button>
-                                )}
-                                <Button variant="outline" onClick={() => setIsModalOpen(false)}>
-                                    Close
-                                </Button>
-                                <Button 
-                                    variant="outline" 
-                                    onClick={handleSaveDraft}
-                                    disabled={!isFormValid()}
-                                >
-                                    Save Draft
-                                </Button>
-                                <Button 
-                                    onClick={handlePostGRNFromModal}
-                                    disabled={!isFormValid()}
-                                >
-                                    Submit
-                                </Button>
-                            </div>
-                        )}
-                    </DialogFooter>
-                </DialogContent>
-            </Dialog>
+                                    <Button variant="outline" onClick={() => setIsModalOpen(false)}>
+                                        Close
+                                    </Button>
+                                </div>
+                            ) : (
+                                <div className="flex justify-end gap-2 w-full">
+                                    {isDraft && modalMode === "edit" && (
+                                        <Button variant="destructive" onClick={handleCancelGRN}>
+                                            Cancel GRN
+                                        </Button>
+                                    )}
+                                    <Button variant="outline" onClick={() => setIsModalOpen(false)}>
+                                        Close
+                                    </Button>
+                                    <Button
+                                        variant="outline"
+                                        onClick={handleSaveDraft}
+                                        disabled={!isFormValid()}
+                                    >
+                                        Save Draft
+                                    </Button>
+                                    <Button
+                                        onClick={handlePostGRNFromModal}
+                                        disabled={!isFormValid()}
+                                    >
+                                        Submit
+                                    </Button>
+                                </div>
+                            )}
+                        </DialogFooter>
+                    </DialogContent>
+                </Dialog>
 
-            {/* Delete Confirmation Dialog */}
-            <AlertDialog open={isDeleteDialogOpen} onOpenChange={setIsDeleteDialogOpen}>
-                <AlertDialogContent>
-                    <AlertDialogHeader>
-                        <AlertDialogTitle>Are you sure?</AlertDialogTitle>
-                        <AlertDialogDescription>
-                            This action cannot be undone. This will permanently delete GRN {selectedGRN?.grnNo} and remove all associated data.
-                        </AlertDialogDescription>
-                    </AlertDialogHeader>
-                    <AlertDialogFooter>
-                        <AlertDialogCancel>Cancel</AlertDialogCancel>
-                        <AlertDialogAction onClick={handleDeleteGRN} className="bg-destructive text-destructive-foreground hover:bg-destructive/90">
-                            Delete
-                        </AlertDialogAction>
-                    </AlertDialogFooter>
-                </AlertDialogContent>
-            </AlertDialog>
+                {/* Delete Confirmation Dialog */}
+                <AlertDialog open={isDeleteDialogOpen} onOpenChange={setIsDeleteDialogOpen}>
+                    <AlertDialogContent>
+                        <AlertDialogHeader>
+                            <AlertDialogTitle>Are you sure?</AlertDialogTitle>
+                            <AlertDialogDescription>
+                                This action cannot be undone. This will permanently delete GRN {selectedGRN?.grnNo} and remove all associated data.
+                            </AlertDialogDescription>
+                        </AlertDialogHeader>
+                        <AlertDialogFooter>
+                            <AlertDialogCancel>Cancel</AlertDialogCancel>
+                            <AlertDialogAction onClick={handleDeleteGRN} className="bg-destructive text-destructive-foreground hover:bg-destructive/90">
+                                Delete
+                            </AlertDialogAction>
+                        </AlertDialogFooter>
+                    </AlertDialogContent>
+                </AlertDialog>
             </>
         );
     };

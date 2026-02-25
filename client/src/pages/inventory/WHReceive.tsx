@@ -32,6 +32,7 @@ import {
     CommandInputBorderless,
 } from "@/components/ui/command";
 import { Badge } from "@/components/ui/badge";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Search, ChevronLeft, ChevronRight, ChevronsUpDown, Check, Eye } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { cn } from "@/lib/utils";
@@ -61,12 +62,13 @@ const formatDate = (date: Date | string): string => {
  */
 interface WHReceiveItem {
     id: number;
-    itemCode: string;
-    itemName: string;
+    batchNo: string;
+    batchDate: string;
+    producedItem: string;
     uom: string;
-    releaseQty: number; // Verified Qty from production
-    receivedQty?: number; // Optional, same as releaseQty
-    remarks?: string;
+    opQty: number;
+    receivedQty: number;
+    received: boolean;
 }
 
 /**
@@ -77,14 +79,13 @@ interface WHReceive {
     id: number;
     releaseNo: string;
     releaseDate: string;
-    mrNo: string;
     operation: string;
     workCenter: string;
     warehouse: string;
     releasedBy: string;
     qcVerifiedBy: string;
     qcVerifiedOn: string;
-    status: "Pending Receipt" | "Received";
+    status: "Issued to Warehouse" | "Received By Warehouse";
     totalItems: number;
     items: WHReceiveItem[];
 }
@@ -93,45 +94,44 @@ interface WHReceive {
 // MOCK DATA
 // ============================================================================
 
-const MOCK_WH_RECEIVES: WHReceive[] = [
+const MOCK_WH_RECEIVE: WHReceive[] = [
     {
         id: 1,
         releaseNo: "REL-2024-001",
-        releaseDate: "2024-02-15",
-        mrNo: "MR-2024-001",
-        operation: "Cutting",
-        workCenter: "WC-001 Cutting Bay",
-        warehouse: "Production Store",
+        releaseDate: "2024-02-21",
+        operation: "Core Preparation",
+        workCenter: "WP-01 Core Shop",
+        warehouse: "Finished Goods Store",
         releasedBy: "John Doe",
-        qcVerifiedBy: "QC Inspector 1",
-        qcVerifiedOn: "2024-02-15",
-        status: "Pending Receipt",
+        qcVerifiedBy: "Sarah QC",
+        qcVerifiedOn: "2024-02-21",
+        status: "Issued to Warehouse",
         totalItems: 2,
         items: [
-            { id: 1, itemCode: "CUT001", itemName: "Cut Steel Plate", uom: "PCS", releaseQty: 50, receivedQty: 50, remarks: "" },
-            { id: 2, itemCode: "CUT002", itemName: "Cut Aluminum Sheet", uom: "PCS", releaseQty: 30, receivedQty: 30, remarks: "" },
+            { id: 101, batchNo: "BT-SC-001", batchDate: "2024-02-20", producedItem: "Sand Core Type A", uom: "NOS", opQty: 100, receivedQty: 100, received: true },
+            { id: 102, batchNo: "BT-SC-002", batchDate: "2024-02-20", producedItem: "Sand Core Type B", uom: "NOS", opQty: 50, receivedQty: 0, received: false },
         ]
     },
     {
         id: 2,
         releaseNo: "REL-2024-002",
-        releaseDate: "2024-02-16",
-        mrNo: "MR-2024-002",
-        operation: "Welding",
-        workCenter: "WC-002 Welding Station",
-        warehouse: "Production Store",
-        releasedBy: "Jane Smith",
-        qcVerifiedBy: "QC Inspector 2",
-        qcVerifiedOn: "2024-02-16",
-        status: "Received",
+        releaseDate: "2024-02-22",
+        operation: "Casting",
+        workCenter: "WP-02 Melting",
+        warehouse: "Main Warehouse",
+        releasedBy: "Mike Ross",
+        qcVerifiedBy: "Sarah QC",
+        qcVerifiedOn: "2024-02-22",
+        status: "Received By Warehouse",
         totalItems: 1,
         items: [
-            { id: 1, itemCode: "WLD001", itemName: "Welded Frame", uom: "PCS", releaseQty: 25, receivedQty: 25, remarks: "" },
+            { id: 201, batchNo: "BT-CT-005", batchDate: "2024-02-21", producedItem: "Iron Casting 5kg", uom: "KG", opQty: 500, receivedQty: 500, received: true },
         ]
-    },
+    }
 ];
 
-const WAREHOUSES = ["Production Store", "Raw Material Store", "Finished Goods Store"];
+const WAREHOUSES = ["Production Store", "Raw Material Store", "Finished Goods Store", "Main Warehouse"];
+const WORK_CENTERS = ["WP-01 Core Shop", "WP-02 Melting", "WP-03 Molding", "WC-001 Cutting Bay", "WC-002 Welding Station"];
 
 // ============================================================================
 // SEARCHABLE SELECT COMPONENT
@@ -217,11 +217,11 @@ function SearchableSelect({ label, value, options, onChange, placeholder, requir
 export default function WHReceive() {
     const { toast } = useToast();
 
-    // Listing State
-    const [whReceives, setWhReceives] = useState<WHReceive[]>(MOCK_WH_RECEIVES);
+    const [whReceives, setWhReceives] = useState<WHReceive[]>(MOCK_WH_RECEIVE);
     const [searchTerm, setSearchTerm] = useState("");
     const [warehouseFilter, setWarehouseFilter] = useState("");
-    const [statusFilter, setStatusFilter] = useState("Pending Receipt"); // Default to Pending
+    const [workCenterFilter, setWorkCenterFilter] = useState("");
+    const [statusFilter, setStatusFilter] = useState("Issued to Warehouse"); // Default to Issued to Warehouse
     const [currentPage, setCurrentPage] = useState(1);
     const itemsPerPage = 10;
 
@@ -232,12 +232,12 @@ export default function WHReceive() {
     // Filter Logic
     const filteredWHReceives = whReceives.filter(whr => {
         const matchesSearch = whr.releaseNo.toLowerCase().includes(searchTerm.toLowerCase()) ||
-            whr.mrNo.toLowerCase().includes(searchTerm.toLowerCase()) ||
             whr.operation.toLowerCase().includes(searchTerm.toLowerCase());
         const matchesWarehouse = !warehouseFilter || whr.warehouse === warehouseFilter;
+        const matchesWorkCenter = !workCenterFilter || whr.workCenter === workCenterFilter;
         const matchesStatus = !statusFilter || whr.status === statusFilter;
 
-        return matchesSearch && matchesWarehouse && matchesStatus;
+        return matchesSearch && matchesWarehouse && matchesWorkCenter && matchesStatus;
     });
 
     const totalPages = Math.ceil(filteredWHReceives.length / itemsPerPage);
@@ -245,8 +245,28 @@ export default function WHReceive() {
 
     // Handlers
     const handleView = (whr: WHReceive) => {
-        setSelectedWHReceive(whr);
+        setSelectedWHReceive({ ...whr });
         setIsViewModalOpen(true);
+    };
+
+    const handleItemCheckChange = (itemId: number, checked: boolean) => {
+        if (!selectedWHReceive) return;
+        setSelectedWHReceive({
+            ...selectedWHReceive,
+            items: selectedWHReceive.items.map(item =>
+                item.id === itemId ? { ...item, received: checked, receivedQty: checked ? item.opQty : 0 } : item
+            )
+        });
+    };
+
+    const handleItemQtyChange = (itemId: number, qty: number) => {
+        if (!selectedWHReceive) return;
+        setSelectedWHReceive({
+            ...selectedWHReceive,
+            items: selectedWHReceive.items.map(item =>
+                item.id === itemId ? { ...item, receivedQty: qty } : item
+            )
+        });
     };
 
     /**
@@ -258,19 +278,19 @@ export default function WHReceive() {
     const handleMarkAsReceived = () => {
         if (!selectedWHReceive) return;
 
-        // Update status
+        // Update status and items
         setWhReceives(whReceives.map(whr =>
             whr.id === selectedWHReceive.id
-                ? { ...whr, status: "Received" as const }
+                ? { ...selectedWHReceive, status: "Received By Warehouse" as const }
                 : whr
         ));
 
         // TODO: In real implementation:
-        // 1. Increase stock in warehouse for each item by releaseQty
+        // 1. Increase stock in warehouse for each item by receivedQty
         // 2. Create Material Ledger entries:
         //    - Ref Type = "WH Receive"
         //    - Ref No = releaseNo
-        //    - In Qty = releaseQty for each item
+        //    - In Qty = receivedQty for each item
         // 3. Update Production release status: "Released for WH" → "Delivered to WH"
 
         toast({
@@ -295,7 +315,7 @@ export default function WHReceive() {
                     <div className="relative">
                         <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
                         <Input
-                            placeholder="Search Release No, MR No, Operation..."
+                            placeholder="Search Release No, Operation, Work Center..."
                             className="pl-9 h-10"
                             value={searchTerm}
                             onChange={(e) => setSearchTerm(e.target.value)}
@@ -303,26 +323,35 @@ export default function WHReceive() {
                     </div>
                 </div>
 
-                <div className="w-full sm:w-1/5">
+                <div className="w-full sm:w-1/4">
+                    <SearchableSelect
+                        label="Work Center"
+                        options={WORK_CENTERS}
+                        value={workCenterFilter}
+                        onChange={setWorkCenterFilter}
+                        placeholder="Select Work Center"
+                    />
+                </div>
+
+                <div className="w-full sm:w-1/4">
                     <SearchableSelect
                         label="Warehouse"
                         options={WAREHOUSES}
                         value={warehouseFilter}
                         onChange={setWarehouseFilter}
+                        placeholder="Select Warehouse"
                     />
                 </div>
 
-                <div className="w-full sm:w-1/5">
+                <div className="w-full sm:w-1/4">
                     <SearchableSelect
                         label="Status"
-                        options={["Pending Receipt", "Received"]}
+                        options={["Issued to Warehouse", "Received By Warehouse"]}
                         value={statusFilter}
                         onChange={setStatusFilter}
                         placeholder="Select Status"
                     />
                 </div>
-
-
             </div>
 
             {/* Listing Table */}
@@ -334,7 +363,6 @@ export default function WHReceive() {
                                 <TableRow className="bg-muted/50 hover:bg-muted/50">
                                     <TableHead className="font-semibold text-xs uppercase tracking-wider">Release No</TableHead>
                                     <TableHead className="font-semibold text-xs uppercase tracking-wider">Release Date</TableHead>
-                                    <TableHead className="font-semibold text-xs uppercase tracking-wider">MR No</TableHead>
                                     <TableHead className="font-semibold text-xs uppercase tracking-wider">Operation</TableHead>
                                     <TableHead className="font-semibold text-xs uppercase tracking-wider">Work Center</TableHead>
                                     <TableHead className="font-semibold text-xs uppercase tracking-wider">Warehouse</TableHead>
@@ -354,7 +382,6 @@ export default function WHReceive() {
                                         <TableRow key={whr.id} className="hover:bg-muted/30 transition-colors border-b">
                                             <TableCell className="py-4 font-medium text-primary">{whr.releaseNo}</TableCell>
                                             <TableCell>{formatDate(whr.releaseDate)}</TableCell>
-                                            <TableCell className="font-medium">{whr.mrNo}</TableCell>
                                             <TableCell>{whr.operation}</TableCell>
                                             <TableCell>{whr.workCenter}</TableCell>
                                             <TableCell>{whr.warehouse}</TableCell>
@@ -363,8 +390,8 @@ export default function WHReceive() {
                                                     variant="outline"
                                                     className={cn(
                                                         "font-medium",
-                                                        whr.status === "Pending Receipt" && "border-amber-500 text-amber-600 bg-amber-50",
-                                                        whr.status === "Received" && "border-green-500 text-green-600 bg-green-50"
+                                                        whr.status === "Issued to Warehouse" && "border-amber-500 text-amber-600 bg-amber-50",
+                                                        whr.status === "Received By Warehouse" && "border-green-500 text-green-600 bg-green-50"
                                                     )}
                                                 >
                                                     {whr.status}
@@ -443,10 +470,6 @@ export default function WHReceive() {
                                             <Input value={formatDate(selectedWHReceive.releaseDate)} readOnly className="bg-muted" />
                                         </div>
                                         <div>
-                                            <Label>MR No</Label>
-                                            <Input value={selectedWHReceive.mrNo} readOnly className="bg-muted" />
-                                        </div>
-                                        <div>
                                             <Label>Operation</Label>
                                             <Input value={selectedWHReceive.operation} readOnly className="bg-muted" />
                                         </div>
@@ -474,27 +497,45 @@ export default function WHReceive() {
                                 </CardContent>
                             </Card>
 
-                            {/* Items Table */}
+                            {/* Items Table - Eligible Batches Style */}
                             <Card>
                                 <CardContent className="pt-6">
-                                    <h3 className="text-sm font-semibold uppercase tracking-wider text-muted-foreground mb-4">Items</h3>
+                                    <h3 className="text-sm font-semibold uppercase tracking-wider text-muted-foreground mb-4 font-bold">Eligible Batches</h3>
                                     <div className="rounded-md border">
                                         <Table>
                                             <TableHeader>
                                                 <TableRow className="bg-muted/30 hover:bg-muted/30">
-                                                    <TableHead className="text-[10px] uppercase font-bold">Item Name</TableHead>
-                                                    <TableHead className="text-[10px] uppercase font-bold">UOM</TableHead>
-                                                    <TableHead className="text-[10px] uppercase font-bold text-right">Release Qty</TableHead>
-                                                    <TableHead className="text-[10px] uppercase font-bold">Remarks</TableHead>
+                                                    <TableHead className="text-[10px] uppercase font-bold">Batch No</TableHead>
+                                                    <TableHead className="text-[10px] uppercase font-bold">Batch Date</TableHead>
+                                                    <TableHead className="text-[10px] uppercase font-bold">Produced Item</TableHead>
+                                                    <TableHead className="text-[10px] uppercase font-bold text-right">Op Qty</TableHead>
+                                                    <TableHead className="text-[10px] uppercase font-bold text-center">Check</TableHead>
+                                                    <TableHead className="text-[10px] uppercase font-bold text-center">Received Qty</TableHead>
                                                 </TableRow>
                                             </TableHeader>
                                             <TableBody>
                                                 {selectedWHReceive.items.map((item) => (
                                                     <TableRow key={item.id}>
-                                                        <TableCell className="font-medium">{item.itemName}</TableCell>
-                                                        <TableCell>{item.uom}</TableCell>
-                                                        <TableCell className="text-right font-medium">{item.releaseQty}</TableCell>
-                                                        <TableCell className="text-muted-foreground">{item.remarks || "-"}</TableCell>
+                                                        <TableCell className="font-medium text-primary">{item.batchNo}</TableCell>
+                                                        <TableCell>{formatDate(item.batchDate)}</TableCell>
+                                                        <TableCell className="max-w-[150px] truncate">{item.producedItem}</TableCell>
+                                                        <TableCell className="text-right font-medium">{item.opQty}</TableCell>
+                                                        <TableCell className="text-center">
+                                                            <Checkbox
+                                                                checked={item.received}
+                                                                onCheckedChange={(checked) => handleItemCheckChange(item.id, !!checked)}
+                                                                disabled={selectedWHReceive.status === "Received"}
+                                                            />
+                                                        </TableCell>
+                                                        <TableCell className="text-center w-[120px]">
+                                                            <Input
+                                                                type="number"
+                                                                value={item.receivedQty}
+                                                                onChange={(e) => handleItemQtyChange(item.id, parseFloat(e.target.value) || 0)}
+                                                                className="h-8 text-right bg-background"
+                                                                disabled={!item.received || selectedWHReceive.status === "Received"}
+                                                            />
+                                                        </TableCell>
                                                     </TableRow>
                                                 ))}
                                             </TableBody>
@@ -509,8 +550,12 @@ export default function WHReceive() {
                                                 <span className="font-semibold">{selectedWHReceive.items.length}</span>
                                             </div>
                                             <div className="flex justify-between text-sm">
-                                                <span className="text-muted-foreground">Total Qty:</span>
-                                                <span className="font-semibold">{selectedWHReceive.items.reduce((sum, item) => sum + item.releaseQty, 0)}</span>
+                                                <span className="text-muted-foreground">Total Op Qty:</span>
+                                                <span className="font-semibold">{selectedWHReceive.items.reduce((sum, item) => sum + item.opQty, 0)}</span>
+                                            </div>
+                                            <div className="flex justify-between text-sm">
+                                                <span className="text-muted-foreground">Total Received Qty:</span>
+                                                <span className="font-semibold text-primary">{selectedWHReceive.items.reduce((sum, item) => sum + (item.received ? item.receivedQty : 0), 0)}</span>
                                             </div>
                                         </div>
                                     </div>
@@ -524,7 +569,7 @@ export default function WHReceive() {
                                 <Button variant="outline" onClick={() => setIsViewModalOpen(false)}>
                                     Close
                                 </Button>
-                                {selectedWHReceive.status === "Pending Receipt" && (
+                                {selectedWHReceive.status === "Issued to Warehouse" && (
                                     <Button onClick={handleMarkAsReceived}>
                                         Mark as Received
                                     </Button>

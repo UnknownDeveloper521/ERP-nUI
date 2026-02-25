@@ -1,38 +1,33 @@
 // ============================================================================
-// QUALITY CHECK MODULE
+// QUALITY CHECK MODULE - BATCH-CENTRIC
 // ============================================================================
-// This module handles the verification of material releases that require QC.
+// This module handles the verification of batches that require QC.
 // It provides a workflow for QC inspectors to review produced quantities and
 // verify the actual acceptable quantities after quality inspection.
 //
 // KEY FEATURES:
-// - Lists material releases sent for QC verification
+// - Lists batches sent for QC verification
 // - Allows QC inspectors to verify quantities per item
 // - Validates verified quantities (must be ≤ produced quantity)
-// - Updates release status from "Sent for QC" to "Verified"
+// - Updates batch status from "Sent for QC" to "Verified"
 // - Records QC inspector details and verification timestamp
 // - Separate tabs for pending and completed verifications
 //
 // WORKFLOW:
-// 1. Material Release module sends releases with requiresQC=true
-// 2. QC inspector views release in "Sent for QC" tab
+// 1. Batch Tracking module sends batches with requiresQC=true
+// 2. QC inspector views batch in "Sent for QC" tab
 // 3. Inspector reviews items and enters verified quantities
 // 4. System validates: verifiedQty must be numeric, ≥0, and ≤ qtyProduced
 // 5. On "Verify QC", status changes to "Verified" and moves to "Verified QC" tab
-// 6. Verified releases return to Material Release module with status "Pending"
-// 7. Material Release module can then release to warehouse
-//
-// INTEGRATION:
-// - Receives releases from Material Release module (status: "Sent for QC")
-// - Returns verified releases to Material Release module (status: "Verified")
-// - Does NOT handle warehouse release or delivery (separate module)
+// 6. Verified batches return to Batch Tracking module with status "QC Verified"
 // ============================================================================
 
 import { useState, useEffect } from "react";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
 import {
   Table,
   TableBody,
@@ -147,7 +142,7 @@ function SearchableSelect({
 // ============================================================================
 
 /**
- * Material Release QC Item interface
+ * QC Item interface
  */
 interface QCItem {
   id: number;
@@ -159,21 +154,31 @@ interface QCItem {
 }
 
 /**
- * Material Release for QC interface
+ * QC Parameter interface - Dynamic parameters based on Operation
+ * Simplified to show only Parameter Name and Description
  */
-interface MaterialReleaseQC {
+interface QCParameter {
   id: number;
-  releaseNo: string;
-  releaseDate: string;
-  mrNo: string;
+  parameterName: string;
+  description: string;
+}
+
+/**
+ * Batch QC interface - Batch-centric QC verification
+ */
+interface BatchQC {
+  id: number;
+  batchNo: string;
+  batchDate: string;
+  shift: "Morning" | "Night";
   operation: string;
   workCenter: string;
-  warehouse: string;
-  releasedBy: string;
   qcStatus: "Sent for QC" | "Verified";
   items: QCItem[];
+  qcParameters?: QCParameter[];
   qcVerifiedBy?: string;
   qcVerifiedOn?: string;
+  remarks?: string;
 }
 
 // ============================================================================
@@ -192,17 +197,83 @@ const formatDate = (date: Date | string): string => {
 };
 
 /**
- * Get current date in YYYY-MM-DD format
- */
-const getCurrentDate = (): string => {
-  return new Date().toISOString().split('T')[0];
-};
-
-/**
  * Get current datetime in ISO format
  */
 const getCurrentDateTime = (): string => {
   return new Date().toISOString();
+};
+
+// ============================================================================
+// QC PARAMETERS CONFIGURATION BY OPERATION
+// ============================================================================
+
+/**
+ * Operation-specific QC Parameters
+ * These are loaded dynamically based on the Operation selected
+ * Now showing only Parameter Name and Description
+ */
+const OPERATION_QC_PARAMETERS: Record<string, QCParameter[]> = {
+  "Welding": [
+    {
+      id: 1,
+      parameterName: "Weld Strength",
+      description: "Check weld strength meets minimum requirements"
+    },
+    {
+      id: 2,
+      parameterName: "Weld Penetration",
+      description: "Verify proper weld penetration depth"
+    },
+    {
+      id: 3,
+      parameterName: "Surface Finish",
+      description: "Inspect surface for smoothness and cracks"
+    },
+    {
+      id: 4,
+      parameterName: "Dimensional Accuracy",
+      description: "Verify dimensions are within tolerance"
+    }
+  ],
+  "Assembly": [
+    {
+      id: 1,
+      parameterName: "Torque Specification",
+      description: "Check all fasteners are torqued correctly"
+    },
+    {
+      id: 2,
+      parameterName: "Alignment Check",
+      description: "Verify component alignment"
+    },
+    {
+      id: 3,
+      parameterName: "Fastener Count",
+      description: "Ensure all fasteners are present"
+    },
+    {
+      id: 4,
+      parameterName: "Functional Test",
+      description: "Perform functional testing of assembled unit"
+    }
+  ],
+  "Cutting": [
+    {
+      id: 1,
+      parameterName: "Cut Dimensions",
+      description: "Verify cut dimensions match specifications"
+    },
+    {
+      id: 2,
+      parameterName: "Edge Quality",
+      description: "Check edge quality and burr removal"
+    },
+    {
+      id: 3,
+      parameterName: "Surface Condition",
+      description: "Inspect surface for damage or defects"
+    }
+  ]
 };
 
 // ============================================================================
@@ -217,30 +288,32 @@ export default function QualityCheck() {
   // ============================================================================
   const [searchTerm, setSearchTerm] = useState("");
   const [statusFilter, setStatusFilter] = useState<"Sent for QC" | "Verified">("Sent for QC");
+  const [operationFilter, setOperationFilter] = useState("All");
+  const [workCenterFilter, setWorkCenterFilter] = useState("All");
   const [currentPage, setCurrentPage] = useState(1);
   const [isViewModalOpen, setIsViewModalOpen] = useState(false);
-  const [viewingRelease, setViewingRelease] = useState<MaterialReleaseQC | null>(null);
+  const [viewingBatch, setViewingBatch] = useState<BatchQC | null>(null);
   const [editableItems, setEditableItems] = useState<QCItem[]>([]);
+  const [editableQCParameters, setEditableQCParameters] = useState<QCParameter[]>([]);
   const [validationErrors, setValidationErrors] = useState<Record<number, string>>({});
+  const [remarks, setRemarks] = useState<string>("");
   const itemsPerPage = 10;
 
   // Mock logged-in user
   const currentUser = "QC Inspector - Sarah Lee";
 
   // ============================================================================
-  // MOCK DATA - Material Releases sent for QC
+  // MOCK DATA - Batches sent for QC
   // ============================================================================
-  const [releases, setReleases] = useState<MaterialReleaseQC[]>([
+  const [batches, setBatches] = useState<BatchQC[]>([
     // ========== SENT FOR QC ==========
     {
       id: 1,
-      releaseNo: "REL-2026-001",
-      releaseDate: "2026-02-10",
-      mrNo: "MR-2024-002",
+      batchNo: "BATCH-2026-001",
+      batchDate: "2026-02-10",
+      shift: "Morning",
       operation: "Welding",
       workCenter: "WC-002 Welding Station",
-      warehouse: "Production Store",
-      releasedBy: "John Doe",
       qcStatus: "Sent for QC",
       items: [
         { id: 1, itemCode: "FG003", itemName: "Welded Frame", uom: "PCS", qtyProduced: 25 },
@@ -248,13 +321,11 @@ export default function QualityCheck() {
     },
     {
       id: 2,
-      releaseNo: "REL-2026-002",
-      releaseDate: "2026-02-11",
-      mrNo: "MR-2024-003",
+      batchNo: "BATCH-2026-002",
+      batchDate: "2026-02-11",
+      shift: "Night",
       operation: "Assembly",
       workCenter: "WC-003 Assembly Line",
-      warehouse: "Production Store",
-      releasedBy: "Jane Smith",
       qcStatus: "Sent for QC",
       items: [
         { id: 2, itemCode: "FG004", itemName: "Assembled Unit", uom: "PCS", qtyProduced: 10 },
@@ -263,13 +334,11 @@ export default function QualityCheck() {
     },
     {
       id: 3,
-      releaseNo: "REL-2026-003",
-      releaseDate: "2026-02-12",
-      mrNo: "MR-2024-002",
+      batchNo: "BATCH-2026-003",
+      batchDate: "2026-02-12",
+      shift: "Morning",
       operation: "Welding",
       workCenter: "WC-002 Welding Station",
-      warehouse: "Production Store",
-      releasedBy: "Admin User",
       qcStatus: "Sent for QC",
       items: [
         { id: 4, itemCode: "FG003", itemName: "Welded Frame", uom: "PCS", qtyProduced: 30 },
@@ -281,13 +350,11 @@ export default function QualityCheck() {
     // ========== VERIFIED ==========
     {
       id: 4,
-      releaseNo: "REL-2026-004",
-      releaseDate: "2026-02-13",
-      mrNo: "MR-2024-003",
+      batchNo: "BATCH-2026-004",
+      batchDate: "2026-02-13",
+      shift: "Night",
       operation: "Assembly",
       workCenter: "WC-003 Assembly Line",
-      warehouse: "Production Store",
-      releasedBy: "John Doe",
       qcStatus: "Verified",
       qcVerifiedBy: "QC Inspector - Sarah Lee",
       qcVerifiedOn: "2026-02-14T10:30:00",
@@ -297,13 +364,11 @@ export default function QualityCheck() {
     },
     {
       id: 5,
-      releaseNo: "REL-2026-005",
-      releaseDate: "2026-02-14",
-      mrNo: "MR-2024-002",
+      batchNo: "BATCH-2026-005",
+      batchDate: "2026-02-14",
+      shift: "Morning",
       operation: "Welding",
       workCenter: "WC-002 Welding Station",
-      warehouse: "Production Store",
-      releasedBy: "Jane Smith",
       qcStatus: "Verified",
       qcVerifiedBy: "QC Inspector - Mike Chen",
       qcVerifiedOn: "2026-02-15T14:20:00",
@@ -314,13 +379,11 @@ export default function QualityCheck() {
     },
     {
       id: 6,
-      releaseNo: "REL-2026-006",
-      releaseDate: "2026-02-15",
-      mrNo: "MR-2024-003",
+      batchNo: "BATCH-2026-006",
+      batchDate: "2026-02-15",
+      shift: "Night",
       operation: "Assembly",
       workCenter: "WC-003 Assembly Line",
-      warehouse: "Production Store",
-      releasedBy: "Admin User",
       qcStatus: "Verified",
       qcVerifiedBy: "QC Inspector - Sarah Lee",
       qcVerifiedOn: "2026-02-16T09:15:00",
@@ -339,22 +402,43 @@ export default function QualityCheck() {
   // Reset to page 1 when search or filter changes
   useEffect(() => {
     setCurrentPage(1);
-  }, [searchTerm, statusFilter]);
+  }, [searchTerm, statusFilter, operationFilter, workCenterFilter]);
 
   // ============================================================================
   // HANDLERS
   // ============================================================================
 
-  const handleViewRelease = (release: MaterialReleaseQC) => {
-    setViewingRelease(release);
-    // Initialize editable items with current values
-    setEditableItems(release.items.map(item => ({
-      ...item,
-      verifiedQty: item.verifiedQty ?? item.qtyProduced
-    })));
-    setValidationErrors({});
-    setIsViewModalOpen(true);
-  };
+  const handleViewBatch = (batch: BatchQC) => {
+      // Check if operation requires QC
+      const operationParams = OPERATION_QC_PARAMETERS[batch.operation];
+      
+      // If operation doesn't have QC parameters defined, it doesn't require QC
+      if (!operationParams || operationParams.length === 0) {
+        toast({
+          title: "QC Not Required",
+          description: `Operation "${batch.operation}" does not require QC verification.`,
+          variant: "destructive",
+        });
+        return;
+      }
+
+      setViewingBatch(batch);
+      // Initialize editable items with current values
+      setEditableItems(batch.items.map(item => ({
+        ...item,
+        verifiedQty: item.verifiedQty ?? item.qtyProduced
+      })));
+
+      // Load QC parameters based on operation
+      const qcParams = batch.qcParameters && batch.qcParameters.length > 0
+        ? batch.qcParameters
+        : operationParams;
+
+      setEditableQCParameters(qcParams);
+      setValidationErrors({});
+      setRemarks(batch.remarks || "");
+      setIsViewModalOpen(true);
+    };
 
   const handleVerifiedQtyChange = (itemId: number, value: string) => {
     const numValue = Number(value);
@@ -389,7 +473,7 @@ export default function QualityCheck() {
   };
 
   const handleVerifyQC = () => {
-    if (!viewingRelease) return;
+    if (!viewingBatch) return;
 
     // Final validation
     const hasErrors = editableItems.some(item => {
@@ -406,18 +490,20 @@ export default function QualityCheck() {
       return;
     }
 
-    // Update the release
-    const updatedRelease: MaterialReleaseQC = {
-      ...viewingRelease,
+    // Update the batch
+    const updatedBatch: BatchQC = {
+      ...viewingBatch,
       qcStatus: "Verified",
       qcVerifiedBy: currentUser,
       qcVerifiedOn: getCurrentDateTime(),
       items: editableItems,
+      qcParameters: editableQCParameters,
+      remarks: remarks,
     };
 
-    // Update releases array
-    setReleases(releases.map(r => 
-      r.id === viewingRelease.id ? updatedRelease : r
+    // Update batches array
+    setBatches(batches.map(b => 
+      b.id === viewingBatch.id ? updatedBatch : b
     ));
 
     // Close modal
@@ -426,31 +512,36 @@ export default function QualityCheck() {
     // Success toast
     toast({
       title: "Success",
-      description: `${viewingRelease.releaseNo} verified successfully.`,
+      description: `Batch ${viewingBatch.batchNo} verified successfully.`,
     });
 
-    // TODO: In real implementation, this would also update the MaterialRelease status to "Pending"
-    console.log("QC Verified - Material Release should be updated to Pending status");
+    // TODO: In real implementation, this would also update the Batch status to "QC Verified"
+    console.log("QC Verified - Batch should be updated to QC Verified status");
   };
 
   // ============================================================================
   // FILTERING & PAGINATION
   // ============================================================================
 
-  const filteredReleases = releases.filter(release => {
-    const matchesSearch = 
-      release.releaseNo.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      release.mrNo.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      release.operation.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      release.workCenter.toLowerCase().includes(searchTerm.toLowerCase());
-    
-    const matchesStatus = release.qcStatus === statusFilter;
+  // Get unique operations and work centers for filters
+  const uniqueOperations = Array.from(new Set(batches.map(b => b.operation)));
+  const uniqueWorkCenters = Array.from(new Set(batches.map(b => b.workCenter)));
 
-    return matchesSearch && matchesStatus;
+  const filteredBatches = batches.filter(batch => {
+    const matchesSearch = 
+      batch.batchNo.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      batch.operation.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      batch.workCenter.toLowerCase().includes(searchTerm.toLowerCase());
+    
+    const matchesStatus = batch.qcStatus === statusFilter;
+    const matchesOperation = operationFilter === "All" || batch.operation === operationFilter;
+    const matchesWorkCenter = workCenterFilter === "All" || batch.workCenter === workCenterFilter;
+
+    return matchesSearch && matchesStatus && matchesOperation && matchesWorkCenter;
   });
 
-  const totalPages = Math.ceil(filteredReleases.length / itemsPerPage);
-  const paginatedData = filteredReleases.slice(
+  const totalPages = Math.ceil(filteredBatches.length / itemsPerPage);
+  const paginatedData = filteredBatches.slice(
     (currentPage - 1) * itemsPerPage,
     currentPage * itemsPerPage
   );
@@ -465,7 +556,7 @@ export default function QualityCheck() {
       <div className="flex flex-col gap-2">
         <h1 className="text-3xl font-bold tracking-tight">Quality Check</h1>
         <p className="text-muted-foreground">
-          Verify material releases sent for quality inspection
+          Verify batches sent for quality inspection
         </p>
       </div>
 
@@ -478,12 +569,44 @@ export default function QualityCheck() {
           <div className="relative">
             <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
             <Input
-              placeholder="Search by Release No / MR No / Operation..."
+              placeholder="Search by Batch No / Operation / Work Center..."
               className="pl-9 h-10"
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
             />
           </div>
+        </div>
+
+        <div className="w-full sm:w-48">
+          <Label className="mb-1.5 block text-xs font-medium text-muted-foreground uppercase tracking-wider">
+            Operation
+          </Label>
+          <SearchableSelect
+            value={operationFilter}
+            onValueChange={setOperationFilter}
+            options={[
+              { value: "All", label: "All" },
+              ...uniqueOperations.map(op => ({ value: op, label: op }))
+            ]}
+            placeholder="Select Operation"
+            searchPlaceholder="Search operation..."
+          />
+        </div>
+
+        <div className="w-full sm:w-48">
+          <Label className="mb-1.5 block text-xs font-medium text-muted-foreground uppercase tracking-wider">
+            Work Center
+          </Label>
+          <SearchableSelect
+            value={workCenterFilter}
+            onValueChange={setWorkCenterFilter}
+            options={[
+              { value: "All", label: "All" },
+              ...uniqueWorkCenters.map(wc => ({ value: wc, label: wc }))
+            ]}
+            placeholder="Select Work Center"
+            searchPlaceholder="Search work center..."
+          />
         </div>
 
         <div className="w-full sm:w-48">
@@ -503,23 +626,16 @@ export default function QualityCheck() {
         </div>
       </div>
 
-      {/* Material Releases Table */}
+      {/* Batches Table */}
       <Card>
-        <CardHeader className="pb-3">
-          <CardTitle>
-            {statusFilter === "Sent for QC" ? "Releases Pending QC Verification" : "Verified Releases"}
-          </CardTitle>
-        </CardHeader>
-        <CardContent>
+        <CardContent className="pt-6">
           <div className="rounded-md border">
             <Table>
               <TableHeader>
                 <TableRow className="bg-muted/50">
-                  <TableHead>Release Date</TableHead>
-                  <TableHead>Release No</TableHead>
-                  <TableHead>MR No</TableHead>
-                  <TableHead>Operation</TableHead>
-                  <TableHead>Work Center</TableHead>
+                  <TableHead>Batch No</TableHead>
+                  <TableHead>Batch Date</TableHead>
+                  <TableHead>Shift</TableHead>
                   <TableHead>Status</TableHead>
                   <TableHead className="text-right">Action</TableHead>
                 </TableRow>
@@ -527,21 +643,19 @@ export default function QualityCheck() {
               <TableBody>
                 {paginatedData.length === 0 ? (
                   <TableRow>
-                    <TableCell colSpan={7} className="h-24 text-center text-muted-foreground">
-                      No releases found.
+                    <TableCell colSpan={5} className="h-24 text-center text-muted-foreground">
+                      No batches found.
                     </TableCell>
                   </TableRow>
                 ) : (
-                  paginatedData.map((release) => (
-                    <TableRow key={release.id}>
-                      <TableCell>{formatDate(release.releaseDate)}</TableCell>
-                      <TableCell className="font-medium">{release.releaseNo}</TableCell>
-                      <TableCell>{release.mrNo}</TableCell>
-                      <TableCell>{release.operation}</TableCell>
-                      <TableCell>{release.workCenter}</TableCell>
+                  paginatedData.map((batch) => (
+                    <TableRow key={batch.id}>
+                      <TableCell className="font-medium font-mono">{batch.batchNo}</TableCell>
+                      <TableCell>{formatDate(batch.batchDate)}</TableCell>
+                      <TableCell>{batch.shift}</TableCell>
                       <TableCell>
-                        <Badge variant={release.qcStatus === "Sent for QC" ? "default" : "secondary"}>
-                          {release.qcStatus}
+                        <Badge variant={batch.qcStatus === "Sent for QC" ? "default" : "secondary"}>
+                          {batch.qcStatus}
                         </Badge>
                       </TableCell>
                       <TableCell className="text-right">
@@ -549,7 +663,7 @@ export default function QualityCheck() {
                           variant="ghost"
                           size="icon"
                           className="h-8 w-8 hover:bg-muted"
-                          onClick={() => handleViewRelease(release)}
+                          onClick={() => handleViewBatch(batch)}
                         >
                           <Eye className="h-4 w-4" />
                         </Button>
@@ -562,12 +676,12 @@ export default function QualityCheck() {
           </div>
 
           {/* Pagination */}
-          {filteredReleases.length > 0 && (
+          {filteredBatches.length > 0 && (
             <div className="flex justify-between items-center px-1 mt-4">
               <div className="text-sm text-muted-foreground">
                 Showing {(currentPage - 1) * itemsPerPage + 1} to{" "}
-                {Math.min(currentPage * itemsPerPage, filteredReleases.length)} of{" "}
-                {filteredReleases.length} entries
+                {Math.min(currentPage * itemsPerPage, filteredBatches.length)} of{" "}
+                {filteredBatches.length} entries
               </div>
               <div className="flex gap-2">
                 <Button
@@ -597,65 +711,82 @@ export default function QualityCheck() {
         <DialogContent className="sm:max-w-[800px] max-h-[90vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle>
-              {viewingRelease?.qcStatus === "Sent for QC" ? "Verify Quality Check" : "QC Verification Details"}
+              {viewingBatch?.qcStatus === "Sent for QC" ? "Verify Quality Check" : "QC Verification Details"}
             </DialogTitle>
             <DialogDescription>
-              {viewingRelease?.qcStatus === "Sent for QC"
-                ? "Review and verify the produced quantities for this material release"
+              {viewingBatch?.qcStatus === "Sent for QC"
+                ? "Review and verify the produced quantities for this batch"
                 : "View verified quality check details"}
             </DialogDescription>
           </DialogHeader>
-          {viewingRelease && (
+          {viewingBatch && (
             <div className="space-y-4">
               {/* Header Info - Read Only */}
               <div className="grid grid-cols-2 gap-4">
                 <div>
-                  <Label className="text-xs text-muted-foreground">Release No</Label>
-                  <p className="font-medium">{viewingRelease.releaseNo}</p>
+                  <Label className="text-xs text-muted-foreground">Batch No</Label>
+                  <p className="font-medium font-mono">{viewingBatch.batchNo}</p>
                 </div>
                 <div>
-                  <Label className="text-xs text-muted-foreground">Release Date</Label>
-                  <p className="font-medium">{formatDate(viewingRelease.releaseDate)}</p>
+                  <Label className="text-xs text-muted-foreground">Batch Date</Label>
+                  <p className="font-medium">{formatDate(viewingBatch.batchDate)}</p>
                 </div>
                 <div>
-                  <Label className="text-xs text-muted-foreground">MR No</Label>
-                  <p className="font-medium">{viewingRelease.mrNo}</p>
+                  <Label className="text-xs text-muted-foreground">Shift</Label>
+                  <p className="font-medium">{viewingBatch.shift}</p>
                 </div>
                 <div>
                   <Label className="text-xs text-muted-foreground">Operation</Label>
-                  <p className="font-medium">{viewingRelease.operation}</p>
+                  <p className="font-medium">{viewingBatch.operation}</p>
                 </div>
                 <div>
                   <Label className="text-xs text-muted-foreground">Work Center</Label>
-                  <p className="font-medium">{viewingRelease.workCenter}</p>
-                </div>
-                <div>
-                  <Label className="text-xs text-muted-foreground">Warehouse</Label>
-                  <p className="font-medium">{viewingRelease.warehouse}</p>
-                </div>
-                <div>
-                  <Label className="text-xs text-muted-foreground">Released By</Label>
-                  <p className="font-medium">{viewingRelease.releasedBy}</p>
+                  <p className="font-medium">{viewingBatch.workCenter}</p>
                 </div>
                 <div>
                   <Label className="text-xs text-muted-foreground">QC Status</Label>
-                  <Badge variant={viewingRelease.qcStatus === "Sent for QC" ? "default" : "secondary"}>
-                    {viewingRelease.qcStatus}
+                  <Badge variant={viewingBatch.qcStatus === "Sent for QC" ? "default" : "secondary"}>
+                    {viewingBatch.qcStatus}
                   </Badge>
                 </div>
-                {viewingRelease.qcStatus === "Verified" && (
+                {viewingBatch.qcStatus === "Verified" && (
                   <>
                     <div>
                       <Label className="text-xs text-muted-foreground">Verified By</Label>
-                      <p className="font-medium">{viewingRelease.qcVerifiedBy}</p>
+                      <p className="font-medium">{viewingBatch.qcVerifiedBy}</p>
                     </div>
                     <div>
                       <Label className="text-xs text-muted-foreground">Verified On</Label>
-                      <p className="font-medium">{formatDate(viewingRelease.qcVerifiedOn!)}</p>
+                      <p className="font-medium">{formatDate(viewingBatch.qcVerifiedOn!)}</p>
                     </div>
                   </>
                 )}
               </div>
+
+              {/* QC Parameters Section */}
+              {editableQCParameters.length > 0 && (
+                <div>
+                  <Label className="text-sm font-semibold mb-2 block">QC Parameters</Label>
+                  <div className="rounded-md border">
+                    <Table>
+                      <TableHeader>
+                        <TableRow className="bg-muted/50">
+                          <TableHead>Parameter</TableHead>
+                          <TableHead>Description</TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {editableQCParameters.map((param) => (
+                          <TableRow key={param.id}>
+                            <TableCell className="font-medium">{param.parameterName}</TableCell>
+                            <TableCell>{param.description}</TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  </div>
+                </div>
+              )}
 
               {/* Items Table */}
               <div>
@@ -672,14 +803,14 @@ export default function QualityCheck() {
                       </TableRow>
                     </TableHeader>
                     <TableBody>
-                      {editableItems.map((item, index) => (
+                      {editableItems.map((item) => (
                         <TableRow key={item.id}>
                           <TableCell className="font-medium">{item.itemCode}</TableCell>
                           <TableCell>{item.itemName}</TableCell>
                           <TableCell>{item.uom}</TableCell>
                           <TableCell className="text-right">{item.qtyProduced}</TableCell>
                           <TableCell className="text-right">
-                            {viewingRelease.qcStatus === "Sent for QC" ? (
+                            {viewingBatch.qcStatus === "Sent for QC" ? (
                               <div className="flex flex-col items-end gap-1">
                                 <Input
                                   type="number"
@@ -705,10 +836,27 @@ export default function QualityCheck() {
                   </Table>
                 </div>
               </div>
+
+              {/* Remarks Field */}
+              <div>
+                <Label className="text-sm font-semibold mb-2 block">Remarks</Label>
+                {viewingBatch.qcStatus === "Sent for QC" ? (
+                  <Textarea
+                    value={remarks}
+                    onChange={(e) => setRemarks(e.target.value)}
+                    placeholder="Enter any remarks or observations..."
+                    className="min-h-[100px]"
+                  />
+                ) : (
+                  <div className="rounded-md border p-3 bg-muted/50 min-h-[100px]">
+                    {remarks || <span className="text-muted-foreground italic">No remarks</span>}
+                  </div>
+                )}
+              </div>
             </div>
           )}
           <DialogFooter>
-            {viewingRelease?.qcStatus === "Sent for QC" ? (
+            {viewingBatch?.qcStatus === "Sent for QC" ? (
               <div className="flex justify-end gap-3 w-full">
                 <Button variant="outline" onClick={() => setIsViewModalOpen(false)}>
                   Cancel
