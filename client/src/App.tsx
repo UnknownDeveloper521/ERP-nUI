@@ -172,17 +172,7 @@ function Router() {
         )}
       </Route>
 
-      <Route path="/hrms/leave-management/apply">
-        {() => (
-          <ProtectedRoute>
-            <MainLayout>
-              <LeaveManagement />
-            </MainLayout>
-          </ProtectedRoute>
-        )}
-      </Route>
-
-      <Route path="/hrms/leave-management/management">
+      <Route path="/hrms/leave-management/leave-entry">
         {() => (
           <ProtectedRoute>
             <MainLayout>
@@ -193,16 +183,6 @@ function Router() {
       </Route>
 
       <Route path="/hrms/leave-management/calendar">
-        {() => (
-          <ProtectedRoute>
-            <MainLayout>
-              <LeaveManagement />
-            </MainLayout>
-          </ProtectedRoute>
-        )}
-      </Route>
-
-      <Route path="/leave-management/apply">
         {() => (
           <ProtectedRoute>
             <MainLayout>

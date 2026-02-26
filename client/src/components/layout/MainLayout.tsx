@@ -19,7 +19,7 @@
 import { ReactNode, useState } from "react";
 import * as React from "react";
 import { Link, useLocation } from "wouter";
-import { useAuth, MODULES_LIST } from "@/lib/store";
+import { useAuth } from "@/lib/store";
 import {
   LayoutDashboard,
   Users,
@@ -444,7 +444,9 @@ export default function MainLayout({ children }: { children: ReactNode }) {
 
     // Set up observer for new inputs
     const observer = new MutationObserver(forceWhiteCaret);
-    observer.observe(document.body, { childList: true, subtree: true });
+    if (document.body) {
+      observer.observe(document.body, { childList: true, subtree: true });
+    }
 
     return () => observer.disconnect();
   }, []);
@@ -779,7 +781,7 @@ export default function MainLayout({ children }: { children: ReactNode }) {
              KEEP: Essential for page content rendering
              ================================================================== */}
         <main className="page-content flex-1 overflow-hidden bg-muted/30 p-6 flex flex-col min-h-0">
-          <div className="flex-1 min-h-0 overflow-auto">
+          <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
             {children}
           </div>
         </main>

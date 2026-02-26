@@ -173,7 +173,7 @@ const designationOptions: string[] = ["Software Engineer", "Manager", "Team Lead
 const gradeOptions: string[] = ["A", "B", "C", "D", "E"];
 const workLocationOptions: string[] = ["Head Office", "Branch Office", "Remote", "Factory"];
 const shiftOptions: string[] = ["General Shift (9 AM - 6 PM)", "Night Shift (10 PM - 7 AM)", "Flexible"];
-const employmentTypeOptions: string[] = ["Full Time", "Part Time", "Contract", "Intern"];
+const employmentTypeOptions: string[] = ["Full-time", "Part-time", "Full-time on Probation", "Part-time on Probation", "Contractual"];
 const employmentStatusOptions: string[] = ["Active", "Inactive", "Terminated"];
 const probationPeriodOptions: Array<{ value: string; label: string }> = [
     { value: "3", label: "3 Months" },
@@ -400,7 +400,6 @@ export default function CoreHR() {
                 return !!(
                     formData.firstName &&
                     formData.lastName &&
-                    formData.personalEmail &&
                     formData.mobileNumber &&
                     formData.gender &&
                     formData.dateOfBirth
@@ -434,7 +433,6 @@ export default function CoreHR() {
         const isPersonalValid = !!(
             formData.firstName &&
             formData.lastName &&
-            formData.personalEmail &&
             formData.mobileNumber &&
             formData.gender &&
             formData.dateOfBirth
@@ -1198,7 +1196,7 @@ export default function CoreHR() {
             firstName: "",
             middleName: "",
             lastName: "",
-            gender: "Male",
+            gender: "",
             dateOfBirth: undefined,
             maritalStatus: "",
             nationality: "",
@@ -1215,8 +1213,8 @@ export default function CoreHR() {
             country: "",
 
             dateOfJoining: undefined,
-            employmentType: "Full Time",
-            employmentStatus: "active",
+            employmentType: "",
+            employmentStatus: "",
             probationPeriod: "",
             confirmationDate: undefined,
             exitDate: undefined,
@@ -1381,10 +1379,10 @@ export default function CoreHR() {
         }
 
         // Basic validation before save
-        if (!formData.firstName || !formData.lastName || !formData.personalEmail) {
+        if (!formData.firstName || !formData.lastName) {
             toast({
                 title: "Validation Error",
-                description: "Please fill all required fields (First Name, Last Name, Personal Email).",
+                description: "Please fill all required fields (First Name, Last Name).",
                 variant: "destructive"
             });
             return;
@@ -2118,7 +2116,13 @@ function calculateAge(dateOfBirth: Date | string): string {
 function PersonalDetailsForm({ data, updateData, readOnly }: any) {
     const handleChange = (field: string, value: any) => {
         if (readOnly) return;
-        updateData((prev: any) => ({ ...prev, [field]: value }));
+        updateData((prev: any) => {
+            const next = { ...prev, [field]: value };
+            if (field === "currentAddress" && prev.sameAsCurrentAddress) {
+                next.permanentAddress = value;
+            }
+            return next;
+        });
     };
 
     return (
@@ -2168,19 +2172,12 @@ function PersonalDetailsForm({ data, updateData, readOnly }: any) {
                             <Label>Employee ID <span className="text-red-500">*</span></Label>
                             <Input value={data.employeeId} readOnly className="bg-muted cursor-text" />
                         </div>
-                        <div className="space-y-2">
-                            <Label>Employee Code <span className="text-red-500">*</span></Label>
-                            <Input value={data.employeeCode} onChange={(e) => handleChange("employeeCode", e.target.value)} readOnly={readOnly} className="cursor-text" />
-                        </div>
-
-                        <div className="space-y-2">
-                            <Label>First Name <span className="text-red-500">*</span></Label>
-                            <Input value={data.firstName} onChange={(e) => handleChange("firstName", e.target.value)} readOnly={readOnly} className="cursor-text" />
-                        </div>
-                        <div className="space-y-2">
-                            <Label>Last Name <span className="text-red-500">*</span></Label>
-                            <Input value={data.lastName} onChange={(e) => handleChange("lastName", e.target.value)} readOnly={readOnly} className="cursor-text" />
-                        </div>
+                        {data.id && (
+                            <div className="space-y-2">
+                                <Label>Employee Code <span className="text-red-500">*</span></Label>
+                                <Input value={data.employeeCode} onChange={(e) => handleChange("employeeCode", e.target.value)} readOnly={readOnly} className="cursor-text" />
+                            </div>
+                        )}
 
                         <div className="space-y-2">
                             <Label>Full Name</Label>
@@ -2191,9 +2188,17 @@ function PersonalDetailsForm({ data, updateData, readOnly }: any) {
                             />
                         </div>
                         <div className="space-y-2">
+                            <Label>First Name <span className="text-red-500">*</span></Label>
+                            <Input value={data.firstName} onChange={(e) => handleChange("firstName", e.target.value)} readOnly={readOnly} className="cursor-text" />
+                        </div>
+                        <div className="space-y-2">
+                            <Label>Last Name <span className="text-red-500">*</span></Label>
+                            <Input value={data.lastName} onChange={(e) => handleChange("lastName", e.target.value)} readOnly={readOnly} className="cursor-text" />
+                        </div>
+                        <div className="space-y-2">
                             <Label>Gender <span className="text-red-500">*</span></Label>
-                            <Select value={data.gender} onValueChange={(v) => handleChange("gender", v)} disabled={readOnly}>
-                                <SelectTrigger><SelectValue placeholder="Select" /></SelectTrigger>
+                            <Select value={data.gender || undefined} onValueChange={(v) => handleChange("gender", v)} disabled={readOnly}>
+                                <SelectTrigger><SelectValue placeholder="Select Gender" /></SelectTrigger>
                                 <SelectContent>
                                     {genderOptions.map(gender => (
                                         <SelectItem key={gender} value={gender}>{gender}</SelectItem>
@@ -2220,8 +2225,8 @@ function PersonalDetailsForm({ data, updateData, readOnly }: any) {
 
                         <div className="space-y-2">
                             <Label>Nationality</Label>
-                            <Select value={data.nationality} onValueChange={(v) => handleChange("nationality", v)} disabled={readOnly}>
-                                <SelectTrigger><SelectValue placeholder="Select" /></SelectTrigger>
+                            <Select value={data.nationality || undefined} onValueChange={(v) => handleChange("nationality", v)} disabled={readOnly}>
+                                <SelectTrigger><SelectValue placeholder="Select Nationality" /></SelectTrigger>
                                 <SelectContent>
                                     <SelectItem value="American">American</SelectItem>
                                     <SelectItem value="Indian">Indian</SelectItem>
@@ -2231,8 +2236,8 @@ function PersonalDetailsForm({ data, updateData, readOnly }: any) {
                         </div>
                         <div className="space-y-2">
                             <Label>Blood Group</Label>
-                            <Select value={data.bloodGroup} onValueChange={(v) => handleChange("bloodGroup", v)} disabled={readOnly}>
-                                <SelectTrigger><SelectValue placeholder="Select" /></SelectTrigger>
+                            <Select value={data.bloodGroup || undefined} onValueChange={(v) => handleChange("bloodGroup", v)} disabled={readOnly}>
+                                <SelectTrigger><SelectValue placeholder="Select Blood Group" /></SelectTrigger>
                                 <SelectContent>
                                     <SelectItem value="A+">A+</SelectItem>
                                     <SelectItem value="A-">A-</SelectItem>
@@ -2246,10 +2251,10 @@ function PersonalDetailsForm({ data, updateData, readOnly }: any) {
                             </Select>
                         </div>
 
-                        <div className="space-y-2 col-span-1 md:col-span-2">
+                        <div className="space-y-2">
                             <Label>Marital Status</Label>
-                            <Select value={data.maritalStatus} onValueChange={(v) => handleChange("maritalStatus", v)} disabled={readOnly}>
-                                <SelectTrigger><SelectValue placeholder="Select" /></SelectTrigger>
+                            <Select value={data.maritalStatus || undefined} onValueChange={(v) => handleChange("maritalStatus", v)} disabled={readOnly}>
+                                <SelectTrigger><SelectValue placeholder="Select Marital Status" /></SelectTrigger>
                                 <SelectContent>
                                     <SelectItem value="Single">Single</SelectItem>
                                     <SelectItem value="Married">Married</SelectItem>
@@ -2257,6 +2262,14 @@ function PersonalDetailsForm({ data, updateData, readOnly }: any) {
                                 </SelectContent>
                             </Select>
                         </div>
+                        {data.maritalStatus === "Married" && (
+                            <div className="space-y-2">
+                                <Label>Anniversary Date</Label>
+                                <div className={readOnly ? "pointer-events-none opacity-80" : ""}>
+                                    <DatePicker date={data.anniversaryDate} setDate={(d) => handleChange("anniversaryDate", d)} />
+                                </div>
+                            </div>
+                        )}
                     </div>
                 </div>
             </div>
@@ -2274,7 +2287,7 @@ function PersonalDetailsForm({ data, updateData, readOnly }: any) {
                         <Input type="tel" value={data.alternateMobile} onChange={(e) => handleChange("alternateMobile", e.target.value)} readOnly={readOnly} className="cursor-text" />
                     </div>
                     <div className="space-y-2">
-                        <Label>Personal Email <span className="text-red-500">*</span></Label>
+                        <Label>Personal Email</Label>
                         <Input type="email" value={data.personalEmail} onChange={(e) => handleChange("personalEmail", e.target.value)} readOnly={readOnly} className="cursor-text" />
                     </div>
                     <div className="space-y-2">
@@ -2292,17 +2305,44 @@ function PersonalDetailsForm({ data, updateData, readOnly }: any) {
                         <Label>Current Address <span className="text-red-500">*</span></Label>
                         <Textarea value={data.currentAddress} onChange={(e) => handleChange("currentAddress", e.target.value)} readOnly={readOnly} className="cursor-text" />
                     </div>
+                </div>
+
+                <div className="grid grid-cols-1 gap-4 mt-6">
                     <div className="space-y-2">
-                        <Label>Permanent Address</Label>
-                        <Textarea value={data.permanentAddress} onChange={(e) => handleChange("permanentAddress", e.target.value)} readOnly={readOnly} className="cursor-text" />
+                        <div className="flex justify-between items-center mb-1">
+                            <Label>Permanent Address</Label>
+                            <div className="flex items-center space-x-2">
+                                <Checkbox
+                                    id="sameAsCurrent"
+                                    checked={data.sameAsCurrentAddress}
+                                    onCheckedChange={(checked) => {
+                                        handleChange("sameAsCurrentAddress", checked);
+                                        if (checked) {
+                                            handleChange("permanentAddress", data.currentAddress);
+                                        }
+                                    }}
+                                    disabled={readOnly}
+                                />
+                                <Label htmlFor="sameAsCurrent" className="text-xs font-normal cursor-pointer text-muted-foreground">
+                                    Same as current address
+                                </Label>
+                            </div>
+                        </div>
+                        <Textarea
+                            value={data.sameAsCurrentAddress ? data.currentAddress : data.permanentAddress}
+                            onChange={(e) => !data.sameAsCurrentAddress && handleChange("permanentAddress", e.target.value)}
+                            readOnly={readOnly || data.sameAsCurrentAddress}
+                            className={cn("cursor-text", data.sameAsCurrentAddress && "bg-muted")}
+                        />
                     </div>
                 </div>
-                <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mt-4">
+
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mt-6">
                     <SearchableSelect
-                        label="City"
-                        value={data.city}
-                        options={cityOptions}
-                        onChange={(val) => handleChange("city", val)}
+                        label="Country"
+                        value={data.country}
+                        options={countryOptions}
+                        onChange={(val) => handleChange("country", val)}
                         disabled={readOnly}
                     />
                     <SearchableSelect
@@ -2312,17 +2352,17 @@ function PersonalDetailsForm({ data, updateData, readOnly }: any) {
                         onChange={(val) => handleChange("state", val)}
                         disabled={readOnly}
                     />
+                    <SearchableSelect
+                        label="City"
+                        value={data.city}
+                        options={cityOptions}
+                        onChange={(val) => handleChange("city", val)}
+                        disabled={readOnly}
+                    />
                     <div className="space-y-2">
                         <Label>Pincode</Label>
                         <Input value={data.pincode} onChange={(e) => handleChange("pincode", e.target.value)} readOnly={readOnly} className="cursor-text" />
                     </div>
-                    <SearchableSelect
-                        label="Country"
-                        value={data.country}
-                        options={countryOptions}
-                        onChange={(val) => handleChange("country", val)}
-                        disabled={readOnly}
-                    />
                 </div>
             </div>
         </div >
@@ -2344,32 +2384,9 @@ function EmploymentDetailsForm({ data, updateData, departments, employees, readO
         return "";
     };
 
-    const validateConfirmationDate = (confirmationDate: Date | undefined, doj: Date | undefined, probationPeriod: string): string => {
-        if (!confirmationDate) return "";
-        if (!doj) return "";
 
-        const confirmDate = new Date(confirmationDate.getFullYear(), confirmationDate.getMonth(), confirmationDate.getDate());
-        const dojDate = new Date(doj.getFullYear(), doj.getMonth(), doj.getDate());
 
-        if (confirmDate <= dojDate) {
-            return "Confirmation Date cannot be earlier than Date of Joining";
-        }
-
-        if (probationPeriod) {
-            const probationMonths = parseInt(probationPeriod);
-            const minConfirmationDate = new Date(doj);
-            minConfirmationDate.setMonth(minConfirmationDate.getMonth() + probationMonths);
-            const minConfirmDate = new Date(minConfirmationDate.getFullYear(), minConfirmationDate.getMonth(), minConfirmationDate.getDate());
-
-            if (confirmDate < minConfirmDate) {
-                return "Confirmation date must be after probation period";
-            }
-        }
-
-        return "";
-    };
-
-    const validateExitDate = (exitDate: Date | undefined, doj: Date | undefined, confirmationDate: Date | undefined, employmentStatus: string): string => {
+    const validateExitDate = (exitDate: Date | undefined, doj: Date | undefined, employmentStatus: string): string => {
         // Exit Date not required for Active employees or when status is empty
         if (!employmentStatus || employmentStatus === "Active") {
             return "";
@@ -2390,16 +2407,6 @@ function EmploymentDetailsForm({ data, updateData, departments, employees, readO
                     return "Exit Date cannot be earlier than Date of Joining";
                 }
             }
-
-            // Exit Date cannot be before Confirmation Date
-            if (confirmationDate) {
-                const exitDateOnly = new Date(exitDate.getFullYear(), exitDate.getMonth(), exitDate.getDate());
-                const confirmDateOnly = new Date(confirmationDate.getFullYear(), confirmationDate.getMonth(), confirmationDate.getDate());
-
-                if (exitDateOnly <= confirmDateOnly) {
-                    return "Exit Date cannot be earlier than Confirmation Date";
-                }
-            }
         }
 
         return "";
@@ -2413,16 +2420,7 @@ function EmploymentDetailsForm({ data, updateData, departments, employees, readO
         return "";
     };
 
-    // Auto-calculate confirmation date
-    const calculateConfirmationDate = (doj: Date | undefined, probationPeriod: string): Date | undefined => {
-        if (!doj || !probationPeriod) return undefined;
 
-        const probationMonths = parseInt(probationPeriod);
-        const confirmationDate = new Date(doj);
-        confirmationDate.setMonth(confirmationDate.getMonth() + probationMonths);
-
-        return confirmationDate;
-    };
 
     // Enhanced handleChange with validation and auto-clear
     const handleChange = (field: string, value: any) => {
@@ -2431,33 +2429,9 @@ function EmploymentDetailsForm({ data, updateData, departments, employees, readO
         updateData((prev: any) => {
             const newData = { ...prev, [field]: value };
 
-            // Auto-calculate confirmation date when DOJ or probation period changes
-            if (field === "dateOfJoining" || field === "probationPeriod") {
-                const autoConfirmationDate = calculateConfirmationDate(
-                    field === "dateOfJoining" ? value : newData.dateOfJoining,
-                    field === "probationPeriod" ? value : newData.probationPeriod
-                );
-                if (autoConfirmationDate) {
-                    newData.confirmationDate = autoConfirmationDate;
-                }
-            }
-
             // Clear/Auto-fix behavior when DOJ changes
             if (field === "dateOfJoining" && value) {
                 const dojDate = new Date(value.getFullYear(), value.getMonth(), value.getDate());
-
-                // Clear Confirmation Date if it becomes invalid
-                if (newData.confirmationDate) {
-                    const confirmDate = new Date(newData.confirmationDate.getFullYear(), newData.confirmationDate.getMonth(), newData.confirmationDate.getDate());
-                    if (confirmDate <= dojDate) {
-                        newData.confirmationDate = undefined;
-                        toast({
-                            title: "Confirmation Date Cleared",
-                            description: "Confirmation Date cleared because it is before Date of Joining",
-                            variant: "default"
-                        });
-                    }
-                }
 
                 // Clear Exit Date if it becomes invalid
                 if (newData.exitDate) {
@@ -2470,21 +2444,6 @@ function EmploymentDetailsForm({ data, updateData, departments, employees, readO
                             variant: "default"
                         });
                     }
-                }
-            }
-
-            // Clear Exit Date if it becomes invalid when Confirmation Date changes
-            if (field === "confirmationDate" && value && newData.exitDate) {
-                const confirmDate = new Date(value.getFullYear(), value.getMonth(), value.getDate());
-                const exitDate = new Date(newData.exitDate.getFullYear(), newData.exitDate.getMonth(), newData.exitDate.getDate());
-
-                if (exitDate <= confirmDate) {
-                    newData.exitDate = undefined;
-                    toast({
-                        title: "Exit Date Cleared",
-                        description: "Exit Date cleared because it is before Confirmation Date",
-                        variant: "default"
-                    });
                 }
             }
 
@@ -2508,12 +2467,8 @@ function EmploymentDetailsForm({ data, updateData, departments, employees, readO
         const dojError = validateDateOfJoining(data.dateOfJoining);
         if (dojError) errors.dateOfJoining = dojError;
 
-        // Validate Confirmation Date
-        const confirmationError = validateConfirmationDate(data.confirmationDate, data.dateOfJoining, data.probationPeriod);
-        if (confirmationError) errors.confirmationDate = confirmationError;
-
         // Validate Exit Date
-        const exitError = validateExitDate(data.exitDate, data.dateOfJoining, data.confirmationDate, data.employmentStatus);
+        const exitError = validateExitDate(data.exitDate, data.dateOfJoining, undefined, data.employmentStatus);
         if (exitError) errors.exitDate = exitError;
 
         // Validate Employment Status (when Exit Date is filled)
@@ -2536,7 +2491,7 @@ function EmploymentDetailsForm({ data, updateData, departments, employees, readO
         if (data.employmentStatus && data.employmentStatus !== '') {
             validateAllFields();
         }
-    }, [data.dateOfJoining, data.confirmationDate, data.exitDate, data.probationPeriod, data.employmentStatus]);
+    }, [data.dateOfJoining, data.exitDate, data.employmentStatus]);
 
     return (
         <div className="space-y-6">
@@ -2545,27 +2500,9 @@ function EmploymentDetailsForm({ data, updateData, departments, employees, readO
                 <h4 className="font-semibold mb-4 text-primary">Employment Information</h4>
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                     <div className="space-y-2">
-                        <Label>Date of Joining <span className="text-red-500">*</span></Label>
-                        <DatePicker date={data.dateOfJoining} setDate={(d) => handleChange("dateOfJoining", d)} disabled={readOnly} />
-                        {validationErrors.dateOfJoining && (
-                            <p className="text-sm text-red-500 mt-1">{validationErrors.dateOfJoining}</p>
-                        )}
-                    </div>
-                    <div className="space-y-2">
-                        <Label>Employment Type <span className="text-red-500">*</span></Label>
-                        <Select value={data.employmentType} onValueChange={(v) => handleChange("employmentType", v)} disabled={readOnly}>
-                            <SelectTrigger><SelectValue placeholder="Select" /></SelectTrigger>
-                            <SelectContent>
-                                {employmentTypeOptions.map(type => (
-                                    <SelectItem key={type} value={type}>{type}</SelectItem>
-                                ))}
-                            </SelectContent>
-                        </Select>
-                    </div>
-                    <div className="space-y-2">
                         <Label>Employment Status <span className="text-red-500">*</span></Label>
-                        <Select value={data.employmentStatus} onValueChange={(v) => handleChange("employmentStatus", v)} disabled={readOnly}>
-                            <SelectTrigger><SelectValue placeholder="Select" /></SelectTrigger>
+                        <Select value={data.employmentStatus || undefined} onValueChange={(v) => handleChange("employmentStatus", v)} disabled={readOnly}>
+                            <SelectTrigger><SelectValue placeholder="Select Employment Status" /></SelectTrigger>
                             <SelectContent>
                                 {employmentStatusOptions.map(status => (
                                     <SelectItem key={status} value={status}>{status}</SelectItem>
@@ -2576,32 +2513,42 @@ function EmploymentDetailsForm({ data, updateData, departments, employees, readO
                             <p className="text-sm text-red-500 mt-1">{validationErrors.employmentStatus}</p>
                         )}
                     </div>
-
                     <div className="space-y-2">
-                        <Label>Probation Period</Label>
-                        <Select value={data.probationPeriod} onValueChange={(v) => handleChange("probationPeriod", v)} disabled={readOnly}>
-                            <SelectTrigger><SelectValue placeholder="Months" /></SelectTrigger>
+                        <Label>Employment Type <span className="text-red-500">*</span></Label>
+                        <Select value={data.employmentType || undefined} onValueChange={(v) => handleChange("employmentType", v)} disabled={readOnly}>
+                            <SelectTrigger><SelectValue placeholder="Select Employment Type" /></SelectTrigger>
                             <SelectContent>
-                                {probationPeriodOptions.map(option => (
-                                    <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>
+                                {employmentTypeOptions.map(type => (
+                                    <SelectItem key={type} value={type}>{type}</SelectItem>
                                 ))}
                             </SelectContent>
                         </Select>
                     </div>
                     <div className="space-y-2">
-                        <Label>Confirmation Date</Label>
-                        <DatePicker date={data.confirmationDate} setDate={(d) => handleChange("confirmationDate", d)} disabled={readOnly} />
-                        {validationErrors.confirmationDate && (
-                            <p className="text-sm text-red-500 mt-1">{validationErrors.confirmationDate}</p>
+                        <Label>
+                            {data.employmentType === "Contractual" ? "Start from" : "Joining date"} <span className="text-red-500">*</span>
+                        </Label>
+                        <DatePicker date={data.dateOfJoining} setDate={(d) => handleChange("dateOfJoining", d)} disabled={readOnly} />
+                        {validationErrors.dateOfJoining && (
+                            <p className="text-sm text-red-500 mt-1">{validationErrors.dateOfJoining}</p>
                         )}
                     </div>
+                </div>
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mt-4">
                     <div className="space-y-2">
-                        <Label>Exit Date{(data.employmentStatus !== 'Active' && data.employmentStatus !== '') && <span className="text-red-500">*</span>}</Label>
-                        <DatePicker
-                            date={data.exitDate}
-                            setDate={(d) => handleChange("exitDate", d)}
-                            disabled={readOnly || data.employmentStatus === 'Active'}
-                        />
+                        <Label>
+                            {data.employmentType === "Contractual" ? "Up to" : "Exit Date"}
+                            {(data.employmentStatus !== 'Active' && data.employmentStatus !== '' && data.employmentType !== "Contractual") && <span className="text-red-500">*</span>}
+                        </Label>
+                        <div className={cn(
+                            (readOnly || (data.employmentType !== "Contractual" && (!data.employmentStatus || data.employmentStatus === 'Active'))) && "bg-muted rounded-md"
+                        )}>
+                            <DatePicker
+                                date={data.exitDate}
+                                setDate={(d) => handleChange("exitDate", d)}
+                                disabled={readOnly || (data.employmentType !== "Contractual" && (!data.employmentStatus || data.employmentStatus === 'Active'))}
+                            />
+                        </div>
                         {validationErrors.exitDate && (
                             <p className="text-sm text-red-500 mt-1">{validationErrors.exitDate}</p>
                         )}
@@ -3023,7 +2970,7 @@ function DocumentsForm({ data, updateData, readOnly }: any) {
                                     <Label className="text-sm font-medium">Type <span className="text-red-500">*</span></Label>
                                     <Select value={newDoc.type} onValueChange={(v) => setNewDoc(prev => ({ ...prev, type: v }))}>
                                         <SelectTrigger className="h-9">
-                                            <SelectValue placeholder="Select Type" />
+                                            <SelectValue placeholder="Select Document Type" />
                                         </SelectTrigger>
                                         <SelectContent>
                                             <SelectItem value="ID Proof">ID Proof</SelectItem>

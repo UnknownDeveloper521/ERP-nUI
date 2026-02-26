@@ -105,7 +105,7 @@ export const MODULE_HIERARCHY: ModuleHierarchyItem[] = [
       },
       {
         name: "Leave Management",
-        popupModules: ["Dashboard", "Apply Leave", "Team Request", "Calendar"]
+        popupModules: ["Dashboard", "Leave Entry", "Calendar"]
       }
     ]
   },

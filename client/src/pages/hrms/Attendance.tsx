@@ -40,6 +40,8 @@ interface HRRecord {
     department: string;
     workLocation: string;
     status: "Present" | "Absent" | null;
+    inTime?: string;
+    outTime?: string;
 }
 
 interface BulkRecord {
@@ -49,6 +51,8 @@ interface BulkRecord {
     workLocation: string;
     date: string; // YYYY-MM-DD
     status: "Present" | "Absent" | null;
+    inTime?: string;
+    outTime?: string;
 }
 
 // --- Reusable Searchable Combobox Component ---
@@ -132,7 +136,7 @@ export default function AttendancePage() {
     const [location, setLocation] = useLocation();
     const searchString = useSearch();
     const searchParams = new URLSearchParams(searchString);
-    const currentTab = searchParams.get("tab") || "record";
+    const currentTab = searchParams.get("tab") || "hr-view";
 
     const handleTabChange = (value: string) => {
         const newParams = new URLSearchParams(searchString);
@@ -230,7 +234,9 @@ export default function AttendancePage() {
             date: "2026-02-10",
             department: "Engineering",
             workLocation: "Head Office",
-            status: "Present"
+            status: "Present",
+            inTime: "09:00",
+            outTime: "18:00"
         }
     ];
 
@@ -270,27 +276,96 @@ export default function AttendancePage() {
         { id: "b3", employeeName: "Charlie Brown", department: "Sales", workLocation: "Plant 3" },
         { id: "b4", employeeName: "Diana Ross", department: "Finance", workLocation: "Plant 1" },
         { id: "b5", employeeName: "Ethan Hunt", department: "IT", workLocation: "Plant 2" },
+        { id: "b6", employeeName: "Fiona Apple", department: "HR", workLocation: "Plant 3" },
+        { id: "b7", employeeName: "George Michael", department: "Sales", workLocation: "Plant 1" },
+        { id: "b8", employeeName: "Hannah Montana", department: "Finance", workLocation: "Plant 2" },
+        { id: "b9", employeeName: "Ian Wright", department: "IT", workLocation: "Plant 3" },
+        { id: "b10", employeeName: "Janet Jackson", department: "HR", workLocation: "Plant 1" },
+        { id: "b11", employeeName: "Kevin Hart", department: "Sales", workLocation: "Plant 2" },
+        { id: "b12", employeeName: "Lana Del Rey", department: "Finance", workLocation: "Plant 3" },
+        { id: "b13", employeeName: "Michael Jordan", department: "IT", workLocation: "Plant 1" },
+        { id: "b14", employeeName: "Nina Simone", department: "HR", workLocation: "Plant 2" },
+        { id: "b15", employeeName: "Oscar Wilde", department: "Sales", workLocation: "Plant 3" },
+        { id: "b16", employeeName: "Paul McCartney", department: "Finance", workLocation: "Plant 1" },
+        { id: "b17", employeeName: "Quentin Tarantino", department: "IT", workLocation: "Plant 2" },
+        { id: "b18", employeeName: "Rihanna Fenty", department: "HR", workLocation: "Plant 3" },
+        { id: "b19", employeeName: "Steven Spielberg", department: "Sales", workLocation: "Plant 1" },
+        { id: "b20", employeeName: "Tina Turner", department: "Finance", workLocation: "Plant 2" },
     ];
 
     // Map to store attendance status indexed by date and employee ID
-    // Record<dateString, Record<employeeId, status>>
-    const [bulkAttendanceMap, setBulkAttendanceMap] = useState<Record<string, Record<string, "Present" | "Absent" | null>>>({});
+    // Record<dateString, Record<employeeId, {status, inTime, outTime}>>
+    const [bulkAttendanceMap, setBulkAttendanceMap] = useState<Record<string, Record<string, { status: "Present" | "Absent" | null, inTime: string, outTime: string }>>>({});
 
-    const handleBulkSetStatus = (id: string, status: "Present" | "Absent") => {
+    const handleBulkSetStatus = (id: string, status: "Present" | "Absent", extra?: { inTime?: string; outTime?: string }) => {
         const dateStr = format(bulkDate, "yyyy-MM-dd");
-        setBulkAttendanceMap(prev => ({
-            ...prev,
-            [dateStr]: {
-                ...(prev[dateStr] || {}),
-                [id]: status
-            }
-        }));
+        setBulkAttendanceMap(prev => {
+            const currentData = prev[dateStr]?.[id] || { status: null, inTime: "", outTime: "" };
+            return {
+                ...prev,
+                [dateStr]: {
+                    ...(prev[dateStr] || {}),
+                    [id]: {
+                        ...currentData,
+                        status,
+                        ...(extra || {})
+                    }
+                }
+            };
+        });
+    };
+
+    const handleBulkTimeChange = (id: string, field: "inTime" | "outTime", value: string) => {
+        const dateStr = format(bulkDate, "yyyy-MM-dd");
+        setBulkAttendanceMap(prev => {
+            const currentData = prev[dateStr]?.[id] || { status: null, inTime: "", outTime: "" };
+            return {
+                ...prev,
+                [dateStr]: {
+                    ...(prev[dateStr] || {}),
+                    [id]: {
+                        ...currentData,
+                        [field]: value
+                    }
+                }
+            };
+        });
+    };
+
+    // --- Bulk Entry State ---
+    const [isBulkEntryOpen, setIsBulkEntryOpen] = useState(false);
+    const [selectedEmployees, setSelectedEmployees] = useState<string[]>([]);
+    const [bulkInTime, setBulkInTime] = useState("");
+    const [bulkOutTime, setBulkOutTime] = useState("");
+    const [popupSearchTerm, setPopupSearchTerm] = useState("");
+
+    const handleBulkEntrySave = () => {
+        const dateStr = format(bulkDate, "yyyy-MM-dd");
+        setBulkAttendanceMap(prev => {
+            const newDateMap = { ...(prev[dateStr] || {}) };
+            selectedEmployees.forEach(id => {
+                newDateMap[id] = {
+                    status: "Present",
+                    inTime: bulkInTime,
+                    outTime: bulkOutTime
+                };
+            });
+            return { ...prev, [dateStr]: newDateMap };
+        });
+        setIsBulkEntryOpen(false);
+        setSelectedEmployees([]);
+        setBulkInTime("");
+        setBulkOutTime("");
+        toast({
+            title: "Bulk Entry Applied",
+            description: `Applied attendance for ${selectedEmployees.length} employees.`,
+        });
     };
 
 
 
     return (
-        <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
+        <div className="h-full flex flex-col overflow-hidden animate-in fade-in slide-in-from-bottom-4 duration-500">
             <div className="flex flex-col gap-2">
                 <h1 className="text-3xl font-bold tracking-tight text-slate-900">Attendance</h1>
                 <p className="text-muted-foreground">
@@ -298,15 +373,15 @@ export default function AttendancePage() {
                 </p>
             </div>
 
-            <Tabs value={currentTab} onValueChange={handleTabChange} className="w-full">
+            <Tabs value={currentTab} onValueChange={handleTabChange} className="w-full flex-1 flex flex-col overflow-hidden">
                 <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 mb-4">
                     <TabsList className="w-full justify-start border-b border-border bg-transparent p-0 h-auto rounded-none">
-                        <TabsTrigger
+                        {/* <TabsTrigger
                             value="record"
                             className="rounded-none border-b-2 border-transparent data-[state=active]:border-primary data-[state=active]:bg-transparent data-[state=active]:shadow-none px-4 py-2 text-sm font-medium text-muted-foreground data-[state=active]:text-primary transition-colors hover:text-foreground"
                         >
                             Attendance Record
-                        </TabsTrigger>
+                        </TabsTrigger> */}
                         <TabsTrigger
                             value="hr-view"
                             className="rounded-none border-b-2 border-transparent data-[state=active]:border-primary data-[state=active]:bg-transparent data-[state=active]:shadow-none px-4 py-2 text-sm font-medium text-muted-foreground data-[state=active]:text-primary transition-colors hover:text-foreground"
@@ -322,7 +397,8 @@ export default function AttendancePage() {
                     </TabsList>
                 </div>
 
-                {/* --- Tab 1: Attendance Record --- */}
+                {/* --- Tab 1: Attendance Record (Hidden) --- */}
+                {/* 
                 <TabsContent value="record" className="space-y-4">
                     <Card className="border-none shadow-md overflow-hidden bg-white/50 backdrop-blur-sm">
                         <CardHeader>
@@ -341,33 +417,15 @@ export default function AttendancePage() {
                         </CardHeader>
                         <CardContent className="p-0">
                             <div className="bg-card border rounded-lg overflow-hidden shadow-sm mx-6 mb-6">
-                                {/* Header Row */}
                                 <div className="grid grid-cols-12 gap-4 p-4 bg-muted/40 font-medium text-sm text-muted-foreground border-b">
                                     <div className="col-span-8">Date</div>
                                     <div className="col-span-4 text-right pr-6">Mark Present</div>
                                 </div>
-
-                                {/* Rows */}
                                 <div className="divide-y text-sm">
                                     {groupedAttendance.length === 0 ? (
                                         <div className="p-8 text-center text-muted-foreground">
                                             No attendance record found for {format(recordDate, "MMMM dd, yyyy")}.
                                             Use the checkbox to mark your status.
-                                            {/* For current date, show the checkbox even if no record exists in list yet */}
-                                            {isSameDay(recordDate, new Date()) && (
-                                                <div className="mt-4 flex justify-center">
-                                                    <div className="flex items-center gap-4 bg-muted/20 p-4 rounded-lg">
-                                                        <span className="font-medium">Mark Attendance for Today:</span>
-                                                        <Checkbox
-                                                            checked={false}
-                                                            onCheckedChange={(checked) =>
-                                                                handleSetStatus(checked ? "Present" : "Absent", format(recordDate, "yyyy-MM-dd"))
-                                                            }
-                                                            className="h-6 w-6 border-2"
-                                                        />
-                                                    </div>
-                                                </div>
-                                            )}
                                         </div>
                                     ) : (
                                         groupedAttendance.map((record, index) => (
@@ -391,17 +449,10 @@ export default function AttendancePage() {
                                         ))
                                     )}
                                 </div>
-                                {/* Save Button */}
                                 <div className="flex justify-end p-6 border-t bg-muted/10">
                                     <Button
-                                        onClick={() => {
-                                            toast({
-                                                title: "Attendance Saved",
-                                                description: "Attendance records updated successfully.",
-                                            });
-                                            console.log("Saving Attendance List:", attendanceList);
-                                        }}
-                                        disabled={!groupedAttendance.some(r => r.status === "Present")}
+                                        onClick={() => {}}
+                                        disabled={true}
                                         className="bg-blue-600 hover:bg-blue-700 text-white min-w-[120px] gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
                                     >
                                         <Save className="h-4 w-4" />
@@ -412,14 +463,14 @@ export default function AttendancePage() {
                         </CardContent>
                     </Card>
                 </TabsContent>
-
+                */}
 
                 {/* --- Tab 3: HR View --- */}
-                <TabsContent value="hr-view" className="space-y-4">
-                    <Card className="border-none shadow-md overflow-hidden bg-white/50 backdrop-blur-sm">
-                        <CardContent className="p-6">
+                <TabsContent value="hr-view" className="flex-1 flex flex-col overflow-hidden mt-4">
+                    <Card className="flex-1 flex flex-col overflow-hidden border-none shadow-md bg-white/50 backdrop-blur-sm">
+                        <CardContent className="p-6 flex flex-col flex-1 overflow-hidden">
                             {/* Filter Section */}
-                            <div className="grid grid-cols-1 sm:grid-cols-4 gap-4 mb-6">
+                            <div className="grid grid-cols-1 sm:grid-cols-4 gap-4 mb-6 shrink-0">
                                 <SearchableSelect
                                     label="Department"
                                     value={hrDepartment}
@@ -427,7 +478,7 @@ export default function AttendancePage() {
                                     onChange={setHrDepartment}
                                 />
                                 <SearchableSelect
-                                    label="Work Location"
+                                    label="Location"
                                     value={hrWorkLocation}
                                     options={["All Locations", "Plant 1", "Plant 2", "Plant 3", "HQ Office", "Remote"]}
                                     onChange={setHrWorkLocation}
@@ -465,19 +516,21 @@ export default function AttendancePage() {
                                 </div>
                             </div>
 
-                            {/* Result Table */}
-                            <div className="bg-card border rounded-lg overflow-hidden shadow-sm">
-                                {/* Header Row */}
-                                <div className="grid grid-cols-12 gap-4 p-4 bg-muted/40 font-medium text-sm text-muted-foreground border-b">
-                                    <div className="col-span-4">Employee Name</div>
-                                    <div className="col-span-2">Date</div>
-                                    <div className="col-span-2">Department</div>
-                                    <div className="col-span-2">Work Loc.</div>
+                            {/* Result Table - Scrollable Container */}
+                            <div className="flex-1 overflow-auto bg-card border rounded-lg shadow-sm">
+                                {/* Header Row - Sticky */}
+                                <div className="grid grid-cols-12 gap-4 p-4 bg-muted/40 font-medium text-sm text-muted-foreground border-b sticky top-0 z-10">
+                                    <div className="col-span-3">Employee Name</div>
+                                    <div className="col-span-2 text-center">Date</div>
+                                    <div className="col-span-2 text-center">Department</div>
+                                    <div className="col-span-1 text-center">Location</div>
                                     <div className="col-span-2 text-center">Status</div>
+                                    <div className="col-span-1 text-center">In Time</div>
+                                    <div className="col-span-1 text-center">Out Time</div>
                                 </div>
 
                                 {/* Rows */}
-                                <div className="divide-y text-sm">
+                                <div className="divide-y text-sm bg-white">
                                     {hrSearchResults.length === 0 ? (
                                         <div className="p-8 text-center text-muted-foreground">
                                             No records found for the selected criteria.
@@ -488,16 +541,16 @@ export default function AttendancePage() {
                                                 key={record.id}
                                                 className="grid grid-cols-12 gap-4 p-4 items-center hover:bg-muted/30 transition-colors"
                                             >
-                                                <div className="col-span-4 font-medium text-foreground">
+                                                <div className="col-span-3 font-medium text-foreground">
                                                     {record.employeeName}
                                                 </div>
-                                                <div className="col-span-2 text-muted-foreground">
+                                                <div className="col-span-2 text-center text-muted-foreground">
                                                     {record.date}
                                                 </div>
-                                                <div className="col-span-2 text-muted-foreground">
+                                                <div className="col-span-2 text-center text-muted-foreground">
                                                     {record.department}
                                                 </div>
-                                                <div className="col-span-2">
+                                                <div className="col-span-1 text-center">
                                                     <Badge variant="outline" className="text-xs">
                                                         {record.workLocation}
                                                     </Badge>
@@ -514,6 +567,12 @@ export default function AttendancePage() {
                                                         {record.status || "—"}
                                                     </Badge>
                                                 </div>
+                                                <div className="col-span-1 text-center text-muted-foreground">
+                                                    {record.inTime || "—"}
+                                                </div>
+                                                <div className="col-span-1 text-center text-muted-foreground">
+                                                    {record.outTime || "—"}
+                                                </div>
                                             </div>
                                         ))
                                     )}
@@ -524,95 +583,207 @@ export default function AttendancePage() {
                 </TabsContent>
 
                 {/* --- Tab 4: Bulk Attendance --- */}
-                <TabsContent value="bulk-attendance" className="space-y-4">
-                    <Card className="border-none shadow-md overflow-hidden bg-white/50 backdrop-blur-sm">
-                        <CardHeader>
-                            <div className="flex justify-between items-center">
-                                <div>
-                                    <CardTitle className="text-lg">Bulk Attendance</CardTitle>
-                                    <CardDescription>Manage daily attendance for multiple employees</CardDescription>
-                                </div>
-                                <div className="flex items-center gap-2">
-                                    <Input
-                                        placeholder="Search employee..."
-                                        value={bulkSearchTerm}
-                                        onChange={(e) => setBulkSearchTerm(e.target.value)}
-                                        className="w-[200px] h-9 bg-white"
-                                    />
-                                    <div className="w-[240px]">
-                                        <DatePicker
-                                            date={bulkDate}
-                                            setDate={(d) => d && setBulkDate(d)}
+                <TabsContent value="bulk-attendance" className="flex-1 flex flex-col overflow-hidden mt-4">
+                    <>
+                        <Card className="flex-1 flex flex-col overflow-hidden border-none shadow-md bg-white/50 backdrop-blur-sm">
+                            <CardHeader className="shrink-0 border-b bg-white/30 backdrop-blur-sm pb-4">
+                                <div className="flex justify-between items-center">
+                                    <div>
+                                        <CardTitle className="text-lg">Bulk Attendance</CardTitle>
+                                        <CardDescription>Manage daily attendance for multiple employees</CardDescription>
+                                    </div>
+                                    <div className="flex items-center gap-2">
+                                        <Input
+                                            placeholder="Search employee..."
+                                            value={bulkSearchTerm}
+                                            onChange={(e) => setBulkSearchTerm(e.target.value)}
+                                            className="w-[200px] h-9 bg-white"
                                         />
+                                        <div className="w-[240px]">
+                                            <DatePicker date={bulkDate} setDate={(d) => d && setBulkDate(d)} />
+                                        </div>
+                                        <Button
+                                            onClick={() => {
+                                                const dateStr = format(bulkDate, "yyyy-MM-dd");
+                                                const currentRecords = bulkAttendanceMap[dateStr] || {};
+                                                const presentIds = Object.keys(currentRecords).filter(id => currentRecords[id].status === "Present");
+                                                setSelectedEmployees(presentIds);
+                                                if (presentIds.length > 0) {
+                                                    const firstRecord = currentRecords[presentIds[0]];
+                                                    setBulkInTime(firstRecord.inTime || "");
+                                                    setBulkOutTime(firstRecord.outTime || "");
+                                                } else {
+                                                    setBulkInTime("");
+                                                    setBulkOutTime("");
+                                                }
+                                                setIsBulkEntryOpen(true);
+                                            }}
+                                            className="h-9 bg-primary text-primary-foreground font-medium"
+                                        >
+                                            Bulk Entry
+                                        </Button>
                                     </div>
                                 </div>
-                            </div>
-                        </CardHeader>
-                        <CardContent className="p-0">
-                            <div className="bg-card border rounded-lg overflow-hidden shadow-sm mx-6 mb-6">
-                                {/* Header Row */}
-                                <div className="grid grid-cols-12 gap-4 p-4 bg-muted/40 font-medium text-sm text-muted-foreground border-b">
-                                    <div className="col-span-8">Employee Name</div>
-                                    <div className="col-span-4 text-right pr-6">Mark Present</div>
+                            </CardHeader>
+                            <CardContent className="p-0 flex-1 flex flex-col overflow-hidden">
+                                <div className="flex-1 overflow-auto p-6 pt-2">
+                                    <div className="bg-card border rounded-lg overflow-hidden shadow-sm">
+                                        <div className="grid grid-cols-12 gap-4 p-4 bg-muted/40 font-medium text-sm text-muted-foreground border-b sticky top-0 z-10">
+                                            <div className="col-span-4">Employee Name</div>
+                                            <div className="col-span-3">In Time</div>
+                                            <div className="col-span-3">Out Time</div>
+                                            <div className="col-span-2 text-right pr-6">Mark Present</div>
+                                        </div>
+                                        <div className="divide-y text-sm bg-white">
+                                            {BULK_EMPLOYEES
+                                                .filter(record => record.employeeName.toLowerCase().includes(bulkSearchTerm.toLowerCase()))
+                                                .map((record) => {
+                                                    const dateStr = format(bulkDate, "yyyy-MM-dd");
+                                                    const attendanceData = bulkAttendanceMap[dateStr]?.[record.id] || { status: null, inTime: "", outTime: "" };
+                                                    return (
+                                                        <div key={record.id} className="grid grid-cols-12 gap-4 p-4 items-center hover:bg-muted/30 transition-colors group">
+                                                            <div className="col-span-4 font-medium text-foreground">{record.employeeName}</div>
+                                                            <div className="col-span-3">
+                                                                <Input
+                                                                    type="time"
+                                                                    value={attendanceData.inTime}
+                                                                    onChange={(e) => handleBulkTimeChange(record.id, "inTime", e.target.value)}
+                                                                    className="h-8 bg-white"
+                                                                />
+                                                            </div>
+                                                            <div className="col-span-3">
+                                                                <Input
+                                                                    type="time"
+                                                                    value={attendanceData.outTime}
+                                                                    onChange={(e) => handleBulkTimeChange(record.id, "outTime", e.target.value)}
+                                                                    className="h-8 bg-white"
+                                                                />
+                                                            </div>
+                                                            <div className="col-span-2 text-right flex justify-end pr-8">
+                                                                <Checkbox
+                                                                    checked={attendanceData.status === "Present"}
+                                                                    onCheckedChange={(checked) => handleBulkSetStatus(record.id, checked ? "Present" : "Absent")}
+                                                                    className="h-5 w-5 border-2 data-[state=checked]:bg-blue-600 data-[state=checked]:border-blue-600"
+                                                                />
+                                                            </div>
+                                                        </div>
+                                                    );
+                                                })}
+                                        </div>
+                                    </div>
                                 </div>
-
-                                {/* Rows */}
-                                <div className="divide-y text-sm">
-                                    {BULK_EMPLOYEES
-                                        .filter(record =>
-                                            record.employeeName.toLowerCase().includes(bulkSearchTerm.toLowerCase())
-                                        )
-                                        .map((record) => {
-                                            const dateStr = format(bulkDate, "yyyy-MM-dd");
-                                            const status = bulkAttendanceMap[dateStr]?.[record.id] || null;
-
-                                            return (
-                                                <div
-                                                    key={record.id}
-                                                    className="grid grid-cols-12 gap-4 p-4 items-center hover:bg-muted/30 transition-colors group"
-                                                >
-                                                    <div className="col-span-8 font-medium text-foreground">
-                                                        {record.employeeName}
-                                                    </div>
-                                                    <div className="col-span-4 text-right flex justify-end pr-8">
-                                                        <Checkbox
-                                                            checked={status === "Present"}
-                                                            onCheckedChange={(checked) =>
-                                                                handleBulkSetStatus(record.id, checked ? "Present" : "Absent")
-                                                            }
-                                                            className="h-5 w-5 border-2 data-[state=checked]:bg-blue-600 data-[state=checked]:border-blue-600"
-                                                        />
-                                                    </div>
-                                                </div>
-                                            );
-                                        })}
-                                </div>
-
-                                {/* Save Button */}
-                                <div className="flex justify-end p-6 border-t bg-muted/10">
+                                {/* Sticky Footer for Save Button */}
+                                <div className="shrink-0 flex justify-end p-6 border-t bg-white shadow-[0_-4px_10px_-5px_rgba(0,0,0,0.1)] z-10">
                                     <Button
                                         onClick={() => {
                                             toast({
                                                 title: "Bulk Attendance Saved",
-                                                description: "All employee attendance records for " + format(bulkDate, "PPP") + " have been updated successfully.",
+                                                description: "All employee attendance records have been updated successfully.",
                                             });
                                             const dateStr = format(bulkDate, "yyyy-MM-dd");
-                                            console.log("Saving Bulk Attendance Data for " + dateStr + ":", bulkAttendanceMap[dateStr]);
+                                            console.log("Saving Bulk Data:", bulkAttendanceMap[dateStr]);
                                         }}
-                                        disabled={!Object.values(bulkAttendanceMap[format(bulkDate, "yyyy-MM-dd")] || {}).some(status => status === "Present")}
-                                        className="bg-blue-600 hover:bg-blue-700 text-white min-w-[120px] gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+                                        disabled={!Object.values(bulkAttendanceMap[format(bulkDate, "yyyy-MM-dd")] || {}).some(record => record.status === "Present")}
+                                        className="bg-blue-600 hover:bg-blue-700 text-white min-w-[150px] gap-2 shadow-md"
                                     >
                                         <Save className="h-4 w-4" />
-                                        Save
+                                        Save Attendance
                                     </Button>
                                 </div>
-                            </div>
-                        </CardContent>
-                    </Card>
-                </TabsContent>
-            </Tabs>
+                            </CardContent>
+                        </Card>
 
-        </div>
+                        {/* Bulk Entry Dialog */}
+                        <Dialog open={isBulkEntryOpen} onOpenChange={setIsBulkEntryOpen}>
+                            <DialogContent className="max-w-lg p-0 overflow-hidden bg-white">
+                                <DialogHeader className="p-6 pb-2 border-b">
+                                    <DialogTitle className="text-xl font-bold">Bulk Attendance Entry</DialogTitle>
+                                </DialogHeader>
+                                <div className="flex flex-col h-[550px]">
+                                    <div className="p-6 border-b bg-slate-50/50">
+                                        <div className="grid grid-cols-2 gap-6">
+                                            <div className="space-y-2">
+                                                <Label className="text-sm font-semibold text-slate-700">In Time</Label>
+                                                <Input
+                                                    type="time"
+                                                    value={bulkInTime}
+                                                    onChange={(e) => setBulkInTime(e.target.value)}
+                                                    className="h-10 bg-white"
+                                                />
+                                            </div>
+                                            <div className="space-y-2">
+                                                <Label className="text-sm font-semibold text-slate-700">Out Time</Label>
+                                                <Input
+                                                    type="time"
+                                                    value={bulkOutTime}
+                                                    onChange={(e) => setBulkOutTime(e.target.value)}
+                                                    className="h-10 bg-white"
+                                                />
+                                            </div>
+                                        </div>
+                                    </div>
+
+                                    <div className="flex-1 flex flex-col overflow-hidden">
+                                        <div className="p-4 border-b bg-muted/10 space-y-3">
+                                            <Input
+                                                placeholder="Search employees by name or department..."
+                                                value={popupSearchTerm}
+                                                onChange={(e) => setPopupSearchTerm(e.target.value)}
+                                                className="h-9 bg-white"
+                                            />
+                                            <div className="flex items-center space-x-2">
+                                                <Checkbox
+                                                    id="popup-select-all"
+                                                    checked={selectedEmployees.length === BULK_EMPLOYEES.length && BULK_EMPLOYEES.length > 0}
+                                                    onCheckedChange={(checked) => {
+                                                        if (checked) setSelectedEmployees(BULK_EMPLOYEES.map(e => e.id));
+                                                        else setSelectedEmployees([]);
+                                                    }}
+                                                />
+                                                <Label htmlFor="popup-select-all" className="font-semibold cursor-pointer">Select All</Label>
+                                            </div>
+                                        </div>
+                                        <ScrollArea className="flex-1">
+                                            <div className="p-2 space-y-1">
+                                                {BULK_EMPLOYEES.filter(emp =>
+                                                    emp.employeeName.toLowerCase().includes(popupSearchTerm.toLowerCase()) ||
+                                                    emp.department.toLowerCase().includes(popupSearchTerm.toLowerCase())
+                                                ).map((emp) => (
+                                                    <div key={emp.id} className="flex items-center space-x-3 p-2 rounded-md hover:bg-muted/50 transition-colors">
+                                                        <Checkbox
+                                                            id={`popup-emp-${emp.id}`}
+                                                            checked={selectedEmployees.includes(emp.id)}
+                                                            onCheckedChange={(checked) => {
+                                                                if (checked) setSelectedEmployees(prev => [...prev, emp.id]);
+                                                                else setSelectedEmployees(prev => prev.filter(id => id !== emp.id));
+                                                            }}
+                                                        />
+                                                        <Label htmlFor={`popup-emp-${emp.id}`} className="flex-1 cursor-pointer py-1">
+                                                            <div className="font-medium">{emp.employeeName}</div>
+                                                            <div className="text-xs text-muted-foreground">{emp.department} • {emp.workLocation}</div>
+                                                        </Label>
+                                                    </div>
+                                                ))}
+                                            </div>
+                                        </ScrollArea>
+                                    </div>
+                                </div>
+                                <div className="p-4 px-6 border-t bg-white flex justify-between items-center shrink-0">
+                                    <div className="text-sm font-medium text-slate-600">
+                                        <span className="text-blue-600 font-bold">{selectedEmployees.length}</span> out of <span className="font-bold">{BULK_EMPLOYEES.length}</span> selected
+                                    </div>
+                                    <div className="flex gap-3">
+                                        <Button variant="outline" onClick={() => setIsBulkEntryOpen(false)}>Cancel</Button>
+                                        <Button className="min-w-[120px] bg-blue-600 hover:bg-blue-700 text-white" onClick={handleBulkEntrySave}>Save Changes</Button>
+                                    </div>
+                                </div>
+                            </DialogContent>
+                        </Dialog>
+                    </>
+                </TabsContent >
+            </Tabs >
+
+        </div >
     );
 }
 
