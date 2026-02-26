@@ -49,6 +49,8 @@ import MaterialLedger from "@/pages/inventory/MaterialLedger";
 import QualityCheck from "@/pages/production/QualityCheck";
 import MaterialOperation from "@/pages/production/MaterialOperation";
 import MaterialRelease from "@/pages/production/MaterialRelease";
+import BOM from "@/pages/production/BOM";
+import ProductionPlan from "@/pages/production/ProductionPlan";
 
 import SalesDashboard from "@/pages/sales-invoicing/SalesDashboard";
 import SalesOrder from "@/pages/sales-invoicing/SalesOrder";
@@ -434,6 +436,56 @@ function Router() {
           </ProtectedRoute>
         )}
       </Route>
+      <Route path="/production/bom">
+        {() => (
+          <ProtectedRoute>
+            <MainLayout>
+              <BOM />
+            </MainLayout>
+          </ProtectedRoute>
+        )}
+      </Route>
+
+      <Route path="/production/bom/new">
+        {() => (
+          <ProtectedRoute>
+            <MainLayout>
+              <BOM />
+            </MainLayout>
+          </ProtectedRoute>
+        )}
+      </Route>
+
+      <Route path="/production/bom/:id">
+        {() => (
+          <ProtectedRoute>
+            <MainLayout>
+              <BOM />
+            </MainLayout>
+          </ProtectedRoute>
+        )}
+      </Route>
+
+      <Route path="/production/production-plan">
+        {() => (
+          <ProtectedRoute>
+            <MainLayout>
+              <ProductionPlan />
+            </MainLayout>
+          </ProtectedRoute>
+        )}
+      </Route>
+
+      <Route path="/production/production-plan/:tab">
+        {() => (
+          <ProtectedRoute>
+            <MainLayout>
+              <ProductionPlan />
+            </MainLayout>
+          </ProtectedRoute>
+        )}
+      </Route>
+
       <Route path="/production/material-release/new">
         {() => (
           <ProtectedRoute>

@@ -484,7 +484,7 @@ export default function CoreHR() {
 
             if (activeTab === 'personal') {
                 const fields = [
-                    'employeeCode', 'firstName', 'middleName', 'lastName', 'gender',
+                    'employeeCode', 'firstName', 'lastName', 'gender',
                     'dateOfBirth', 'maritalStatus', 'nationality', 'bloodGroup',
                     'mobileNumber', 'alternateMobile', 'personalEmail', 'officialEmail',
                     'currentAddress', 'permanentAddress', 'city', 'state', 'pincode', 'country', 'photo'
@@ -492,7 +492,7 @@ export default function CoreHR() {
                 fields.forEach(f => newData[f] = "");
             } else if (activeTab === 'job') {
                 const fields = [
-                    'dateOfJoining', 'employmentType', 'employmentStatus', 'probationPeriod',
+                    'dateOfJoining', 'employmentType', 'employmentStatus',
                     'confirmationDate', 'exitDate', 'departmentId', 'designation',
                     'grade', 'reportingManager', 'workLocation', 'shift'
                 ];
@@ -538,68 +538,83 @@ export default function CoreHR() {
 
     // Required columns for validation with flexible matching
     const REQUIRED_COLUMNS = [
-        'employee id',
-        'employee code',
         'first name',
         'last name',
-        'email',
-        'phone number',
-        'address',
         'gender',
-        'date of birth'
+        'date of birth',
+        'mobile number',
+        'current address',
+        'employment status',
+        'employment type',
+        'joining date',
+        'department',
+        'designation',
+        'grade / level',
+        'reporting manager',
+        'location'
     ];
 
     // Column variations mapping for flexible header matching
     const COLUMN_VARIATIONS: { [key: string]: string[] } = {
         'employee id': ['employee id', 'employeeid', 'emp id', 'emp_id'],
-        'employee code': ['employee code', 'employeecode', 'emp code', 'emp_code'],
         'first name': ['first name', 'firstname', 'first_name'],
         'last name': ['last name', 'lastname', 'last_name'],
-        'email': ['email', 'personal email', 'personalemail', 'personal_email', 'e-mail', 'e_mail'],
-        'phone number': ['phone number', 'phonenumber', 'phone_number', 'mobile number', 'mobilenumber', 'mobile_number', 'phone', 'mobile'],
-        'address': ['address', 'current address', 'currentaddress', 'current_address'],
         'gender': ['gender'],
-        'date of birth': ['date of birth', 'dateofbirth', 'date_of_birth', 'dob', 'birth date', 'birthdate', 'birth_date']
+        'date of birth': ['date of birth', 'dateofbirth', 'date_of_birth', 'dob', 'birth date', 'birthdate', 'birth_date'],
+        'mobile number': ['mobile number', 'mobilenumber', 'mobile_number', 'phone number', 'phonenumber', 'phone_number', 'phone', 'mobile'],
+        'current address': ['current address', 'currentaddress', 'current_address', 'address'],
+        'employment status': ['employment status', 'employmentstatus', 'employment_status', 'status'],
+        'employment type': ['employment type', 'employmenttype', 'employment_type', 'type'],
+        'joining date': ['joining date', 'joiningdate', 'joining_date', 'date of joining', 'dateofjoining', 'doj'],
+        'department': ['department', 'departmentid', 'dept'],
+        'designation': ['designation'],
+        'grade / level': ['grade / level', 'grade/level', 'grade', 'level'],
+        'reporting manager': ['reporting manager', 'reportingmanager', 'reporting_manager', 'reporting to', 'reportingto', 'reporting'],
+        'location': ['location', 'work location', 'worklocation', 'work_location']
     };
 
     // User-friendly display names for required columns
     const REQUIRED_COLUMNS_DISPLAY = [
-        'Employee ID',
-        'Employee Code',
-        'First Name',
-        'Last Name',
-        'Email (Personal Email)',
-        'Phone Number (Mobile Number)',
-        'Address (Current Address)',
-        'Gender',
-        'Date of Birth'
-    ];
-    const requiredImportColumns = [
-        'Employee ID',
-        'Employee Code',
         'First Name',
         'Last Name',
         'Gender',
         'Date of Birth',
         'Mobile Number',
-        'Personal Email',
-        'Current Address'
+        'Current Address',
+        'Employment Status',
+        'Employment Type',
+        'Joining Date',
+        'Department',
+        'Designation',
+        'Grade / Level',
+        'Reporting Manager',
+        'Location'
+    ];
+    const requiredImportColumns = [
+        'Employee ID',
+        'First Name',
+        'Last Name',
+        'Gender',
+        'Date of Birth',
+        'Mobile Number',
+        'Current Address',
+        'Employment Status',
+        'Employment Type',
+        'Joining Date',
+        'Department',
+        'Designation',
+        'Grade / Level',
+        'Reporting Manager',
+        'Location'
     ];
 
     // All supported import columns (required + optional)
     const allImportColumns = [
-        // Basic Information
-        'Employee ID',
-        'Employee Code',
-        'First Name',
-        'Last Name',
-        'Full Name',
-        'Gender',
-        'Date of Birth',
-        'Age',
+        ...requiredImportColumns,
         'Nationality',
         'Blood Group',
         'Marital Status',
+        'Anniversary Date',
         // Contact Information
         'Mobile Number',
         'Alternate Mobile',
@@ -611,7 +626,23 @@ export default function CoreHR() {
         'City',
         'State',
         'Pincode',
-        'Country'
+        'Country',
+        // Employment Information
+        'Date of Joining',
+        'Employment Type',
+        'Employment Status',
+        'Exit Date',
+        // Organization Details
+        'Department',
+        'Designation',
+        'Grade / Level',
+        'Reporting Manager',
+        'Work Location',
+        'Shift',
+        // System Access
+        'Login Access Status',
+        'Username',
+        'Role(s)'
     ];
 
     // Import file validation
@@ -726,8 +757,23 @@ export default function CoreHR() {
                 return;
             }
 
-            // Step 1: Header/Column Validation with flexible matching
+            // Step 1: Check for forbidden columns (Employee ID should not be in import file)
             const normalizedHeaders = headers.map(normalizeHeader);
+            const forbiddenColumns = ['employee id', 'employeeid', 'emp id', 'emp_id', 'employee code', 'employeecode', 'emp code', 'emp_code'];
+            const foundForbiddenColumn = normalizedHeaders.find(header =>
+                forbiddenColumns.some(forbidden => header === normalizeHeader(forbidden))
+            );
+
+            if (foundForbiddenColumn) {
+                const message = `❌ Validation Failed: Employee ID column is not allowed in import file. Employee ID is auto-generated by the system.`;
+                setValidationMessage(message);
+                setIsImportValid(false);
+                setImportValidationErrors(['Employee ID column found in file. Please remove it as Employee ID is auto-generated by the system.']);
+                setIsValidated(true);
+                return;
+            }
+
+            // Step 2: Header/Column Validation with flexible matching
             const missingColumns: string[] = [];
 
             REQUIRED_COLUMNS.forEach(requiredCol => {
@@ -749,7 +795,7 @@ export default function CoreHR() {
                 return;
             }
 
-            // Step 2: Row-Level Validation
+            // Step 3: Row-Level Validation
             const rowErrors: { row: number, missing: string[] }[] = [];
 
             // Create column index mapping with flexible matching
@@ -801,7 +847,7 @@ export default function CoreHR() {
                 return;
             }
 
-            // Step 3: Success - All validations passed
+            // Step 4: Success - All validations passed
             setValidationMessage('✅ Validation Successful: All required columns and required row values are present');
             setIsImportValid(true);
             setImportValidationErrors([]);
@@ -844,13 +890,41 @@ export default function CoreHR() {
             const normalizedHeaders = headers.map(normalizeHeader);
             const columnMapping: { [key: string]: number } = {};
 
-            REQUIRED_COLUMNS.forEach(requiredCol => {
-                const variations = COLUMN_VARIATIONS[requiredCol] || [requiredCol];
+            // Map all possible columns including optional ones
+            const ALL_POSSIBLE_COLUMNS = [
+                ...REQUIRED_COLUMNS,
+                'nationality', 'blood group', 'marital status', 'anniversary date',
+                'alternate mobile', 'official email', 'permanent address', 'city', 'state', 'pincode', 'country',
+                'exit date', 'shift', 'login access status', 'username', 'roles'
+            ];
+
+            const DYNAMIC_VARIATIONS: { [key: string]: string[] } = {
+                ...COLUMN_VARIATIONS,
+                'nationality': ['nationality'],
+                'blood group': ['blood group', 'bloodgroup', 'blood_group'],
+                'marital status': ['marital status', 'maritalstatus', 'marital_status'],
+                'anniversary date': ['anniversary date', 'anniversarydate', 'anniversary_date'],
+                'alternate mobile': ['alternate mobile', 'alternatemobile', 'alternate_mobile', 'alt mobile'],
+                'official email': ['official email', 'officialemail', 'official_email', 'work email'],
+                'permanent address': ['permanent address', 'permanentaddress', 'permanent_address'],
+                'city': ['city'],
+                'state': ['state'],
+                'pincode': ['pincode', 'postal code', 'postalcode', 'zip code', 'zipcode'],
+                'country': ['country'],
+                'exit date': ['exit date', 'exitdate'],
+                'shift': ['shift'],
+                'login access status': ['login access status', 'loginstatus', 'login_status', 'access status'],
+                'username': ['username', 'user name'],
+                'roles': ['roles', 'role', 'role(s)']
+            };
+
+            ALL_POSSIBLE_COLUMNS.forEach(col => {
+                const variations = DYNAMIC_VARIATIONS[col] || [col];
                 const headerIndex = normalizedHeaders.findIndex(header =>
                     variations.some(variation => header === normalizeHeader(variation))
                 );
                 if (headerIndex !== -1) {
-                    columnMapping[requiredCol] = headerIndex;
+                    columnMapping[col] = headerIndex;
                 }
             });
 
@@ -859,35 +933,53 @@ export default function CoreHR() {
 
             rows.forEach((row, rowIndex) => {
                 try {
-                    // Extract data using column mapping
-                    const employeeData = {
-                        id: `imp_${Date.now()}_${rowIndex}`, // Unique ID for imported employee
-                        employeeId: row[columnMapping['employee code']] || row[columnMapping['employee id']] || `EMP-${Math.floor(Math.random() * 10000)}`,
-                        firstName: row[columnMapping['first name']] || '',
-                        lastName: row[columnMapping['last name']] || '',
-                        email: row[columnMapping['email']] || '',
-                        phone: row[columnMapping['phone number']] || '',
-                        gender: row[columnMapping['gender']] || 'Male',
-                        dateOfBirth: row[columnMapping['date of birth']] || '',
-                        address: row[columnMapping['address']] || '',
-
-                        // Set default values for other required fields
-                        departmentId: '', // Will be selected by user
-                        designation: 'Employee',
-                        status: 'active',
-                        dateOfJoining: new Date().toISOString().split('T')[0], // Today's date
-                        type: 'Full Time',
-                        employmentType: 'Full Time',
-                        employmentStatus: 'active',
-                        city: '',
-                        state: '',
-                        country: '',
-                        postalCode: '',
-                        reportingTo: ''
+                    // Extract data using column mapping helper
+                    const getValue = (col: string) => {
+                        const idx = columnMapping[col];
+                        return idx !== undefined ? row[idx] : undefined;
                     };
 
-                    // Only add if required fields are present
-                    if (employeeData.firstName && employeeData.lastName && employeeData.email) {
+                    const employeeData = {
+                        id: `imp_${Date.now()}_${rowIndex}`, // Unique ID for imported employee
+                        // Employee ID will be auto-generated by backend - do not read from file
+                        firstName: getValue('first name') || '',
+                        lastName: getValue('last name') || '',
+                        gender: getValue('gender') || 'Male',
+                        dateOfBirth: getValue('date of birth') || '',
+                        nationality: getValue('nationality') || '',
+                        bloodGroup: getValue('blood group') || '',
+                        maritalStatus: getValue('marital status') || '',
+                        anniversaryDate: getValue('anniversary date') || '',
+
+                        phone: getValue('mobile number') || '',
+                        alternateMobile: getValue('alternate mobile') || '',
+                        email: getValue('official email') || '',
+                        personalEmail: '',
+                        officialEmail: getValue('official email') || '',
+
+                        address: getValue('current address') || '',
+                        permanentAddress: getValue('permanent address') || '',
+                        city: getValue('city') || '',
+                        state: getValue('state') || '',
+                        postalCode: getValue('pincode') || '',
+                        country: getValue('country') || '',
+
+                        dateOfJoining: getValue('joining date') || new Date().toISOString().split('T')[0],
+                        employmentType: getValue('employment type') || 'Full Time',
+                        status: getValue('employment status') || 'active',
+                        employmentStatus: getValue('employment status') || 'active',
+                        exitDate: getValue('exit date') || '',
+
+                        departmentId: getValue('department') || '',
+                        designation: getValue('designation') || 'Employee',
+                        grade: getValue('grade / level') || '',
+                        reportingTo: getValue('reporting manager') || '',
+                        workLocation: getValue('location') || 'Office',
+                        shift: getValue('shift') || ''
+                    };
+
+                    // Only add if basic required fields are present
+                    if (employeeData.firstName && employeeData.lastName) {
                         importedEmployees.push(employeeData);
                     }
                 } catch (error) {
@@ -906,13 +998,8 @@ export default function CoreHR() {
 
             // Add imported employees to the existing list
             setEmployees(prev => {
-                // Remove duplicates based on employeeId
-                const existingIds = prev.map(emp => emp.employeeId);
-                const newEmployees = importedEmployees.filter(emp => !existingIds.includes(emp.employeeId));
-
-                console.log(`📥 Importing ${newEmployees.length} new employees (${importedEmployees.length - newEmployees.length} duplicates skipped)`);
-
-                return [...prev, ...newEmployees];
+                console.log(`📥 Importing ${importedEmployees.length} new employees`);
+                return [...prev, ...importedEmployees];
             });
 
             // Simulate processing time
@@ -992,52 +1079,23 @@ export default function CoreHR() {
         // Filter selected employees for export
         const selectedEmployees = employees.filter((emp: any) => selectedEmployeeIds.includes(emp.id));
 
-        // Comprehensive headers matching all form fields
+        // Mandatory headers only (Red Dots in UI)
         const headers = [
-            // Basic Information
             "Employee ID",
-            "Employee Code",
             "First Name",
-            "Middle Name",
             "Last Name",
-            "Full Name",
             "Gender",
             "Date of Birth",
-            "Age",
-            "Nationality",
-            "Blood Group",
-            "Marital Status",
-
-            // Contact Information
             "Mobile Number",
-            "Alternate Mobile",
-            "Personal Email",
-            "Official Email",
-
-            // Address Information
             "Current Address",
-            "Permanent Address",
-            "City",
-            "State",
-            "Pincode",
-            "Country",
-
-            // Employment Information
-            "Date of Joining",
-            "Employment Type",
             "Employment Status",
-            "Probation Period",
-            "Confirmation Date",
-            "Exit Date",
-
-            // Organization Details
+            "Employment Type",
+            "Joining Date",
             "Department",
-            "Department Code",
             "Designation",
-            "Grade/Level",
+            "Grade / Level",
             "Reporting Manager",
-            "Work Location",
-            "Shift"
+            "Location"
         ];
 
         // Helper function to calculate age
@@ -1083,54 +1141,43 @@ export default function CoreHR() {
             return manager ? `${manager.firstName} ${manager.lastName}` : managerId || '';
         };
 
+        // Helper to get system access info
+        const getSystemAccessInfo = (employeeId: string) => {
+            const savedUsers = localStorage.getItem("system_users");
+            const users = savedUsers ? JSON.parse(savedUsers) : [];
+            const user = users.find((u: any) => u.employeeId === employeeId);
+            return user ? {
+                status: 'Enabled',
+                username: user.username,
+                roles: user.roles?.join(', ') || ''
+            } : {
+                status: 'Disabled',
+                username: '',
+                roles: ''
+            };
+        };
+
         const csvRows = [
             headers.join(","),
-            ...selectedEmployees.map((emp: any) => [
-                // Basic Information
-                emp.employeeId || '',
-                emp.employeeCode || emp.employeeId || '',
-                emp.firstName || '',
-                emp.middleName || '',
-                emp.lastName || '',
-                `${emp.firstName || ''} ${emp.lastName || ''}`.trim(),
-                emp.gender || '',
-                formatDate(emp.dateOfBirth),
-                calculateAge(emp.dateOfBirth),
-                emp.nationality || '',
-                emp.bloodGroup || '',
-                emp.maritalStatus || '',
-
-                // Contact Information
-                emp.phone || emp.mobileNumber || '',
-                emp.alternateMobile || '',
-                emp.email || emp.personalEmail || '',
-                emp.officialEmail || '',
-
-                // Address Information
-                emp.address || emp.currentAddress || '',
-                emp.permanentAddress || '',
-                emp.city || '',
-                emp.state || '',
-                emp.postalCode || emp.pincode || '',
-                emp.country || '',
-
-                // Employment Information
-                formatDate(emp.dateOfJoining),
-                emp.employmentType || emp.type || '',
-                emp.status || emp.employmentStatus || '',
-                emp.probationPeriod ? `${emp.probationPeriod} Month${emp.probationPeriod !== '1' ? 's' : ''}` : '',
-                formatDate(emp.confirmationDate),
-                formatDate(emp.exitDate),
-
-                // Organization Details
-                getDepartmentName(emp.departmentId),
-                getDepartmentCode(emp.departmentId),
-                emp.designation || '',
-                emp.grade || '',
-                getReportingManagerName(emp.reportingTo || emp.reportingManager),
-                emp.workLocation || '',
-                emp.shift || ''
-            ].map(v => `"${String(v || '').replace(/"/g, '""')}"`).join(","))
+            ...selectedEmployees.map((emp: any) => {
+                return [
+                    emp.employeeId || '',
+                    emp.firstName || '',
+                    emp.lastName || '',
+                    emp.gender || '',
+                    formatDate(emp.dateOfBirth),
+                    `'${emp.phone || emp.mobileNumber || ''}`,
+                    emp.address || emp.currentAddress || '',
+                    emp.status || emp.employmentStatus || '',
+                    emp.employmentType || emp.type || '',
+                    formatDate(emp.dateOfJoining),
+                    getDepartmentName(emp.departmentId),
+                    emp.designation || '',
+                    emp.grade || '',
+                    getReportingManagerName(emp.reportingTo || emp.reportingManager),
+                    emp.workLocation || emp.location || 'Office'
+                ].map(v => `"${String(v || '').replace(/"/g, '""')}"`).join(",")
+            })
         ];
 
         const csvContent = csvRows.join("\n");
@@ -1150,6 +1197,45 @@ export default function CoreHR() {
             title: "Export Completed",
             description: `${selectedEmployees.length} employee(s) exported with complete details.`,
             className: "bg-green-50 border-green-200 text-green-900"
+        });
+    };
+
+    const handleDownloadTemplate = () => {
+        const headers = [
+            "First Name",
+            "Last Name",
+            "Gender",
+            "Date of Birth",
+            "Mobile Number",
+            "Current Address",
+            "Employment Status",
+            "Employment Type",
+            "Joining Date",
+            "Department",
+            "Designation",
+            "Grade / Level",
+            "Reporting Manager",
+            "Location"
+        ];
+
+        // Only headers, no sample data row
+        const csvContent = headers.join(",");
+        const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+        const link = document.createElement("a");
+        if (link.download !== undefined) {
+            const url = URL.createObjectURL(blob);
+            link.setAttribute("href", url);
+            link.setAttribute("download", "employee_import_template.csv");
+            link.style.visibility = 'hidden';
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+        }
+
+        toast({
+            title: "Template Downloaded",
+            description: "Employee import template has been downloaded.",
+            className: "bg-blue-50 border-blue-200 text-blue-900"
         });
     };
 
@@ -1194,7 +1280,6 @@ export default function CoreHR() {
             employeeId: newEmployeeId,
             employeeCode: newEmployeeId,
             firstName: "",
-            middleName: "",
             lastName: "",
             gender: "",
             dateOfBirth: undefined,
@@ -1215,7 +1300,6 @@ export default function CoreHR() {
             dateOfJoining: undefined,
             employmentType: "",
             employmentStatus: "",
-            probationPeriod: "",
             confirmationDate: undefined,
             exitDate: undefined,
             departmentId: "",
@@ -1246,24 +1330,40 @@ export default function CoreHR() {
             if (employee) {
                 setFormData({
                     ...employee,
-                    employeeCode: employee.employeeId,
-                    mobileNumber: employee.phone,
-                    personalEmail: employee.email,
-                    currentAddress: employee.address || "",
-                    pincode: employee.postalCode,
+                    // Keep existing mappings for compatibility
+                    employeeCode: employee.employeeCode || employee.employeeId,
+                    mobileNumber: employee.mobileNumber || employee.phone,
+                    personalEmail: employee.personalEmail || employee.email,
+                    currentAddress: employee.currentAddress || employee.address || "",
+                    pincode: employee.pincode || employee.postalCode,
+                    // Ensure all other fields are present
+                    nationality: employee.nationality || "",
+                    bloodGroup: employee.bloodGroup || "",
+                    maritalStatus: employee.maritalStatus || "",
+                    officialEmail: employee.officialEmail || "",
+                    alternateMobile: employee.alternateMobile || "",
+                    permanentAddress: employee.permanentAddress || "",
+                    city: employee.city || "",
+                    state: employee.state || "",
+                    country: employee.country || "",
+                    designation: employee.designation || "",
+                    departmentId: employee.departmentId || "",
+                    grade: employee.grade || "",
+                    reportingManager: employee.reportingTo || employee.reportingManager || "",
+                    workLocation: employee.workLocation || "Office",
+                    shift: employee.shift || "",
+                    // Date conversions
                     dateOfBirth: employee.dateOfBirth ? new Date(employee.dateOfBirth) : undefined,
                     dateOfJoining: employee.dateOfJoining ? new Date(employee.dateOfJoining) : undefined,
-                    employmentStatus: employee.status,
+                    anniversaryDate: employee.anniversaryDate ? new Date(employee.anniversaryDate) : undefined,
+                    exitDate: employee.exitDate ? new Date(employee.exitDate) : undefined,
+                    employmentStatus: employee.status || employee.employmentStatus || "Active",
                     gender: employee.gender || "Male",
-                    employmentType: employee.employmentType || "Full Time",
-                    workLocation: "Office",
-                    reportingManager: employee.reportingTo || "",
-                    firstName: employee.firstName || "",
-                    lastName: employee.lastName || "",
+                    employmentType: employee.employmentType || employee.type || "Full Time",
                 });
             }
         }
-    }, [viewMode, editingId]);
+    }, [viewMode, editingId, employees]);
 
     // Effect to fix all input field caret visibility in CoreHR module
     useEffect(() => {
@@ -1421,22 +1521,37 @@ export default function CoreHR() {
                 employeeId: formData.employeeCode || formData.employeeId,
                 firstName: formData.firstName,
                 lastName: formData.lastName,
-                email: formData.personalEmail,
-                phone: formData.mobileNumber,
+                gender: formData.gender,
                 dateOfBirth: formData.dateOfBirth ? format(formData.dateOfBirth, "yyyy-MM-dd") : null,
-                dateOfJoining: formData.dateOfJoining ? format(formData.dateOfJoining, "yyyy-MM-dd") : null,
-                departmentId: formData.departmentId,
-                designation: formData.designation,
-                reportingTo: formData.reportingManager,
-                employmentType: formData.employmentType,
-                status: formData.employmentStatus,
+                nationality: formData.nationality,
+                bloodGroup: formData.bloodGroup,
+                maritalStatus: formData.maritalStatus,
+                anniversaryDate: formData.anniversaryDate ? format(formData.anniversaryDate, "yyyy-MM-dd") : null,
+
+                email: formData.personalEmail,
+                officialEmail: formData.officialEmail,
+                phone: formData.mobileNumber,
+                alternateMobile: formData.alternateMobile,
+
                 address: formData.currentAddress,
+                permanentAddress: formData.permanentAddress,
                 city: formData.city,
                 state: formData.state,
-                country: formData.country,
                 postalCode: formData.pincode,
-                gender: formData.gender,
-                type: formData.employmentType
+                country: formData.country,
+
+                dateOfJoining: formData.dateOfJoining ? format(formData.dateOfJoining, "yyyy-MM-dd") : null,
+                employmentType: formData.employmentType,
+                type: formData.employmentType,
+                status: formData.employmentStatus,
+                exitDate: formData.exitDate ? format(formData.exitDate, "yyyy-MM-dd") : null,
+
+                departmentId: formData.departmentId,
+                designation: formData.designation,
+                grade: formData.grade,
+                reportingTo: formData.reportingManager,
+                workLocation: formData.workLocation,
+                shift: formData.shift
             };
 
             if (viewMode === 'edit' && editingId) {
@@ -1938,6 +2053,19 @@ export default function CoreHR() {
                     </DialogHeader>
 
                     <div className="space-y-4">
+                        {/* Download Template Button */}
+                        <div className="flex justify-center">
+                            <Button
+                                variant="outline"
+                                size="sm"
+                                onClick={handleDownloadTemplate}
+                                className="text-blue-600 border-blue-200 hover:bg-blue-50"
+                            >
+                                <Download className="mr-2 h-4 w-4" />
+                                Download Template
+                            </Button>
+                        </div>
+
                         {/* File Upload Section */}
                         <div className="space-y-2">
                             <Label className="text-sm font-medium">
@@ -2175,7 +2303,7 @@ function PersonalDetailsForm({ data, updateData, readOnly }: any) {
                         {data.id && (
                             <div className="space-y-2">
                                 <Label>Employee Code <span className="text-red-500">*</span></Label>
-                                <Input value={data.employeeCode} onChange={(e) => handleChange("employeeCode", e.target.value)} readOnly={readOnly} className="cursor-text" />
+                                <Input value={data.employeeCode} readOnly className="bg-muted cursor-text" />
                             </div>
                         )}
 
@@ -2468,7 +2596,7 @@ function EmploymentDetailsForm({ data, updateData, departments, employees, readO
         if (dojError) errors.dateOfJoining = dojError;
 
         // Validate Exit Date
-        const exitError = validateExitDate(data.exitDate, data.dateOfJoining, undefined, data.employmentStatus);
+        const exitError = validateExitDate(data.exitDate, data.dateOfJoining, data.employmentStatus);
         if (exitError) errors.exitDate = exitError;
 
         // Validate Employment Status (when Exit Date is filled)

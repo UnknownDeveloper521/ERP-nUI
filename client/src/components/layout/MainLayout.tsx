@@ -153,6 +153,8 @@ const Sidebar = ({ className }: SidebarProps) => {
       icon: Briefcase,
       path: "/production",
       subItems: [
+        { name: "BOM", path: "/production/bom" },
+        { name: "Production Plan", path: "/production/production-plan" },
         { name: "Material & Operation", path: "/production/material-operation/mr-request" },
         { name: "Quality Check", path: "/production/quality-check" },
         { name: "Material Release", path: "/production/material-release" },

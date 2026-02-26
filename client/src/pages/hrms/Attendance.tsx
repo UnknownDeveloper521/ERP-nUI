@@ -467,141 +467,146 @@ export default function AttendancePage() {
 
                 {/* --- Tab 3: HR View --- */}
                 <TabsContent value="hr-view" className="flex-1 flex flex-col overflow-hidden mt-4">
-                    <Card className="flex-1 flex flex-col overflow-hidden border-none shadow-md bg-white/50 backdrop-blur-sm">
-                        <CardContent className="p-6 flex flex-col flex-1 overflow-hidden">
-                            {/* Filter Section */}
-                            <div className="grid grid-cols-1 sm:grid-cols-4 gap-4 mb-6 shrink-0">
-                                <SearchableSelect
-                                    label="Department"
-                                    value={hrDepartment}
-                                    options={["All Departments", "IT", "HR", "Finance", "Sales", "Engineering", "Marketing", "Operations"]}
-                                    onChange={setHrDepartment}
-                                />
-                                <SearchableSelect
-                                    label="Location"
-                                    value={hrWorkLocation}
-                                    options={["All Locations", "Plant 1", "Plant 2", "Plant 3", "HQ Office", "Remote"]}
-                                    onChange={setHrWorkLocation}
-                                />
-                                <div>
-                                    <label className="text-sm font-medium mb-1.5 block">Date</label>
-                                    <div className="flex gap-2">
-                                        <div className="flex-1">
-                                            <DatePicker
-                                                date={hrDate}
-                                                setDate={setHrDate}
-                                            />
+                    <div className="space-y-4 flex-1 flex flex-col overflow-hidden">
+                        <Card className="border shadow-sm bg-white/50 backdrop-blur-sm">
+                            <CardContent className="p-4">
+                                <div className="grid grid-cols-4 gap-4 items-end">
+                                    <div className="flex-1">
+                                        <SearchableSelect
+                                            label="Department"
+                                            value={hrDepartment}
+                                            options={["All Departments", "IT", "HR", "Finance", "Sales", "Engineering", "Marketing", "Operations"]}
+                                            onChange={setHrDepartment}
+                                        />
+                                    </div>
+                                    <div className="flex-1">
+                                        <SearchableSelect
+                                            label="Location"
+                                            value={hrWorkLocation}
+                                            options={["All Locations", "Plant 1", "Plant 2", "Plant 3", "HQ Office", "Remote"]}
+                                            onChange={setHrWorkLocation}
+                                        />
+                                    </div>
+                                    <div className="flex-1">
+                                        <label className="text-sm font-medium mb-1.5 block">Date</label>
+                                        <div className="flex gap-2">
+                                            <div className="flex-1">
+                                                <DatePicker
+                                                    date={hrDate}
+                                                    setDate={setHrDate}
+                                                />
+                                            </div>
+                                            {hrDate && (
+                                                <Button
+                                                    variant="ghost"
+                                                    size="icon"
+                                                    onClick={() => setHrDate(undefined)}
+                                                    className="h-10 w-10 shrink-0"
+                                                    title="Clear date filter"
+                                                >
+                                                    <X className="h-4 w-4" />
+                                                </Button>
+                                            )}
                                         </div>
-                                        {hrDate && (
-                                            <Button
-                                                variant="ghost"
-                                                size="icon"
-                                                onClick={() => setHrDate(undefined)}
-                                                className="h-10 w-10 shrink-0"
-                                                title="Clear date filter"
-                                            >
-                                                <X className="h-4 w-4" />
-                                            </Button>
-                                        )}
+                                    </div>
+                                    <div className="flex-1">
+                                        <label className="text-sm font-medium mb-1.5 block">Search</label>
+                                        <Input
+                                            placeholder="Search"
+                                            value={hrSearchTerm}
+                                            onChange={(e) => setHrSearchTerm(e.target.value)}
+                                            className="w-full bg-white h-10"
+                                        />
                                     </div>
                                 </div>
-                                <div>
-                                    <label className="text-sm font-medium mb-1.5 block">Search</label>
-                                    <Input
-                                        placeholder="Search"
-                                        value={hrSearchTerm}
-                                        onChange={(e) => setHrSearchTerm(e.target.value)}
-                                        className="w-full bg-white"
-                                    />
-                                </div>
+                            </CardContent>
+                        </Card>
+
+                        {/* Result Table - Scrollable Container */}
+                        <div className="flex-1 overflow-auto bg-card border rounded-lg shadow-sm">
+                            {/* Header Row - Sticky */}
+                            <div className="grid grid-cols-12 gap-4 p-4 bg-muted/40 font-medium text-sm text-muted-foreground border-b sticky top-0 z-10">
+                                <div className="col-span-3">Employee Name</div>
+                                <div className="col-span-2 text-center">Date</div>
+                                <div className="col-span-2 text-center">Department</div>
+                                <div className="col-span-1 text-center">Location</div>
+                                <div className="col-span-2 text-center">Status</div>
+                                <div className="col-span-1 text-center">In Time</div>
+                                <div className="col-span-1 text-center">Out Time</div>
                             </div>
 
-                            {/* Result Table - Scrollable Container */}
-                            <div className="flex-1 overflow-auto bg-card border rounded-lg shadow-sm">
-                                {/* Header Row - Sticky */}
-                                <div className="grid grid-cols-12 gap-4 p-4 bg-muted/40 font-medium text-sm text-muted-foreground border-b sticky top-0 z-10">
-                                    <div className="col-span-3">Employee Name</div>
-                                    <div className="col-span-2 text-center">Date</div>
-                                    <div className="col-span-2 text-center">Department</div>
-                                    <div className="col-span-1 text-center">Location</div>
-                                    <div className="col-span-2 text-center">Status</div>
-                                    <div className="col-span-1 text-center">In Time</div>
-                                    <div className="col-span-1 text-center">Out Time</div>
-                                </div>
-
-                                {/* Rows */}
-                                <div className="divide-y text-sm bg-white">
-                                    {hrSearchResults.length === 0 ? (
-                                        <div className="p-8 text-center text-muted-foreground">
-                                            No records found for the selected criteria.
-                                        </div>
-                                    ) : (
-                                        hrSearchResults.map((record) => (
-                                            <div
-                                                key={record.id}
-                                                className="grid grid-cols-12 gap-4 p-4 items-center hover:bg-muted/30 transition-colors"
-                                            >
-                                                <div className="col-span-3 font-medium text-foreground">
-                                                    {record.employeeName}
-                                                </div>
-                                                <div className="col-span-2 text-center text-muted-foreground">
-                                                    {record.date}
-                                                </div>
-                                                <div className="col-span-2 text-center text-muted-foreground">
-                                                    {record.department}
-                                                </div>
-                                                <div className="col-span-1 text-center">
-                                                    <Badge variant="outline" className="text-xs">
-                                                        {record.workLocation}
-                                                    </Badge>
-                                                </div>
-                                                <div className="col-span-2 text-center">
-                                                    <Badge className={cn(
-                                                        "text-xs font-semibold",
-                                                        record.status === "Present"
-                                                            ? "bg-green-100 text-green-700 hover:bg-green-100"
-                                                            : record.status === "Absent"
-                                                                ? "bg-red-100 text-red-700 hover:bg-red-100"
-                                                                : "bg-gray-100 text-gray-700"
-                                                    )}>
-                                                        {record.status || "—"}
-                                                    </Badge>
-                                                </div>
-                                                <div className="col-span-1 text-center text-muted-foreground">
-                                                    {record.inTime || "—"}
-                                                </div>
-                                                <div className="col-span-1 text-center text-muted-foreground">
-                                                    {record.outTime || "—"}
-                                                </div>
+                            {/* Rows */}
+                            <div className="divide-y text-sm bg-white">
+                                {hrSearchResults.length === 0 ? (
+                                    <div className="p-8 text-center text-muted-foreground">
+                                        No records found for the selected criteria.
+                                    </div>
+                                ) : (
+                                    hrSearchResults.map((record) => (
+                                        <div
+                                            key={record.id}
+                                            className="grid grid-cols-12 gap-4 p-4 items-center hover:bg-muted/30 transition-colors"
+                                        >
+                                            <div className="col-span-3 font-medium text-foreground">
+                                                {record.employeeName}
                                             </div>
-                                        ))
-                                    )}
-                                </div>
+                                            <div className="col-span-2 text-center text-muted-foreground">
+                                                {record.date}
+                                            </div>
+                                            <div className="col-span-2 text-center text-muted-foreground">
+                                                {record.department}
+                                            </div>
+                                            <div className="col-span-1 text-center">
+                                                <Badge variant="outline" className="text-xs">
+                                                    {record.workLocation}
+                                                </Badge>
+                                            </div>
+                                            <div className="col-span-2 text-center">
+                                                <Badge className={cn(
+                                                    "text-xs font-semibold",
+                                                    record.status === "Present"
+                                                        ? "bg-green-100 text-green-700 hover:bg-green-100"
+                                                        : record.status === "Absent"
+                                                            ? "bg-red-100 text-red-700 hover:bg-red-100"
+                                                            : "bg-gray-100 text-gray-700"
+                                                )}>
+                                                    {record.status || "—"}
+                                                </Badge>
+                                            </div>
+                                            <div className="col-span-1 text-center text-muted-foreground">
+                                                {record.inTime || "—"}
+                                            </div>
+                                            <div className="col-span-1 text-center text-muted-foreground">
+                                                {record.outTime || "—"}
+                                            </div>
+                                        </div>
+                                    ))
+                                )}
                             </div>
-                        </CardContent>
-                    </Card>
+                        </div>
+                    </div>
                 </TabsContent>
 
                 {/* --- Tab 4: Bulk Attendance --- */}
                 <TabsContent value="bulk-attendance" className="flex-1 flex flex-col overflow-hidden mt-4">
-                    <>
-                        <Card className="flex-1 flex flex-col overflow-hidden border-none shadow-md bg-white/50 backdrop-blur-sm">
-                            <CardHeader className="shrink-0 border-b bg-white/30 backdrop-blur-sm pb-4">
-                                <div className="flex justify-between items-center">
-                                    <div>
-                                        <CardTitle className="text-lg">Bulk Attendance</CardTitle>
-                                        <CardDescription>Manage daily attendance for multiple employees</CardDescription>
-                                    </div>
-                                    <div className="flex items-center gap-2">
+                    <div className="space-y-4 flex-1 flex flex-col overflow-hidden">
+                        <Card className="border shadow-sm bg-white/50 backdrop-blur-sm">
+                            <CardContent className="p-4">
+                                <div className="grid grid-cols-12 gap-4 items-end">
+                                    <div className="col-span-4 space-y-2">
+                                        <Label>Search</Label>
                                         <Input
                                             placeholder="Search employee..."
                                             value={bulkSearchTerm}
                                             onChange={(e) => setBulkSearchTerm(e.target.value)}
-                                            className="w-[200px] h-9 bg-white"
+                                            className="h-10 bg-white"
                                         />
-                                        <div className="w-[240px]">
-                                            <DatePicker date={bulkDate} setDate={(d) => d && setBulkDate(d)} />
-                                        </div>
+                                    </div>
+                                    <div className="col-span-3 space-y-2">
+                                        <Label>Date</Label>
+                                        <DatePicker date={bulkDate} setDate={(d) => d && setBulkDate(d)} />
+                                    </div>
+                                    <div className="col-span-5 flex justify-end">
                                         <Button
                                             onClick={() => {
                                                 const dateStr = format(bulkDate, "yyyy-MM-dd");
@@ -618,13 +623,15 @@ export default function AttendancePage() {
                                                 }
                                                 setIsBulkEntryOpen(true);
                                             }}
-                                            className="h-9 bg-primary text-primary-foreground font-medium"
+                                            className="h-10 bg-primary text-primary-foreground font-medium"
                                         >
                                             Bulk Entry
                                         </Button>
                                     </div>
                                 </div>
-                            </CardHeader>
+                            </CardContent>
+                        </Card>
+                        <Card className="flex-1 flex flex-col overflow-hidden border shadow-sm bg-white/50 backdrop-blur-sm">
                             <CardContent className="p-0 flex-1 flex flex-col overflow-hidden">
                                 <div className="flex-1 overflow-auto p-6 pt-2">
                                     <div className="bg-card border rounded-lg overflow-hidden shadow-sm">
@@ -779,10 +786,9 @@ export default function AttendancePage() {
                                 </div>
                             </DialogContent>
                         </Dialog>
-                    </>
-                </TabsContent >
-            </Tabs >
-
+                    </div>
+                </TabsContent>
+            </Tabs>
         </div >
     );
 }
