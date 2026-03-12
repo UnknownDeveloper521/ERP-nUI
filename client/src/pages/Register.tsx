@@ -25,7 +25,10 @@ export default function Register() {
         title: "Account created",
         description: "You can now sign in.",
       });
-      setLocation("/login");
+      
+      // Redirect to registration success page with email parameter
+      setLocation(`/registration-success?email=${encodeURIComponent(email)}`);
+      
     } catch (err: any) {
       toast({
         variant: "destructive",

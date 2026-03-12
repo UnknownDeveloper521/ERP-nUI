@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from "react";
-import { useLocation, useSearch } from "wouter";
+import { useLocation, useParams } from "wouter";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -12,9 +12,18 @@ import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Command, CommandInput, CommandList, CommandEmpty, CommandGroup, CommandItem, CommandInputBorderless } from "@/components/ui/command";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import {
+    Table,
+    TableBody,
+    TableCell,
+    TableHead,
+    TableHeader,
+    TableRow,
+} from "@/components/ui/table";
 import { format, parseISO, startOfMonth, endOfMonth, isWithinInterval, isSameDay } from "date-fns";
 import { cn } from "@/lib/utils";
 import { Calendar as CalendarIcon, ChevronLeft, ChevronRight, ChevronsUpDown, Check, X, ChevronDown, Save } from "lucide-react";
+import { DataTablePagination } from "@/components/shared/DataTablePagination";
 import { Checkbox } from "@/components/ui/checkbox";
 import { useToast } from "@/hooks/use-toast";
 
@@ -134,15 +143,33 @@ export default function AttendancePage() {
     const { toast } = useToast();
     // --- Router State ---
     const [location, setLocation] = useLocation();
-    const searchString = useSearch();
-    const searchParams = new URLSearchParams(searchString);
-    const currentTab = searchParams.get("tab") || "hr-view";
+    const params = useParams();
+    
+    // Determine current tab from URL params
+    const getCurrentTab = () => {
+        if (params.tab === 'bulk-attendance') return 'bulk-attendance';
+        if (params.tab === 'hr-view') return 'hr-view';
+        return 'hr-view';
+    };
+    
+    const [activeTab, setActiveTab] = useState(getCurrentTab());
 
     const handleTabChange = (value: string) => {
-        const newParams = new URLSearchParams(searchString);
-        newParams.set("tab", value);
-        setLocation(`${location}?${newParams.toString()}`);
+        setActiveTab(value);
+        setLocation(`/hrms/attendance/${value}`);
     };
+
+    // Set initial tab based on URL
+    useEffect(() => {
+        const currentTab = getCurrentTab();
+        if (currentTab !== activeTab) {
+            setActiveTab(currentTab);
+        }
+        // Redirect to default tab if no tab specified
+        if (!params.tab && location === '/hrms/attendance') {
+            setLocation('/hrms/attendance/hr-view');
+        }
+    }, [params.tab, location]);
 
     // --- State ---
     // ⚠️ SAFE GUARD: Added ONE mock attendance record to prevent runtime crashes
@@ -151,17 +178,10 @@ export default function AttendancePage() {
     const [attendanceList, setAttendanceList] = useState<Attendance[]>([
         {
             id: "att-001",
-            date: "2026-02-10",
+            date: "10-02-2026",
             status: "Present"
         }
     ]);
-
-    // Pagination state
-    const [currentPage, setCurrentPage] = useState(1);
-    const ITEMS_PER_PAGE = 10;
-
-    // Modal state (unused now, keeping for potential future use or removing if completely unnecessary)
-    // Removed isDialogOpen and selectedDay
 
     // --- HR View State ---
     const [hrDepartment, setHrDepartment] = useState("All Departments");
@@ -169,13 +189,17 @@ export default function AttendancePage() {
     const [hrDate, setHrDate] = useState<Date | undefined>(undefined);
     const [hrSearchTerm, setHrSearchTerm] = useState("");
     const [hrSearchResults, setHrSearchResults] = useState<HRRecord[]>([]);
+    
+    // Pagination state for HR Search Results
+    const [currentPage, setCurrentPage] = useState(1);
+    const [itemsPerPage, setItemsPerPage] = useState(10);
 
 
 
-    // Formatting date for display
+    // Formatting date for display - DD-MM-YYYY format
     const formatDateDisplay = (dateStr: string) => {
         try {
-            return format(parseISO(dateStr), "MMMM dd, yyyy");
+            return format(parseISO(dateStr), "dd-MM-yyyy");
         } catch {
             return dateStr;
         }
@@ -231,7 +255,7 @@ export default function AttendancePage() {
         {
             id: "hr-001",
             employeeName: "John Doe",
-            date: "2026-02-10",
+            date: "10-02-2026",
             department: "Engineering",
             workLocation: "Head Office",
             status: "Present",
@@ -261,6 +285,25 @@ export default function AttendancePage() {
             return matchDept && matchLocation && matchDate && matchSearch;
         });
         setHrSearchResults(results);
+    }, [hrDepartment, hrWorkLocation, hrDate, hrSearchTerm]);
+
+    // Pagination logic for HR Search Results
+    const totalPages = Math.ceil(hrSearchResults.length / itemsPerPage);
+    const paginatedResults = hrSearchResults.slice(
+        (currentPage - 1) * itemsPerPage,
+        currentPage * itemsPerPage
+    );
+
+    // Auto-adjust page when data changes
+    useEffect(() => {
+        if (currentPage > totalPages && totalPages > 0) {
+            setCurrentPage(totalPages);
+        }
+    }, [hrSearchResults.length, currentPage, totalPages]);
+
+    // Reset to page 1 when filters change
+    useEffect(() => {
+        setCurrentPage(1);
     }, [hrDepartment, hrWorkLocation, hrDate, hrSearchTerm]);
 
 
@@ -373,7 +416,7 @@ export default function AttendancePage() {
                 </p>
             </div>
 
-            <Tabs value={currentTab} onValueChange={handleTabChange} className="w-full flex-1 flex flex-col overflow-hidden">
+            <Tabs value={activeTab} onValueChange={handleTabChange} className="w-full flex-1 flex flex-col overflow-hidden">
                 <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 mb-4">
                     <TabsList className="w-full justify-start border-b border-border bg-transparent p-0 h-auto rounded-none">
                         {/* <TabsTrigger
@@ -466,125 +509,128 @@ export default function AttendancePage() {
                 */}
 
                 {/* --- Tab 3: HR View --- */}
-                <TabsContent value="hr-view" className="flex-1 flex flex-col overflow-hidden mt-4">
-                    <div className="space-y-4 flex-1 flex flex-col overflow-hidden">
-                        <Card className="border shadow-sm bg-white/50 backdrop-blur-sm">
-                            <CardContent className="p-4">
-                                <div className="grid grid-cols-4 gap-4 items-end">
-                                    <div className="flex-1">
-                                        <SearchableSelect
-                                            label="Department"
-                                            value={hrDepartment}
-                                            options={["All Departments", "IT", "HR", "Finance", "Sales", "Engineering", "Marketing", "Operations"]}
-                                            onChange={setHrDepartment}
-                                        />
-                                    </div>
-                                    <div className="flex-1">
-                                        <SearchableSelect
-                                            label="Location"
-                                            value={hrWorkLocation}
-                                            options={["All Locations", "Plant 1", "Plant 2", "Plant 3", "HQ Office", "Remote"]}
-                                            onChange={setHrWorkLocation}
-                                        />
-                                    </div>
-                                    <div className="flex-1">
-                                        <label className="text-sm font-medium mb-1.5 block">Date</label>
-                                        <div className="flex gap-2">
-                                            <div className="flex-1">
-                                                <DatePicker
-                                                    date={hrDate}
-                                                    setDate={setHrDate}
-                                                />
-                                            </div>
-                                            {hrDate && (
-                                                <Button
-                                                    variant="ghost"
-                                                    size="icon"
-                                                    onClick={() => setHrDate(undefined)}
-                                                    className="h-10 w-10 shrink-0"
-                                                    title="Clear date filter"
-                                                >
-                                                    <X className="h-4 w-4" />
-                                                </Button>
-                                            )}
-                                        </div>
-                                    </div>
-                                    <div className="flex-1">
-                                        <label className="text-sm font-medium mb-1.5 block">Search</label>
-                                        <Input
-                                            placeholder="Search"
-                                            value={hrSearchTerm}
-                                            onChange={(e) => setHrSearchTerm(e.target.value)}
-                                            className="w-full bg-white h-10"
-                                        />
-                                    </div>
+                {/* UI Layout: Matches Materials listing table design */}
+                <TabsContent value="hr-view" className="space-y-4 mt-4">
+                    {/* Filter Section - Same spacing as Materials reference */}
+                    <div className="grid grid-cols-4 gap-4 items-end">
+                        <div className="flex-1">
+                            <SearchableSelect
+                                label="Department"
+                                value={hrDepartment}
+                                options={["All Departments", "IT", "HR", "Finance", "Sales", "Engineering", "Marketing", "Operations"]}
+                                onChange={setHrDepartment}
+                            />
+                        </div>
+                        <div className="flex-1">
+                            <SearchableSelect
+                                label="Location"
+                                value={hrWorkLocation}
+                                options={["All Locations", "Plant 1", "Plant 2", "Plant 3", "HQ Office", "Remote"]}
+                                onChange={setHrWorkLocation}
+                            />
+                        </div>
+                        <div className="flex-1">
+                            <Label className="text-xs font-medium text-muted-foreground uppercase tracking-wider mb-1.5 block">Date</Label>
+                            <div className="flex gap-2">
+                                <div className="flex-1">
+                                    <DatePicker
+                                        date={hrDate}
+                                        setDate={setHrDate}
+                                    />
                                 </div>
-                            </CardContent>
-                        </Card>
-
-                        {/* Result Table - Scrollable Container */}
-                        <div className="flex-1 overflow-auto bg-card border rounded-lg shadow-sm">
-                            {/* Header Row - Sticky */}
-                            <div className="grid grid-cols-12 gap-4 p-4 bg-muted/40 font-medium text-sm text-muted-foreground border-b sticky top-0 z-10">
-                                <div className="col-span-3">Employee Name</div>
-                                <div className="col-span-2 text-center">Date</div>
-                                <div className="col-span-2 text-center">Department</div>
-                                <div className="col-span-1 text-center">Location</div>
-                                <div className="col-span-2 text-center">Status</div>
-                                <div className="col-span-1 text-center">In Time</div>
-                                <div className="col-span-1 text-center">Out Time</div>
-                            </div>
-
-                            {/* Rows */}
-                            <div className="divide-y text-sm bg-white">
-                                {hrSearchResults.length === 0 ? (
-                                    <div className="p-8 text-center text-muted-foreground">
-                                        No records found for the selected criteria.
-                                    </div>
-                                ) : (
-                                    hrSearchResults.map((record) => (
-                                        <div
-                                            key={record.id}
-                                            className="grid grid-cols-12 gap-4 p-4 items-center hover:bg-muted/30 transition-colors"
-                                        >
-                                            <div className="col-span-3 font-medium text-foreground">
-                                                {record.employeeName}
-                                            </div>
-                                            <div className="col-span-2 text-center text-muted-foreground">
-                                                {record.date}
-                                            </div>
-                                            <div className="col-span-2 text-center text-muted-foreground">
-                                                {record.department}
-                                            </div>
-                                            <div className="col-span-1 text-center">
-                                                <Badge variant="outline" className="text-xs">
-                                                    {record.workLocation}
-                                                </Badge>
-                                            </div>
-                                            <div className="col-span-2 text-center">
-                                                <Badge className={cn(
-                                                    "text-xs font-semibold",
-                                                    record.status === "Present"
-                                                        ? "bg-green-100 text-green-700 hover:bg-green-100"
-                                                        : record.status === "Absent"
-                                                            ? "bg-red-100 text-red-700 hover:bg-red-100"
-                                                            : "bg-gray-100 text-gray-700"
-                                                )}>
-                                                    {record.status || "—"}
-                                                </Badge>
-                                            </div>
-                                            <div className="col-span-1 text-center text-muted-foreground">
-                                                {record.inTime || "—"}
-                                            </div>
-                                            <div className="col-span-1 text-center text-muted-foreground">
-                                                {record.outTime || "—"}
-                                            </div>
-                                        </div>
-                                    ))
+                                {hrDate && (
+                                    <Button
+                                        variant="ghost"
+                                        size="icon"
+                                        onClick={() => setHrDate(undefined)}
+                                        className="h-10 w-10 shrink-0"
+                                        title="Clear date filter"
+                                    >
+                                        <X className="h-4 w-4" />
+                                    </Button>
                                 )}
                             </div>
                         </div>
+                        <div className="flex-1">
+                            <Label className="text-xs font-medium text-muted-foreground uppercase tracking-wider mb-1.5 block">Search</Label>
+                            <Input
+                                placeholder="Search"
+                                value={hrSearchTerm}
+                                onChange={(e) => setHrSearchTerm(e.target.value)}
+                                className="w-full bg-white h-10"
+                            />
+                        </div>
                     </div>
+
+                    {/* Table Card - Same structure as Materials reference */}
+                    <Card>
+                        <CardContent className="pt-6">
+                            <div className="rounded-md border">
+                                <Table>
+                                    <TableHeader>
+                                        <TableRow className="bg-muted/50 hover:bg-muted/50">
+                                            <TableHead className="font-semibold text-xs uppercase tracking-wider">Employee Name</TableHead>
+                                            <TableHead className="font-semibold text-xs uppercase tracking-wider">Date</TableHead>
+                                            <TableHead className="font-semibold text-xs uppercase tracking-wider">Department</TableHead>
+                                            <TableHead className="font-semibold text-xs uppercase tracking-wider">Location</TableHead>
+                                            <TableHead className="font-semibold text-xs uppercase tracking-wider">Status</TableHead>
+                                            <TableHead className="font-semibold text-xs uppercase tracking-wider">In Time</TableHead>
+                                            <TableHead className="font-semibold text-xs uppercase tracking-wider">Out Time</TableHead>
+                                        </TableRow>
+                                    </TableHeader>
+                                    <TableBody>
+                                        {paginatedResults.length === 0 ? (
+                                            <TableRow>
+                                                <TableCell colSpan={7} className="h-32 text-center text-muted-foreground">
+                                                    No records found for the selected criteria.
+                                                </TableCell>
+                                            </TableRow>
+                                        ) : (
+                                            paginatedResults.map((record) => (
+                                                <TableRow key={record.id} className="hover:bg-muted/30 transition-colors border-b">
+                                                    <TableCell className="py-4 font-medium">{record.employeeName}</TableCell>
+                                                    <TableCell>{formatDateDisplay(record.date)}</TableCell>
+                                                    <TableCell>{record.department}</TableCell>
+                                                    <TableCell>
+                                                        <Badge variant="outline" className="text-xs">
+                                                            {record.workLocation}
+                                                        </Badge>
+                                                    </TableCell>
+                                                    <TableCell>
+                                                        <Badge
+                                                            variant="outline"
+                                                            className={cn(
+                                                                "font-medium",
+                                                                record.status === "Present" && "border-green-500 text-green-600 bg-green-50",
+                                                                record.status === "Absent" && "border-red-500 text-red-600 bg-red-50"
+                                                            )}
+                                                        >
+                                                            {record.status || "—"}
+                                                        </Badge>
+                                                    </TableCell>
+                                                    <TableCell>{record.inTime || "—"}</TableCell>
+                                                    <TableCell>{record.outTime || "—"}</TableCell>
+                                                </TableRow>
+                                            ))
+                                        )}
+                                    </TableBody>
+                                </Table>
+                            </div>
+
+                            {/* Pagination - Same position as Materials reference */}
+                            {hrSearchResults.length > 0 && (
+                                <DataTablePagination
+                                    currentPage={currentPage}
+                                    totalPages={totalPages}
+                                    totalItems={hrSearchResults.length}
+                                    itemsPerPage={itemsPerPage}
+                                    onPageChange={setCurrentPage}
+                                    onItemsPerPageChange={setItemsPerPage}
+                                    options={[10, 15, 30, 50]}
+                                />
+                            )}
+                        </CardContent>
+                    </Card>
                 </TabsContent>
 
                 {/* --- Tab 4: Bulk Attendance --- */}
@@ -817,7 +863,7 @@ function DatePicker({ date, setDate, disabled = false, minDate, blockedDates }: 
     const formatDisplayDate = (date: Date | undefined) => {
         if (!date) return "Pick a date";
         try {
-            return format(date, "dd/MM/yyyy");
+            return format(date, "dd-MM-yyyy");
         } catch (error) {
             return "Pick a date";
         }

@@ -1,4 +1,6 @@
 // API client for ERP system
+import { getAccessToken } from './customAuth';
+
 const API_BASE = `${import.meta.env.VITE_BACKEND_URL}/api`;
 
 // Generic fetch wrapper
@@ -6,12 +8,14 @@ async function apiRequest<T>(
   endpoint: string,
   options?: RequestInit
 ): Promise<T> {
+  const token = await getAccessToken();
   const response = await fetch(`${API_BASE}${endpoint}`, {
     headers: {
       'Content-Type': 'application/json',
+      ...(token && { 'Authorization': `Bearer ${token}` }),
       ...options?.headers,
     },
-    ...options, 
+    ...options,
   });
 
   if (!response.ok) {
@@ -265,34 +269,6 @@ export const transactionsApi = {
   getByAccount: (accountId: string) => apiRequest<any[]>(`/transactions/account/${accountId}`),
   create: (data: any) => apiRequest<any>('/transactions', {
     method: 'POST',
-    body: JSON.stringify(data),
-  }),
-};
-
-// ==================== LOGISTICS API ====================
-
-export const vehiclesApi = {
-  getAll: () => apiRequest<any[]>('/vehicles'),
-  getOne: (id: string) => apiRequest<any>(`/vehicles/${id}`),
-  create: (data: any) => apiRequest<any>('/vehicles', {
-    method: 'POST',
-    body: JSON.stringify(data),
-  }),
-  update: (id: string, data: any) => apiRequest<any>(`/vehicles/${id}`, {
-    method: 'PATCH',
-    body: JSON.stringify(data),
-  }),
-};
-
-export const tripsApi = {
-  getAll: () => apiRequest<any[]>('/trips'),
-  getOne: (id: string) => apiRequest<any>(`/trips/${id}`),
-  create: (data: any) => apiRequest<any>('/trips', {
-    method: 'POST',
-    body: JSON.stringify(data),
-  }),
-  update: (id: string, data: any) => apiRequest<any>(`/trips/${id}`, {
-    method: 'PATCH',
     body: JSON.stringify(data),
   }),
 };

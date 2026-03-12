@@ -54,43 +54,17 @@ import {
     AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
 import { Calendar } from "@/components/ui/calendar";
-import { cn } from "@/lib/utils";
 import { useToast } from "@/hooks/use-toast";
+import { cn } from "@/lib/utils";
+import { PayPeriod, mockPayPeriods } from "@/lib/payrollSharedData";
 
-// Types
-interface PayPeriod {
-    id: string;
-    periodName: string; // e.g. "Feb-2026"
-    month: number; // 0-11
-    year: number;
-    startDate: string;
-    endDate: string;
-    status: "Open" | "Locked" | "Processed" | "Paid";
-    notes?: string;
-}
-
-// Mock Data
-// ⚠️ SAFE GUARD: Added ONE mock pay period to prevent runtime crashes
-// This ensures pay period page never crashes when empty
-// ============================================================================
-const MOCK_PERIODS: PayPeriod[] = [
-  {
-    id: "pp-001",
-    periodName: "Jan-2026",
-    month: 0, // January (0-indexed)
-    year: 2026,
-    startDate: "2026-01-01",
-    endDate: "2026-01-31",
-    status: "Open",
-    notes: "First pay period of 2026"
-  }
-];
+// Shared types and mock data are imported from @/lib/payrollSharedData
 
 export default function PayPeriodPage() {
     const { toast } = useToast();
 
     // State
-    const [periods, setPeriods] = useState<PayPeriod[]>(MOCK_PERIODS);
+    const [periods, setPeriods] = useState<PayPeriod[]>(mockPayPeriods);
     const [searchQuery, setSearchQuery] = useState("");
     const [statusFilter, setStatusFilter] = useState("All");
     const [openStatusDropdown, setOpenStatusDropdown] = useState(false);
@@ -111,7 +85,7 @@ export default function PayPeriodPage() {
     const [selectedStatus, setSelectedStatus] = useState<PayPeriod["status"]>("Open");
     const [notes, setNotes] = useState("");
     const [formErrors, setFormErrors] = useState<{ [key: string]: string }>({});
-    
+
     // ⚠️ NEW: Track original period when editing (to detect status-only changes)
     const [originalPeriod, setOriginalPeriod] = useState<PayPeriod | null>(null);
 
@@ -167,7 +141,7 @@ export default function PayPeriodPage() {
         // If editing and ONLY status changed (dates unchanged), skip all date validations
         // This allows changing Locked → Processed without overlap/date errors
         // ============================================================================
-        const isStatusOnlyChange = editingId && originalPeriod && 
+        const isStatusOnlyChange = editingId && originalPeriod &&
             selectedMonth === originalPeriod.month.toString() &&
             selectedYear === originalPeriod.year.toString() &&
             startDate && format(startDate, 'yyyy-MM-dd') === originalPeriod.startDate &&
@@ -206,9 +180,9 @@ export default function PayPeriodPage() {
 
         // B) Month-Year uniqueness
         // ⚠️ SAFE GUARD: Exclude current period when editing (check only other periods)
-        const exists = periods.some(p => 
-            p.month === month && 
-            p.year === year && 
+        const exists = periods.some(p =>
+            p.month === month &&
+            p.year === year &&
             p.id !== editingId  // Exclude the period being edited
         );
         if (exists) {
@@ -226,7 +200,6 @@ export default function PayPeriodPage() {
             errors.endDate = "End Date cannot be before Start Date.";
         }
 
-        // D) No overlap (Simplified check since we enforce full months usually, but sticking to logic)
         // Overlap logic: (StartA <= EndB) and (EndA >= StartB)
         const hasOverlap = periods.some(p => {
             const pStart = new Date(p.startDate);
@@ -253,7 +226,11 @@ export default function PayPeriodPage() {
             // This implies no gaps forward.
 
             // Find the latest period in the list
-            const sortedPeriods = [...periods].sort((a, b) => new Date(b.startDate).getTime() - new Date(a.startDate).getTime());
+            const sortedPeriods = [...periods].sort((a, b) => {
+                const dateA = new Date(a.startDate);
+                const dateB = new Date(b.startDate);
+                return dateB.getTime() - dateA.getTime();
+            });
             const latestPeriod = sortedPeriods[0];
             const latestPeriodDate = new Date(latestPeriod.year, latestPeriod.month, 1);
 
@@ -314,7 +291,11 @@ export default function PayPeriodPage() {
                     notes: notes
                 };
 
-                setPeriods(prev => [newPeriod, ...prev].sort((a, b) => new Date(b.startDate).getTime() - new Date(a.startDate).getTime()));
+                setPeriods(prev => [newPeriod, ...prev].sort((a, b) => {
+                    const dateA = new Date(a.startDate);
+                    const dateB = new Date(b.startDate);
+                    return dateB.getTime() - dateA.getTime();
+                }));
 
                 toast({
                     title: "Success",
@@ -338,8 +319,8 @@ export default function PayPeriodPage() {
         setEditingId(period.id);
         setSelectedMonth(period.month.toString());
         setSelectedYear(period.year.toString());
-        setStartDate(parse(period.startDate, 'yyyy-MM-dd', new Date()));
-        setEndDate(parse(period.endDate, 'yyyy-MM-dd', new Date()));
+        setStartDate(new Date(period.startDate));
+        setEndDate(new Date(period.endDate));
         setSelectedStatus(period.status);
         setNotes(period.notes || "");
         setOriginalPeriod(period); // ⚠️ Store original period for status-only change detection
@@ -370,7 +351,7 @@ export default function PayPeriodPage() {
         if (!editingId) return;
 
         const periodToDelete = periods.find(p => p.id === editingId);
-        
+
         // ============================================================================
         // ⚠️ BUSINESS RULE CHANGE: Allow deletion for ALL statuses
         // ============================================================================
@@ -378,10 +359,10 @@ export default function PayPeriodPage() {
         // NEW RULE: Can delete any period regardless of status
         // REASON: HR needs flexibility to correct mistakes even after locking
         // ============================================================================
-        
+
         // Delete the period (no status check)
         setPeriods(prev => prev.filter(p => p.id !== editingId));
-        
+
         toast({
             title: "Period Deleted",
             description: "Pay period has been successfully deleted.",
@@ -520,8 +501,8 @@ export default function PayPeriodPage() {
                             paginatedPeriods.map((period) => (
                                 <TableRow key={period.id}>
                                     <TableCell className="font-medium">{period.periodName}</TableCell>
-                                    <TableCell>{format(parse(period.startDate, 'yyyy-MM-dd', new Date()), 'dd MMM yyyy')}</TableCell>
-                                    <TableCell>{format(parse(period.endDate, 'yyyy-MM-dd', new Date()), 'dd MMM yyyy')}</TableCell>
+                                    <TableCell>{format(new Date(period.startDate), 'dd-MM-yyyy')}</TableCell>
+                                    <TableCell>{format(new Date(period.endDate), 'dd-MM-yyyy')}</TableCell>
                                     <TableCell>
                                         <Badge variant={
                                             period.status === 'Open' ? 'outline' :
@@ -592,7 +573,7 @@ export default function PayPeriodPage() {
                             {editingId ? "Edit Pay Period" : "Create Pay Period"}
                         </DialogTitle>
                         <DialogDescription>
-                            {editingId 
+                            {editingId
                                 ? "Update the pay period information. Dates are automatically generated based on selection."
                                 : "Define a new monthly pay period. Dates are automatically generated based on selection."
                             }
@@ -841,7 +822,7 @@ export default function PayPeriodPage() {
                                 </AlertDialogContent>
                             </AlertDialog>
                         )}
-                        
+
                         <div className="flex gap-2 ml-auto">
                             <Button variant="outline" className="h-10 px-6" onClick={() => setIsCreateOpen(false)}>Cancel</Button>
                             <Button

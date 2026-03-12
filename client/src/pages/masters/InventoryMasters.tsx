@@ -12,7 +12,7 @@ import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Plus, Search, Pencil, Trash2, ChevronsUpDown, Check, ChevronLeft, ChevronRight } from "lucide-react";
+import { Plus, Search, Pencil, Trash2, ChevronsUpDown, Check } from "lucide-react";
 import {
     Dialog,
     DialogContent,
@@ -47,6 +47,8 @@ import {
     PopoverTrigger,
 } from "@/components/ui/popover";
 import { cn } from "@/lib/utils";
+import { DataTablePagination } from "@/components/shared/DataTablePagination";
+import { mockWarehouses, mockLocations } from "@/lib/masterMockData";
 
 // --- Types & Interfaces ---
 
@@ -59,13 +61,22 @@ const MASTER_SLUGS: Record<MasterType, string> = {
 
 const MASTER_TYPES: MasterType[] = ["Warehouses", "Bins"];
 
-const LOCATIONS = ["Plant A", "Plant B", "Plant C", "Plant D"];
+const LOCATIONS = mockLocations.map(loc => loc.name);
+
+const DEPARTMENTS = [
+    { id: 1, name: "Production" },
+    { id: 2, name: "Quality Control" },
+    { id: 3, name: "Warehouse & Logistics" },
+    { id: 4, name: "Maintenance" },
+    { id: 5, name: "Research & Development" },
+];
 
 interface Warehouse {
     id: number;
     code: string;
     name: string;
     location: string;
+    department: string;
     status: "Active" | "Inactive";
     address_notes?: string;
     created_at?: string;
@@ -86,17 +97,31 @@ interface Bin {
 
 // --- Mock Data ---
 
-const initialWarehouses: Warehouse[] = [
-    { id: 1, code: "WH01", name: "Main Warehouse", location: "Plant A", status: "Active", address_notes: "Building A, Industrial Estate" },
-    { id: 2, code: "WH02", name: "Cold Storage", location: "Plant B", status: "Active", address_notes: "Zone B, Temperature Controlled" },
-];
+const initialWarehouses: Warehouse[] = Array.from({ length: 5 }).map((_, index) => {
+    const mockWh = mockWarehouses[index % mockWarehouses.length];
+    return {
+        id: index + 1,
+        code: `${mockWh.id.toUpperCase().replace('-', '')}${index > 0 ? `_${index + 1}` : ''}`,
+        name: `${mockWh.name}${index > 0 ? ` (Branch ${index + 1})` : ''}`,
+        location: LOCATIONS[index % LOCATIONS.length] || "Unknown",
+        department: DEPARTMENTS[index % DEPARTMENTS.length].name,
+        status: "Active",
+        address_notes: "Auto-generated mock data"
+    };
+});
 
-const initialBins: Bin[] = [
-    { id: 1, warehouse_id: 1, code: "A-01-01", name: "Row A, Rack 1, Shelf 1", type: "Normal", status: "Active" },
-    { id: 2, warehouse_id: 1, code: "A-01-02", name: "Row A, Rack 1, Shelf 2", type: "Normal", status: "Active" },
-    { id: 3, warehouse_id: 2, code: "CS-01", name: "Cold Zone 1", type: "Normal", status: "Active" },
-    { id: 4, warehouse_id: 1, code: "QC-AREA", name: "QC Holding Area", type: "QC Hold", status: "Active" },
-];
+const initialBins: Bin[] = Array.from({ length: 5 }).map((_, index) => {
+    const whIndex = index % initialWarehouses.length;
+    return {
+        id: index + 1,
+        warehouse_id: initialWarehouses[whIndex].id,
+        code: `BIN-${index + 1}`.toUpperCase(),
+        name: `Rack ${Math.floor(index / 5) + 1}, Bin ${index % 5 + 1}`,
+        type: "Normal",
+        status: "Active",
+        notes: "Auto-generated mock bin"
+    };
+});
 
 // --- Sub-components for Form Sections ---
 
@@ -119,8 +144,6 @@ export default function InventoryMasters() {
     const [location, setLocation] = useLocation();
     const params = useParams();
 
-    const activeTab = params.tab || "basic";
-
     const getValidMaster = (type: string | undefined): MasterType => {
         if (type) {
             const entry = Object.entries(MASTER_SLUGS).find(([_, slug]) => slug === type);
@@ -130,25 +153,39 @@ export default function InventoryMasters() {
     };
 
     const selectedMaster = getValidMaster(params.type);
+    const [activeTab, setActiveTab] = useState(MASTER_SLUGS[selectedMaster]);
 
     const [searchTerm, setSearchTerm] = useState("");
     const [open, setOpen] = useState(false);
     const [currentPage, setCurrentPage] = useState(1);
-    const itemsPerPage = 10;
+    const [itemsPerPage, setItemsPerPage] = useState(10);
 
-    const updateRoute = (tab: string, type: MasterType) => {
+    const updateRoute = (type: MasterType) => {
         const slug = MASTER_SLUGS[type] || type.toLowerCase();
-        setLocation(`/masters/inventory/${tab}/${slug}`);
+        setLocation(`/masters/inventory/${slug}`);
     };
 
     const handleMasterChange = (newMaster: MasterType) => {
-        updateRoute(activeTab, newMaster);
+        const slug = MASTER_SLUGS[newMaster];
+        setActiveTab(slug);
+        setLocation(`/masters/inventory/${slug}`);
         setSearchTerm("");
         setOpen(false);
         setFilterStatus("All");
         setFilterWarehouse("All");
         setCurrentPage(1);
     };
+
+    useEffect(() => {
+        const newMaster = getValidMaster(params.type);
+        const newSlug = MASTER_SLUGS[newMaster];
+        if (newSlug !== activeTab) {
+            setActiveTab(newSlug);
+        }
+        if (location === '/masters/inventory') {
+            setLocation('/masters/inventory/warehouses');
+        }
+    }, [params.type, location]);
 
     // State for mock data
     const [warehouses, setWarehouses] = useState<Warehouse[]>(initialWarehouses);
@@ -240,7 +277,7 @@ export default function InventoryMasters() {
         const now = new Date().toISOString();
 
         if (selectedMaster === "Warehouses") {
-            if (!formData.code || !formData.name || !formData.status || !formData.location) {
+            if (!formData.code || !formData.name || !formData.status || !formData.location || !formData.department) {
                 toast({ variant: "destructive", title: "Validation Error", description: "Please fill all required fields." });
                 return;
             }
@@ -297,6 +334,8 @@ export default function InventoryMasters() {
                             <TableHead>Code</TableHead>
                             <TableHead>Warehouse Name</TableHead>
                             <TableHead>Location</TableHead>
+                            <TableHead>Department</TableHead>
+                            <TableHead className="text-center">Bins</TableHead>
                             <TableHead>Status</TableHead>
                             <TableHead className="text-right">Actions</TableHead>
                         </TableRow>
@@ -304,29 +343,38 @@ export default function InventoryMasters() {
                     <TableBody>
                         {paginatedData.length === 0 ? (
                             <TableRow>
-                                <TableCell colSpan={5} className="h-24 text-center text-muted-foreground">
+                                <TableCell colSpan={7} className="h-24 text-center text-muted-foreground">
                                     No warehouses found.
                                 </TableCell>
                             </TableRow>
                         ) : (
-                            paginatedData.map((item: any) => (
-                                <TableRow key={item.id}>
-                                    <TableCell className="font-medium">{item.code}</TableCell>
-                                    <TableCell>{item.name}</TableCell>
-                                    <TableCell>{item.location}</TableCell>
-                                    <TableCell><StatusBadge status={item.status} /></TableCell>
-                                    <TableCell className="text-right">
-                                        <div className="flex justify-end gap-2">
-                                            <Button variant="ghost" size="icon" className="h-8 w-8 hover:bg-muted" onClick={() => handleEditClick(item)}>
-                                                <Pencil className="h-4 w-4" />
-                                            </Button>
-                                            <Button variant="ghost" size="icon" className="h-8 w-8 text-destructive hover:bg-destructive/10" onClick={() => handleDeleteClick(item.id)}>
-                                                <Trash2 className="h-4 w-4" />
-                                            </Button>
-                                        </div>
-                                    </TableCell>
-                                </TableRow>
-                            ))
+                            paginatedData.map((item: any) => {
+                                const binCount = bins.filter(b => b.warehouse_id === item.id).length;
+                                return (
+                                    <TableRow key={item.id}>
+                                        <TableCell className="font-medium">{item.code}</TableCell>
+                                        <TableCell>{item.name}</TableCell>
+                                        <TableCell>{item.location}</TableCell>
+                                        <TableCell>{item.department}</TableCell>
+                                        <TableCell className="text-center">
+                                            <Badge variant="secondary" className="bg-blue-50 text-blue-700 border-blue-200">
+                                                {binCount}
+                                            </Badge>
+                                        </TableCell>
+                                        <TableCell><StatusBadge status={item.status} /></TableCell>
+                                        <TableCell className="text-right">
+                                            <div className="flex justify-end gap-2">
+                                                <Button variant="ghost" size="icon" className="h-8 w-8 hover:bg-muted" onClick={() => handleEditClick(item)}>
+                                                    <Pencil className="h-4 w-4" />
+                                                </Button>
+                                                <Button variant="ghost" size="icon" className="h-8 w-8 text-destructive hover:bg-destructive/10" onClick={() => handleDeleteClick(item.id)}>
+                                                    <Trash2 className="h-4 w-4" />
+                                                </Button>
+                                            </div>
+                                        </TableCell>
+                                    </TableRow>
+                                );
+                            })
                         )}
                     </TableBody>
                 </Table>
@@ -406,6 +454,17 @@ export default function InventoryMasters() {
                             </Select>
                         </div>
                         <div className="space-y-2">
+                            <Label>Department *</Label>
+                            <Select value={formData.department} onValueChange={(val: any) => setFormData({ ...formData, department: val })}>
+                                <SelectTrigger><SelectValue placeholder="Select Department" /></SelectTrigger>
+                                <SelectContent>
+                                    {DEPARTMENTS.map(dept => (
+                                        <SelectItem key={dept.id} value={dept.name}>{dept.name}</SelectItem>
+                                    ))}
+                                </SelectContent>
+                            </Select>
+                        </div>
+                        <div className="space-y-2">
                             <Label>Status *</Label>
                             <Select value={formData.status} onValueChange={(val: any) => setFormData({ ...formData, status: val })}>
                                 <SelectTrigger><SelectValue placeholder="Select Status" /></SelectTrigger>
@@ -422,7 +481,7 @@ export default function InventoryMasters() {
                     </div>
                 </div>
             );
-        } else {
+        } else if (selectedMaster === "Bins") {
             return (
                 <div className="grid gap-6 py-4 px-1">
                     <div className="grid grid-cols-2 gap-4">
@@ -478,72 +537,37 @@ export default function InventoryMasters() {
 
 
     return (
-        <div className="flex flex-col gap-6 h-full">
-            <div className="flex flex-col gap-2">
+        <div className="flex flex-col gap-6 h-full overflow-hidden">
+            <div className="flex flex-col gap-2 shrink-0">
                 <h1 className="text-3xl font-bold tracking-tight">Inventory Masters</h1>
                 <p className="text-muted-foreground">
                     Manage warehouses, bins, and other inventory configurations.
                 </p>
             </div>
 
-            <Tabs value={activeTab} className="w-full flex-1 flex flex-col">
-                <div className="border-b border-border">
+            <Tabs value={activeTab} onValueChange={(value) => {
+                const masterType = Object.entries(MASTER_SLUGS).find(([_, slug]) => slug === value)?.[0] as MasterType;
+                if (masterType) handleMasterChange(masterType);
+            }} className="w-full flex-1 flex flex-col min-h-0">
+                <div className="border-b border-border shrink-0">
                     <TabsList className="h-auto w-full justify-start gap-0 bg-transparent p-0 overflow-x-auto">
-                        <TabsTrigger
-                            value="basic"
-                            className="data-[state=active]:bg-transparent data-[state=active]:shadow-none data-[state=active]:border-primary data-[state=active]:text-primary px-4 py-2 text-sm font-medium border-b-2 border-transparent transition-colors rounded-none text-muted-foreground hover:text-foreground hover:border-muted-foreground/30 whitespace-nowrap"
-                            onClick={() => updateRoute("basic", "Warehouses")}
-                        >
-                            Basic
-                        </TabsTrigger>
-                        {/* Add more tabs later */}
+                        {MASTER_TYPES.map((type) => (
+                            <TabsTrigger
+                                key={type}
+                                value={MASTER_SLUGS[type]}
+                                onClick={() => handleMasterChange(type)}
+                                className="data-[state=active]:bg-transparent data-[state=active]:shadow-none data-[state=active]:border-primary data-[state=active]:text-primary px-4 py-2 text-sm font-medium border-b-2 border-transparent transition-colors rounded-none text-muted-foreground hover:text-foreground hover:border-muted-foreground/30 whitespace-nowrap"
+                            >
+                                {type}
+                            </TabsTrigger>
+                        ))}
                     </TabsList>
                 </div>
 
-                <TabsContent value="basic" className="m-0 h-full flex flex-col gap-6 mt-6">
+                <div className="flex-1 flex flex-col gap-6 mt-6 overflow-y-auto pr-2 pb-6 custom-scrollbar">
                     {/* Top Control Bar */}
                     <div className="flex flex-col sm:flex-row items-center gap-4 bg-card p-4 rounded-lg border shadow-sm">
-                        <div className="w-full sm:w-1/4">
-                            <Label className="mb-1.5 block text-xs font-medium text-muted-foreground uppercase tracking-wider">Select Master Type</Label>
-                            <Popover open={open} onOpenChange={setOpen}>
-                                <PopoverTrigger asChild>
-                                    <Button
-                                        variant="outline"
-                                        role="combobox"
-                                        aria-expanded={open}
-                                        className="w-full justify-between h-10 font-medium"
-                                    >
-                                        {selectedMaster ? selectedMaster : "Select Master..."}
-                                        <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
-                                    </Button>
-                                </PopoverTrigger>
-                                <PopoverContent style={{ width: "var(--radix-popover-trigger-width)" }} className="w-[--radix-popover-trigger-width] p-0" align="start">
-                                    <Command>
-                                        <CommandInputBorderless placeholder="Search master..." />
-                                        <CommandList className="max-h-[200px] overflow-y-auto">
-                                            <CommandEmpty>No master found.</CommandEmpty>
-                                            <CommandGroup>
-                                                {MASTER_TYPES.map((type) => (
-                                                    <CommandItem
-                                                        key={type}
-                                                        value={type}
-                                                        onSelect={(currentValue) => {
-                                                            const original = MASTER_TYPES.find(t => t.toLowerCase() === currentValue.toLowerCase()) || type;
-                                                            handleMasterChange(original as MasterType);
-                                                        }}
-                                                    >
-                                                        <Check
-                                                            className={cn("mr-2 h-4 w-4", selectedMaster === type ? "opacity-100" : "opacity-0")}
-                                                        />
-                                                        {type}
-                                                    </CommandItem>
-                                                ))}
-                                            </CommandGroup>
-                                        </CommandList>
-                                    </Command>
-                                </PopoverContent>
-                            </Popover>
-                        </div>
+
 
                         {/* Filters */}
                         {selectedMaster === "Bins" && (
@@ -602,34 +626,18 @@ export default function InventoryMasters() {
                             <div className="rounded-md border">
                                 {renderTable()}
                             </div>
-                            
-                            {/* Pagination */}
-                            <div className="flex justify-between items-center px-1 mt-4">
-                                <div className="text-sm text-muted-foreground">
-                                    Showing {currentData.length === 0 ? 0 : (currentPage - 1) * itemsPerPage + 1} to {Math.min(currentPage * itemsPerPage, currentData.length)} of {currentData.length} entries
-                                </div>
-                                <div className="flex gap-2">
-                                    <Button
-                                        variant="outline"
-                                        size="sm"
-                                        onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
-                                        disabled={currentPage === 1}
-                                    >
-                                        <ChevronLeft className="h-4 w-4" />
-                                    </Button>
-                                    <Button
-                                        variant="outline"
-                                        size="sm"
-                                        onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
-                                        disabled={currentPage >= totalPages || totalPages === 0}
-                                    >
-                                        <ChevronRight className="h-4 w-4" />
-                                    </Button>
-                                </div>
-                            </div>
+
+                            <DataTablePagination
+                                currentPage={currentPage}
+                                totalPages={totalPages}
+                                totalItems={currentData.length}
+                                itemsPerPage={itemsPerPage}
+                                onPageChange={setCurrentPage}
+                                onItemsPerPageChange={setItemsPerPage}
+                            />
                         </CardContent>
                     </Card>
-                </TabsContent>
+                </div>
             </Tabs>
 
             {/* Universal Add/Edit Dialog */}

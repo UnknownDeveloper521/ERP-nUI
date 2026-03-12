@@ -40,33 +40,17 @@ import {
 import { Search, ArrowLeft, AlertCircle, Calculator, ChevronLeft, ChevronRight, ChevronsUpDown, Check } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { cn } from "@/lib/utils";
-import { differenceInDays, parse } from "date-fns";
+import { differenceInDays, parse, format, isValid } from "date-fns";
+import { PayPeriod, mockPayPeriods, PayrollRun, MOCK_PAYROLL_RUNS, PayrollStatus, MOCK_EMPLOYEES, Employee } from "@/lib/payrollSharedData";
+import { getPayrollSalaryAssignment, type PayrollSalaryAssignment } from "@/lib/salaryAssignmentSharedData";
 
 // ============================================================================
 // TYPE DEFINITIONS
 // ============================================================================
 
-/**
- * Pay Period structure
- */
-interface PayPeriod {
-  id: string;
-  periodName: string;
-  startDate: string;
-  endDate: string;
-  status: "Open" | "Locked" | "Processed" | "Paid";
-}
+// Shared types are imported from @/lib/payrollSharedData
 
-/**
- * Employee structure
- */
-interface Employee {
-  id: string;
-  code: string;
-  name: string;
-  department: string;
-  designation: string;
-}
+// Shared types are imported from @/lib/payrollSharedData
 
 /**
  * Salary Component structure (for structure preview)
@@ -79,7 +63,7 @@ interface SalaryComponent {
 }
 
 /**
- * Salary Assignment with structure details
+ * Salary Assignment with structure details (using shared data)
  */
 interface SalaryAssignment {
   employeeId: string;
@@ -89,40 +73,7 @@ interface SalaryAssignment {
   deductions: SalaryComponent[]; // Deduction components from structure
 }
 
-/**
- * Payroll Run Status
- * ✅ UPDATED: Changed to Pending | Draft | Locked (removed Warning and Calculated)
- */
-type PayrollStatus = "Pending" | "Draft" | "Locked" | "Warning";
-
-/**
- * Payroll Run Record (stored in localStorage)
- */
-interface PayrollRun {
-  id: string;
-  employeeId: string;
-  payPeriodId: string;
-  
-  // Manual Entry Fields (SIMPLIFIED - removed extra earnings/deductions)
-  paidDays: number;
-  lwpDays: number;
-  otHours: number;
-  
-  // Calculated Fields
-  perDaySalary: number; // Monthly CTC / Period Days
-  proratedSalary: number; // Per Day Salary × Paid Days
-  otAmount: number; // OT Hours × OT Rate
-  lwpDeduction: number; // Per Day Salary × LWP Days
-  grossPay: number; // Prorated Salary + OT Amount
-  totalDeductions: number; // LWP Deduction
-  netPay: number; // Gross Pay - Total Deductions
-  
-  // Status & Metadata
-  status: PayrollStatus;
-  warningMessages: string[];
-  calculatedAt?: string;
-  lockedAt?: string;
-}
+// Shared types are imported from @/lib/payrollSharedData
 
 // ============================================================================
 // CONSTANTS
@@ -140,130 +91,19 @@ const OT_RATE_PER_HOUR = 100;
 // This ensures Run Payroll page never crashes when empty
 // ============================================================================
 
-/**
- * Mock Pay Periods
- */
-const MOCK_PAY_PERIODS: PayPeriod[] = [
-  {
-    id: "pp-001",
-    periodName: "Jan-2026",
-    startDate: "2026-01-01",
-    endDate: "2026-01-31",
-    status: "Open"
-  },
-  {
-    id: "pp-002",
-    periodName: "Feb-2026",
-    startDate: "2026-02-01",
-    endDate: "2026-02-28",
-    status: "Open"
-  }
-];
+// Shared mock data is imported from @/lib/payrollSharedData
+
+// Shared mock data is imported from @/lib/payrollSharedData
 
 /**
- * Mock Employees
+ * Mock Salary Assignments - Now using shared data store
+ * @deprecated Use getSalaryAssignmentByEmployeeId from salaryAssignmentSharedData instead
  */
-const MOCK_EMPLOYEES: Employee[] = [
-  {
-    id: "emp-001",
-    code: "EMP001",
-    name: "John Doe",
-    department: "Engineering",
-    designation: "Software Engineer"
-  },
-  {
-    id: "emp-002",
-    code: "EMP002",
-    name: "Jane Smith",
-    department: "HR",
-    designation: "HR Manager"
-  },
-  {
-    id: "emp-003",
-    code: "EMP003",
-    name: "Mike Johnson",
-    department: "Finance",
-    designation: "Accountant"
-  }
-];
+// const MOCK_SALARY_ASSIGNMENTS: SalaryAssignment[] = [
+//   ... (moved to shared data store)
+// ];
 
-/**
- * Mock Salary Assignments
- */
-const MOCK_SALARY_ASSIGNMENTS: SalaryAssignment[] = [
-  {
-    employeeId: "emp-001",
-    structureName: "Standard Structure",
-    monthlyCTC: 50000,
-    earnings: [
-      { code: "BASIC", name: "Basic Salary", ruleType: "Fixed", monthlyAmount: 30000 },
-      { code: "HRA", name: "House Rent Allowance", ruleType: "% of Basic", monthlyAmount: 15000 },
-      { code: "CONV", name: "Conveyance", ruleType: "Fixed", monthlyAmount: 2000 },
-      { code: "SPECIAL", name: "Special Allowance", ruleType: "Fixed", monthlyAmount: 3000 }
-    ],
-    deductions: [
-      { code: "PF", name: "Provident Fund", ruleType: "% of Basic", monthlyAmount: 3600 },
-      { code: "ESI", name: "ESI", ruleType: "% of Gross", monthlyAmount: 750 },
-      { code: "PT", name: "Professional Tax", ruleType: "Fixed", monthlyAmount: 200 }
-    ]
-  },
-  {
-    employeeId: "emp-002",
-    structureName: "Manager Structure",
-    monthlyCTC: 80000,
-    earnings: [
-      { code: "BASIC", name: "Basic Salary", ruleType: "Fixed", monthlyAmount: 48000 },
-      { code: "HRA", name: "House Rent Allowance", ruleType: "% of Basic", monthlyAmount: 24000 },
-      { code: "CONV", name: "Conveyance", ruleType: "Fixed", monthlyAmount: 3000 },
-      { code: "SPECIAL", name: "Special Allowance", ruleType: "Fixed", monthlyAmount: 5000 }
-    ],
-    deductions: [
-      { code: "PF", name: "Provident Fund", ruleType: "% of Basic", monthlyAmount: 5760 },
-      { code: "ESI", name: "ESI", ruleType: "% of Gross", monthlyAmount: 1200 },
-      { code: "PT", name: "Professional Tax", ruleType: "Fixed", monthlyAmount: 200 }
-    ]
-  },
-  {
-    employeeId: "emp-003",
-    structureName: "Standard Structure",
-    monthlyCTC: 45000,
-    earnings: [
-      { code: "BASIC", name: "Basic Salary", ruleType: "Fixed", monthlyAmount: 27000 },
-      { code: "HRA", name: "House Rent Allowance", ruleType: "% of Basic", monthlyAmount: 13500 },
-      { code: "CONV", name: "Conveyance", ruleType: "Fixed", monthlyAmount: 2000 },
-      { code: "SPECIAL", name: "Special Allowance", ruleType: "Fixed", monthlyAmount: 2500 }
-    ],
-    deductions: [
-      { code: "PF", name: "Provident Fund", ruleType: "% of Basic", monthlyAmount: 3240 },
-      { code: "ESI", name: "ESI", ruleType: "% of Gross", monthlyAmount: 675 },
-      { code: "PT", name: "Professional Tax", ruleType: "Fixed", monthlyAmount: 200 }
-    ]
-  }
-];
-
-/**
- * Mock Payroll Runs (some employees have calculated payroll)
- */
-const MOCK_PAYROLL_RUNS: PayrollRun[] = [
-  {
-    id: "pr-001",
-    employeeId: "emp-001",
-    payPeriodId: "pp-001",
-    paidDays: 26,
-    lwpDays: 0,
-    otHours: 10,
-    perDaySalary: 1613,
-    proratedSalary: 41935,
-    otAmount: 1000,
-    lwpDeduction: 0,
-    grossPay: 42935,
-    totalDeductions: 4550,
-    netPay: 38385,
-    status: "Draft",
-    warningMessages: [],
-    calculatedAt: "2026-01-25T10:30:00Z"
-  }
-];
+// Shared mock data is imported from @/lib/payrollSharedData
 
 // ============================================================================
 // UTILITY FUNCTIONS
@@ -281,10 +121,12 @@ const getPayrollRun = (employeeId: string, payPeriodId: string): PayrollRun | un
 
 /**
  * Calculate number of days in a pay period (inclusive)
+ * Accepts DD-MM-YYYY format
  */
 const calculatePeriodDays = (startDate: string, endDate: string): number => {
-  const start = parse(startDate, "yyyy-MM-dd", new Date());
-  const end = parse(endDate, "yyyy-MM-dd", new Date());
+  const start = new Date(startDate);
+  const end = new Date(endDate);
+  if (!isValid(start) || !isValid(end)) return 0;
   return differenceInDays(end, start) + 1;
 };
 
@@ -292,8 +134,15 @@ const calculatePeriodDays = (startDate: string, endDate: string): number => {
  * Get salary assignment for an employee
  */
 const getSalaryAssignment = (employeeId: string): SalaryAssignment | undefined => {
-  // ⚠️ SAFE GUARD: Return mock data instead of undefined
-  return MOCK_SALARY_ASSIGNMENTS.find(assignment => assignment.employeeId === employeeId);
+  // Get assignment from shared data store
+  const payrollAssignment = getPayrollSalaryAssignment(employeeId);
+  
+  if (!payrollAssignment) {
+    return undefined;
+  }
+  
+  // Already in the correct format for RunPayroll
+  return payrollAssignment;
 };
 
 // ============================================================================
@@ -308,89 +157,90 @@ const getSalaryAssignment = (employeeId: string): SalaryAssignment | undefined =
 // --- Reusable Searchable Combobox Component ---
 
 interface SearchableSelectProps {
-    label: string;
-    value?: string;
-    options: string[];
-    onChange: (val: string) => void;
-    required?: boolean;
-    disabled?: boolean;
+  label: string;
+  value?: string;
+  options: string[];
+  onChange: (val: string) => void;
+  required?: boolean;
+  disabled?: boolean;
 }
 
 function SearchableSelect({
-    label,
-    value,
-    options,
-    onChange,
-    required = false,
-    disabled = false,
+  label,
+  value,
+  options,
+  onChange,
+  required = false,
+  disabled = false,
 }: SearchableSelectProps) {
-    const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState(false);
 
-    return (
-        <div className="space-y-2">
-            <Label>
-                {label} {required && <span className="text-red-500">*</span>}
-            </Label>
-            <Popover open={open} onOpenChange={setOpen}>
-                <PopoverTrigger asChild>
-                    <Button
-                        variant="outline"
-                        role="combobox"
-                        aria-expanded={open}
-                        className="w-full justify-between h-10 font-normal border-input"
-                        disabled={disabled}
-                    >
-                        <span className={cn(!value && "text-muted-foreground")}>
-                            {value || `Select ${label}`}
-                        </span>
-                        <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
-                    </Button>
-                </PopoverTrigger>
-                <PopoverContent className="w-[var(--radix-popover-trigger-width)] p-0" align="start">
-                    <Command>
-                        <CommandInputBorderless placeholder={`Search ${label.toLowerCase()}...`} className="h-9" />
-                        <CommandList className="max-h-[200px] overflow-y-auto">
-                            <CommandEmpty>No results found.</CommandEmpty>
-                            <CommandGroup>
-                                {options.map((item) => (
-                                    <CommandItem
-                                        key={item}
-                                        value={item}
-                                        onSelect={() => {
-                                            onChange(item);
-                                            setOpen(false);
-                                        }}
-                                        className="cursor-pointer"
-                                    >
-                                        <Check
-                                            className={cn(
-                                                "mr-2 h-4 w-4",
-                                                value === item ? "opacity-100" : "opacity-0"
-                                            )}
-                                        />
-                                        {item}
-                                    </CommandItem>
-                                ))}
-                            </CommandGroup>
-                        </CommandList>
-                    </Command>
-                </PopoverContent>
-            </Popover>
-        </div>
-    );
+  return (
+    <div className="space-y-2">
+      <Label>
+        {label} {required && <span className="text-red-500">*</span>}
+      </Label>
+      <Popover open={open} onOpenChange={setOpen}>
+        <PopoverTrigger asChild>
+          <Button
+            variant="outline"
+            role="combobox"
+            aria-expanded={open}
+            className="w-full justify-between h-10 font-normal border-input"
+            disabled={disabled}
+          >
+            <span className={cn(!value && "text-muted-foreground")}>
+              {value || `Select ${label}`}
+            </span>
+            <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
+          </Button>
+        </PopoverTrigger>
+        <PopoverContent className="w-[var(--radix-popover-trigger-width)] p-0" align="start">
+          <Command>
+            <CommandInputBorderless placeholder={`Search ${label.toLowerCase()}...`} className="h-9" />
+            <CommandList className="max-h-[200px] overflow-y-auto">
+              <CommandEmpty>No results found.</CommandEmpty>
+              <CommandGroup>
+                {options.map((item) => (
+                  <CommandItem
+                    key={item}
+                    value={item}
+                    onSelect={() => {
+                      onChange(item);
+                      setOpen(false);
+                    }}
+                    className="cursor-pointer"
+                  >
+                    <Check
+                      className={cn(
+                        "mr-2 h-4 w-4",
+                        value === item ? "opacity-100" : "opacity-0"
+                      )}
+                    />
+                    {item}
+                  </CommandItem>
+                ))}
+              </CommandGroup>
+            </CommandList>
+          </Command>
+        </PopoverContent>
+      </Popover>
+    </div>
+  );
 }
 
 export default function RunPayroll() {
   const [, setLocation] = useLocation();
+  const [refreshTrigger, setRefreshTrigger] = useState(0);
   const [matchList] = useRoute("/hrms/payroll-management");
   const [matchForm, params] = useRoute("/hrms/payroll-management/:employeeId");
 
   // Determine which screen to show based on route
   if (matchForm && params?.employeeId) {
-    return <EmployeePayrollForm employeeId={params.employeeId} />;
+    return <EmployeePayrollForm employeeId={params.employeeId} refreshTrigger={refreshTrigger} setRefreshTrigger={setRefreshTrigger} />;
   }
 
-  return <EmployeeListScreen />;
+  return <EmployeeListScreen refreshTrigger={refreshTrigger} />;
 }
 
 // ============================================================================
@@ -401,7 +251,7 @@ export default function RunPayroll() {
  * Employee List Screen
  * Shows all employees for a selected pay period
  */
-function EmployeeListScreen() {
+function EmployeeListScreen({ refreshTrigger }: { refreshTrigger: number }) {
   const [, setLocation] = useLocation();
   const { toast } = useToast();
 
@@ -414,7 +264,20 @@ function EmployeeListScreen() {
   // KEEP: Essential for good UX - prevents re-selecting period every time
   // ============================================================================
   const [selectedPeriodId, setSelectedPeriodId] = useState<string>("");
-  
+
+  // ============================================================================
+  // AUTO-SELECT PAY PERIOD WHEN ONLY ONE OPTION AVAILABLE
+  // ============================================================================
+  // PURPOSE: Auto-select the pay period when there's only one option
+  // WHY NEEDED: Better UX when only one period is available (like Mar-2026 only)
+  // HOW IT WORKS: Checks if mockPayPeriods has only one item and auto-selects it
+  // ============================================================================
+  useEffect(() => {
+    if (mockPayPeriods.length === 1 && !selectedPeriodId) {
+      setSelectedPeriodId(mockPayPeriods[0].id);
+    }
+  }, [selectedPeriodId]);
+
   // ============================================================================
   // FILTER AND SEARCH STATE
   // ============================================================================
@@ -424,7 +287,7 @@ function EmployeeListScreen() {
   // ============================================================================
   const [searchQuery, setSearchQuery] = useState("");
   const [deptFilter, setDeptFilter] = useState("All");
-  
+
   // ============================================================================
   // PAGINATION STATE
   // ============================================================================
@@ -435,17 +298,20 @@ function EmployeeListScreen() {
   const [currentPage, setCurrentPage] = useState(1);
   const itemsPerPage = 10;
 
-  // Get unique departments
-  // ⚠️ SAFE GUARD: Using mock data to populate departments
   const departments = useMemo(() => {
-    const uniqueDepts = new Set(MOCK_EMPLOYEES.map(emp => emp.department));
+    // Only include departments from employees with salary assignments
+    const employeesWithAssignments = MOCK_EMPLOYEES.filter(emp => {
+      const assignment = getSalaryAssignment(emp.id);
+      return !!assignment;
+    });
+    const uniqueDepts = new Set(employeesWithAssignments.map(emp => emp.department));
     return ["All", ...Array.from(uniqueDepts)];
-  }, []);
+  }, [refreshTrigger]);
 
   // Get selected pay period
   // ⚠️ SAFE GUARD: Using mock data to find selected period
   const selectedPeriod = useMemo(() => {
-    return MOCK_PAY_PERIODS.find(p => p.id === selectedPeriodId);
+    return mockPayPeriods.find(p => p.id === selectedPeriodId);
   }, [selectedPeriodId]);
 
   // Calculate period days
@@ -455,29 +321,34 @@ function EmployeeListScreen() {
   }, [selectedPeriod]);
 
   // Get employee data with payroll status
-  // ⚠️ SAFE GUARD: Using mock data to populate employee list
+  // Only include employees with active salary assignments
   const employeeData = useMemo(() => {
     if (!selectedPeriodId) return [];
-    
-    return MOCK_EMPLOYEES.map(emp => {
-      const assignment = getSalaryAssignment(emp.id);
-      const payrollRun = getPayrollRun(emp.id, selectedPeriodId);
-      
-      let status: PayrollStatus = "Pending";
-      if (payrollRun) {
-        status = payrollRun.status;
-      } else if (!assignment) {
-        status = "Warning";
-      }
-      
-      return {
-        ...emp,
-        hasAssignment: !!assignment,
-        structureName: assignment?.structureName ?? "Not Assigned",
-        status
-      };
-    });
-  }, [selectedPeriodId]);
+
+    return MOCK_EMPLOYEES
+      .map(emp => {
+        const assignment = getSalaryAssignment(emp.id);
+        const payrollRun = getPayrollRun(emp.id, selectedPeriodId);
+
+        // Only include employees with valid salary assignments
+        if (!assignment) {
+          return null;
+        }
+
+        let status: PayrollStatus = "Pending";
+        if (payrollRun) {
+          status = payrollRun.status;
+        }
+
+        return {
+          ...emp,
+          hasAssignment: true,
+          structureName: assignment.structureName,
+          status
+        };
+      })
+      .filter(emp => emp !== null); // Remove employees without assignments
+  }, [selectedPeriodId, refreshTrigger]);
 
   // Filter and sort employees
   const filteredEmployees = useMemo(() => {
@@ -489,7 +360,7 @@ function EmployeeListScreen() {
 
     if (searchQuery) {
       const query = searchQuery.toLowerCase();
-      filtered = filtered.filter(e => 
+      filtered = filtered.filter(e =>
         e.code.toLowerCase().includes(query) ||
         e.name.toLowerCase().includes(query)
       );
@@ -564,10 +435,10 @@ function EmployeeListScreen() {
               label="Pay Period"
               required
               value={selectedPeriod?.periodName ?? ""}
-              options={MOCK_PAY_PERIODS.map(p => p.periodName)}
+              options={mockPayPeriods.map(p => p.periodName)}
               onChange={(periodName) => {
                 // ⚠️ SAFE GUARD: Find period by name and set ID
-                const period = MOCK_PAY_PERIODS.find(p => p.periodName === periodName);
+                const period = mockPayPeriods.find(p => p.periodName === periodName);
                 if (period) {
                   setSelectedPeriodId(period.id);
                 }
@@ -706,7 +577,15 @@ function EmployeeListScreen() {
  * 5) Calculation Preview (Modern cards)
  * 6) Lock Behavior
  */
-function EmployeePayrollForm({ employeeId }: { employeeId: string }) {
+function EmployeePayrollForm({
+  employeeId,
+  refreshTrigger,
+  setRefreshTrigger
+}: {
+  employeeId: string;
+  refreshTrigger: number;
+  setRefreshTrigger: React.Dispatch<React.SetStateAction<number>>;
+}) {
   const [, setLocation] = useLocation();
   const { toast } = useToast();
 
@@ -724,7 +603,7 @@ function EmployeePayrollForm({ employeeId }: { employeeId: string }) {
   const [paidDays, setPaidDays] = useState<string>("");
   const [lwpDays, setLwpDays] = useState<string>("");
   const [otHours, setOtHours] = useState<string>("0");
-  
+
   // ============================================================================
   // PAYROLL STATUS STATE
   // ============================================================================
@@ -733,7 +612,7 @@ function EmployeePayrollForm({ employeeId }: { employeeId: string }) {
   // KEEP: Essential for payroll workflow and payslip visibility
   // ============================================================================
   const [currentStatus, setCurrentStatus] = useState<PayrollStatus>("Pending");
-  
+
   // ============================================================================
   // FORM VALIDATION AND CHANGE TRACKING
   // ============================================================================
@@ -745,7 +624,6 @@ function EmployeePayrollForm({ employeeId }: { employeeId: string }) {
   // ============================================================================
   const [formErrors, setFormErrors] = useState<Record<string, string>>({});
   const [inputsChanged, setInputsChanged] = useState(false);
-  const [refreshTrigger, setRefreshTrigger] = useState(0);
 
   // ============================================================================
   // DERIVED DATA - COMPUTED FROM PROPS/STATE
@@ -764,7 +642,7 @@ function EmployeePayrollForm({ employeeId }: { employeeId: string }) {
   // Find pay period data
   // ⚠️ SAFE GUARD: Using mock data to find pay period
   const payPeriod = useMemo(() => {
-    return MOCK_PAY_PERIODS.find(period => period.id === payPeriodId);
+    return mockPayPeriods.find(period => period.id === payPeriodId);
   }, [payPeriodId]);
 
   // Find employee's salary assignment (structure + amounts)
@@ -870,7 +748,7 @@ function EmployeePayrollForm({ employeeId }: { employeeId: string }) {
    * - paidDays = Manual Entry (used for proration)
    * - lwpDays = Manual Entry (validation only - NOT deducted as money)
    * - otHours = Overtime hours
-   * - OT_RATE = ₹100/hour
+   * - OT_RATE = USh100/hour
    * - structureDeductionTotal = Sum of PF + ESI + PT (monthly)
    * 
    * Formulas:
@@ -964,12 +842,12 @@ function EmployeePayrollForm({ employeeId }: { employeeId: string }) {
     console.log('   ⚠️ LWP Days:', lwp, '(info only - already in proration)');
 
     console.log('📊 Final Summary:');
-    console.log('   Monthly Gross: ₹', monthlyGross.toLocaleString());
-    console.log('   Prorated Salary: ₹', proratedSalary.toLocaleString());
-    console.log('   OT Amount: ₹', otAmount.toLocaleString());
-    console.log('   Gross Pay: ₹', grossPay.toLocaleString());
-    console.log('   Structure Deductions: -₹', structureDeductionTotal.toLocaleString());
-    console.log('   Net Pay: ₹', netPay.toLocaleString());
+    console.log('   Monthly Gross: USh', monthlyGross.toLocaleString());
+    console.log('   Prorated Salary: USh', proratedSalary.toLocaleString());
+    console.log('   OT Amount: USh', otAmount.toLocaleString());
+    console.log('   Gross Pay: USh', grossPay.toLocaleString());
+    console.log('   Structure Deductions: -USh', structureDeductionTotal.toLocaleString());
+    console.log('   Net Pay: USh', netPay.toLocaleString());
 
     // ============================================================================
     // CREATE/UPDATE PAYROLL RUN RECORD
@@ -977,7 +855,7 @@ function EmployeePayrollForm({ employeeId }: { employeeId: string }) {
     // ============================================================================
     const existingIndex = MOCK_PAYROLL_RUNS.findIndex(r => r.employeeId === employeeId && r.payPeriodId === payPeriodId);
 
-    // ✅ CHANGED: Store proration-based calculation values
+    // ✅ CHANGED: Store proration-based calculation values and components
     const payrollRun: PayrollRun = {
       id: existingIndex >= 0 ? MOCK_PAYROLL_RUNS[existingIndex].id : `PR-${Date.now()}`,
       employeeId,
@@ -994,7 +872,19 @@ function EmployeePayrollForm({ employeeId }: { employeeId: string }) {
       netPay,
       status: currentStatus, // ✅ CHANGED: Use current status from dropdown
       warningMessages: [],
-      calculatedAt: new Date().toISOString(),
+      calculatedAt: format(new Date(), 'yyyy-MM-dd'),
+      // ✅ ADDED: Capture individual components for Payslip
+      earnings: [
+        ...(salaryAssignment?.earnings ?? []).map(e => ({
+          name: e.name,
+          amount: Math.round(e.monthlyAmount * factor)
+        })),
+        ...(otAmount > 0 ? [{ name: "Overtime", amount: otAmount }] : [])
+      ],
+      deductions: (salaryAssignment?.deductions ?? []).map(d => ({
+        name: d.name,
+        amount: d.monthlyAmount
+      }))
     };
 
     if (existingIndex >= 0) {
@@ -1043,17 +933,17 @@ function EmployeePayrollForm({ employeeId }: { employeeId: string }) {
       // Update existing run with new status
       MOCK_PAYROLL_RUNS[existingIndex].status = newStatus;
       if (newStatus === "Locked") {
-        MOCK_PAYROLL_RUNS[existingIndex].lockedAt = new Date().toISOString();
+        MOCK_PAYROLL_RUNS[existingIndex].lockedAt = format(new Date(), 'yyyy-MM-dd');
       }
       setRefreshTrigger(prev => prev + 1);
 
       toast({
         title: "Success",
-        description: newStatus === "Draft" 
-          ? "Status changed to Draft" 
+        description: newStatus === "Draft"
+          ? "Status changed to Draft"
           : newStatus === "Locked"
-          ? "Payroll locked successfully. Payslip is now available to employee."
-          : "Status updated",
+            ? "Payroll locked successfully. Payslip is now available to employee."
+            : "Status updated",
         className: "bg-green-50 border-green-200 text-green-900",
       });
     } else {
@@ -1216,7 +1106,7 @@ function EmployeePayrollForm({ employeeId }: { employeeId: string }) {
             <div>
               <Label className="text-xs text-muted-foreground">Monthly Gross / CTC</Label>
               <p className="font-semibold">
-                {salaryAssignment ? `₹${salaryAssignment.monthlyCTC.toLocaleString()}` : "-"}
+                {salaryAssignment ? `USh${salaryAssignment.monthlyCTC.toLocaleString()}` : "-"}
               </p>
             </div>
             <div>
@@ -1276,14 +1166,14 @@ function EmployeePayrollForm({ employeeId }: { employeeId: string }) {
                           </Badge>
                         </TableCell>
                         <TableCell className="text-right font-semibold">
-                          ₹{(comp?.monthlyAmount ?? 0).toLocaleString()}
+                          USh{(comp?.monthlyAmount ?? 0).toLocaleString()}
                         </TableCell>
                       </TableRow>
                     ))}
                     <TableRow className="bg-blue-50 font-semibold">
                       <TableCell colSpan={2}>Total Monthly Gross</TableCell>
                       <TableCell className="text-right">
-                        ₹{salaryAssignment.monthlyCTC.toLocaleString()}
+                        USh{salaryAssignment.monthlyCTC.toLocaleString()}
                       </TableCell>
                     </TableRow>
                   </TableBody>
@@ -1314,7 +1204,7 @@ function EmployeePayrollForm({ employeeId }: { employeeId: string }) {
                           </Badge>
                         </TableCell>
                         <TableCell className="text-right font-semibold">
-                          ₹{(comp?.monthlyAmount ?? 0).toLocaleString()}
+                          USh{(comp?.monthlyAmount ?? 0).toLocaleString()}
                         </TableCell>
                       </TableRow>
                     ))}
@@ -1322,7 +1212,7 @@ function EmployeePayrollForm({ employeeId }: { employeeId: string }) {
                     <TableRow className="bg-red-50 font-semibold border-t-2 border-red-200">
                       <TableCell colSpan={2}>Total Monthly Deductions</TableCell>
                       <TableCell className="text-right">
-                        ₹{salaryAssignment.deductions.reduce((sum, d) => sum + d.monthlyAmount, 0).toLocaleString()}
+                        USh{salaryAssignment.deductions.reduce((sum, d) => sum + d.monthlyAmount, 0).toLocaleString()}
                       </TableCell>
                     </TableRow>
                   </TableBody>
@@ -1422,7 +1312,7 @@ function EmployeePayrollForm({ employeeId }: { employeeId: string }) {
               {formErrors.otHours && (
                 <p className="text-xs text-red-500">{formErrors.otHours}</p>
               )}
-              <p className="text-xs text-muted-foreground">Rate: ₹{OT_RATE_PER_HOUR}/hour</p>
+              <p className="text-xs text-muted-foreground">Rate: USh{OT_RATE_PER_HOUR}/hour</p>
             </div>
           </div>
         </CardContent>
@@ -1461,26 +1351,10 @@ function EmployeePayrollForm({ employeeId }: { employeeId: string }) {
                       </div>
                     </TableCell>
                     <TableCell className="text-right font-semibold">
-                      ₹{(existingRun.proratedSalary || 0).toLocaleString()}
+                      USh{(existingRun.proratedSalary || 0).toLocaleString()}
                     </TableCell>
                   </TableRow>
 
-                  {/* OT Amount */}
-                  {existingRun.otHours > 0 && (
-                    <TableRow>
-                      <TableCell>
-                        <div>
-                          <p className="font-medium">OT Amount</p>
-                          <p className="text-xs text-muted-foreground">
-                            {existingRun.otHours} hours × ₹{OT_RATE_PER_HOUR}/hr
-                          </p>
-                        </div>
-                      </TableCell>
-                      <TableCell className="text-right font-semibold">
-                        ₹{(existingRun.otAmount || 0).toLocaleString()}
-                      </TableCell>
-                    </TableRow>
-                  )}
 
                   {/* Gross Pay */}
                   <TableRow>
@@ -1491,7 +1365,7 @@ function EmployeePayrollForm({ employeeId }: { employeeId: string }) {
                       </div>
                     </TableCell>
                     <TableCell className="text-right font-semibold">
-                      ₹{(existingRun.grossPay || 0).toLocaleString()}
+                      USh{(existingRun.grossPay || 0).toLocaleString()}
                     </TableCell>
                   </TableRow>
 
@@ -1507,10 +1381,12 @@ function EmployeePayrollForm({ employeeId }: { employeeId: string }) {
                         </div>
                       </TableCell>
                       <TableCell className="text-right font-semibold text-red-600">
-                        -₹{(existingRun.totalDeductions || 0).toLocaleString()}
+                        -USh{(existingRun.totalDeductions || 0).toLocaleString()}
                       </TableCell>
                     </TableRow>
                   )}
+
+
 
                   {/* Net Pay (Highlighted) */}
                   <TableRow className="bg-green-50 border-t-2 border-green-200">
@@ -1523,7 +1399,7 @@ function EmployeePayrollForm({ employeeId }: { employeeId: string }) {
                       </div>
                     </TableCell>
                     <TableCell className="text-right font-bold text-green-900 text-lg">
-                      ₹{(existingRun.netPay || 0).toLocaleString()}
+                      USh{(existingRun.netPay || 0).toLocaleString()}
                     </TableCell>
                   </TableRow>
                 </TableBody>
@@ -1568,7 +1444,7 @@ function EmployeePayrollForm({ employeeId }: { employeeId: string }) {
           {/* Save Button */}
           <Button
             onClick={handleSave}
-            disabled={hasMissingAssignment || !existingRun}
+            disabled={hasMissingAssignment || !existingRun || inputsChanged}
             className="gap-2"
           >
             Save

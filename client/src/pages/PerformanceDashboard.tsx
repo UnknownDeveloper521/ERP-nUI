@@ -34,7 +34,6 @@ const generateDeptData = () => [
   { dept: "HR", kpi: 88 + Math.random() * 8 },
   { dept: "Finance", kpi: 90 + Math.random() * 7 },
   { dept: "IT", kpi: 87 + Math.random() * 9 },
-  { dept: "Logistics", kpi: 83 + Math.random() * 12 },
 ];
 
 // Generate performance distribution
@@ -203,7 +202,7 @@ export default function PerformanceDashboard() {
                   <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
                   <XAxis dataKey="day" tick={{ fontSize: 12 }} />
                   <YAxis domain={[0, 100]} tick={{ fontSize: 12 }} />
-                  <Tooltip 
+                  <Tooltip
                     contentStyle={{ backgroundColor: "#f9fafb", border: "1px solid #e5e7eb", borderRadius: "8px" }}
                     formatter={(value: number) => value.toFixed(1)}
                   />
@@ -228,7 +227,7 @@ export default function PerformanceDashboard() {
                     <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
                     <XAxis dataKey="dept" tick={{ fontSize: 11 }} />
                     <YAxis domain={[0, 100]} tick={{ fontSize: 12 }} />
-                    <Tooltip 
+                    <Tooltip
                       contentStyle={{ backgroundColor: "#f9fafb", border: "1px solid #e5e7eb", borderRadius: "8px" }}
                       formatter={(value: number) => value.toFixed(1)}
                     />

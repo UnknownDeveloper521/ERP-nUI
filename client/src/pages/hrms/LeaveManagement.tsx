@@ -9,20 +9,22 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from "@/components/ui/dialog";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from "@/components/ui/alert-dialog";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Command, CommandInputBorderless, CommandList, CommandEmpty, CommandGroup, CommandItem } from "@/components/ui/command";
 import { Plus, Calendar as CalendarIcon, ChevronLeft, ChevronRight, Eye, Edit, ChevronsUpDown, Check, ChevronDown, X, Trash2 } from "lucide-react";
-import { format } from "date-fns";
+import { DataTablePagination } from "@/components/shared/DataTablePagination";
+import { format, parse } from "date-fns";
 import { cn } from "@/lib/utils";
 import { useToast } from "@/hooks/use-toast";
 import ImprovedLeaveCalendar from "@/components/hrms/ImprovedLeaveCalendar";
 
 // Tabs configuration - Only 3 tabs: Dashboard, Leave Entry, Calendar
 const tabsConfig = [
-  { id: "dashboard", label: "Dashboard", roles: ["ADMIN", "HR", "EMPLOYEE"] },
   { id: "leave-entry", label: "Leave Entry", roles: ["ADMIN", "HR"] },
-  { id: "calendar", label: "Calendar", roles: ["ADMIN", "HR", "EMPLOYEE"] }
+  { id: "calendar", label: "Calendar", roles: ["ADMIN", "HR", "EMPLOYEE"] },
+  { id: "holidays", label: "Holidays", roles: ["ADMIN", "HR", "EMPLOYEE"] }
 ];
 
 // --- Reusable Searchable Combobox Component ---
@@ -112,14 +114,14 @@ function DatePicker({ date, setDate, disabled = false, minDate }: {
 
   const monthNames = ["January", "February", "March", "April", "May", "June",
     "July", "August", "September", "October", "November", "December"];
-  
+
   const monthNamesShort = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
     "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 
   const formatDisplayDate = (date: Date | undefined) => {
     if (!date) return "Pick a date";
     try {
-      return format(date, "dd/MM/yyyy");
+      return format(date, "dd-MM-yyyy");
     } catch (error) {
       return "Pick a date";
     }
@@ -426,7 +428,7 @@ function DatePicker({ date, setDate, disabled = false, minDate }: {
 export default function LeaveManagement() {
   const { toast } = useToast();
   const [location, setLocation] = useLocation();
-  const [activeTab, setActiveTab] = useState("dashboard");
+  const [activeTab, setActiveTab] = useState("leave-entry");
 
   // Calendar state
   const [calendarView, setCalendarView] = useState<'week' | 'month'>('month');
@@ -451,6 +453,23 @@ export default function LeaveManagement() {
   const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false);
   const [leaveToDelete, setLeaveToDelete] = useState<string | null>(null);
 
+  // Holiday State - Dates in YYYY-MM-DD format
+  const [holidays, setHolidays] = useState([
+    { id: "hol_001", holidayName: "New Year's Day", holidayDate: "2026-01-01", day: "Thursday", status: "Active" },
+    { id: "hol_002", holidayName: "Republic Day", holidayDate: "2026-01-26", day: "Monday", status: "Active" },
+    { id: "hol_003", holidayName: "Independence Day", holidayDate: "2026-08-15", day: "Saturday", status: "Active" },
+    { id: "hol_004", holidayName: "Gandhi Jayanti", holidayDate: "2026-10-02", day: "Friday", status: "Active" },
+    { id: "hol_005", holidayName: "Diwali", holidayDate: "2026-11-01", day: "Sunday", status: "Active" }
+  ]);
+  const [isHolidayModalOpen, setIsHolidayModalOpen] = useState(false);
+  const [editingHoliday, setEditingHoliday] = useState<any>(null);
+  const [holidayFormData, setHolidayFormData] = useState({
+    holidayName: "",
+    holidayDate: undefined as Date | undefined,
+    status: "Active"
+  });
+  const [holidaySearchQuery, setHolidaySearchQuery] = useState("");
+
   // Leave Entry Tab State - Filters
   const [searchQuery, setSearchQuery] = useState("");
   const [dateRangeFrom, setDateRangeFrom] = useState<Date | undefined>(undefined);
@@ -458,7 +477,8 @@ export default function LeaveManagement() {
 
   // Pagination State
   const [leaveEntryCurrentPage, setLeaveEntryCurrentPage] = useState(1);
-  const itemsPerPage = 10;
+  // Pagination state - using DataTablePagination component
+  const [itemsPerPage, setItemsPerPage] = useState(10);
 
   // Define the leave application type
   type LeaveApplication = {
@@ -472,14 +492,14 @@ export default function LeaveManagement() {
     attachment?: File | null;
   };
 
-  // Leave Applications State - Mock data
+  // Leave Applications State - Mock data with YYYY-MM-DD format
   const [leaveApplications, setLeaveApplications] = useState<LeaveApplication[]>([
     {
       id: "leave_001",
       employee: "John Doe",
       leaveType: "Paid Leave",
-      fromDate: "2026-02-15",
-      toDate: "2026-02-17",
+      fromDate: "2026-03-10",
+      toDate: "2026-03-12",
       paidLeave: true,
       remark: "Family vacation"
     },
@@ -487,8 +507,8 @@ export default function LeaveManagement() {
       id: "leave_002",
       employee: "Jane Smith",
       leaveType: "Sick Leave",
-      fromDate: "2026-02-20",
-      toDate: "2026-02-21",
+      fromDate: "2026-03-15",
+      toDate: "2026-03-16",
       paidLeave: true,
       remark: "Medical appointment"
     }
@@ -498,12 +518,20 @@ export default function LeaveManagement() {
   const leaveTypeOptions = ['Paid Leave', 'Sick Leave', 'Casual Leave', 'Annual Leave', 'Unpaid Leave'];
   const employeeOptions = ['John Doe', 'Jane Smith', 'Mike Johnson', 'Sarah Williams', 'David Brown'];
 
-  // Mock holidays data
-  const upcomingHolidays = [
-    { name: "Independence Day", date: "2026-08-15", day: "Saturday" },
-    { name: "Gandhi Jayanti", date: "2026-10-02", day: "Friday" },
-    { name: "Diwali", date: "2026-11-01", day: "Sunday" }
-  ];
+  // Get upcoming holidays from the live state
+  const upcomingHolidays = holidays
+    .filter(h => h.status === "Active")
+    .filter(h => {
+      const holidayDate = new Date(h.holidayDate);
+      const today = new Date(new Date().setHours(0, 0, 0, 0));
+      return holidayDate >= today;
+    })
+    .sort((a, b) => {
+      const dateA = new Date(a.holidayDate);
+      const dateB = new Date(b.holidayDate);
+      return dateA.getTime() - dateB.getTime();
+    })
+    .slice(0, 5);
 
   // Set initial tab based on URL
   useEffect(() => {
@@ -511,12 +539,12 @@ export default function LeaveManagement() {
       setActiveTab('leave-entry');
     } else if (location === '/hrms/leave-management/calendar') {
       setActiveTab('calendar');
-    } else if (location === '/hrms/leave-management/dashboard') {
-      setActiveTab('dashboard');
+    } else if (location === '/hrms/leave-management/holidays') {
+      setActiveTab('holidays');
     } else if (location === '/hrms/leave-management') {
-      setLocation('/hrms/leave-management/dashboard');
+      setLocation('/hrms/leave-management/leave-entry');
     } else {
-      setActiveTab('dashboard');
+      setActiveTab('leave-entry');
     }
   }, [location, setLocation]);
 
@@ -548,9 +576,9 @@ export default function LeaveManagement() {
     if (formData.fromDate) {
       const today = new Date();
       today.setHours(0, 0, 0, 0);
-      const fromDate = new Date(formData.fromDate);
+      const fromDate = formData.fromDate instanceof Date ? formData.fromDate : new Date(formData.fromDate);
       fromDate.setHours(0, 0, 0, 0);
-      
+
       if (fromDate < today) {
         errors.fromDate = "From Date cannot be in the past";
       }
@@ -558,11 +586,11 @@ export default function LeaveManagement() {
 
     // Validate To Date is not before From Date
     if (formData.fromDate && formData.toDate) {
-      const fromDate = new Date(formData.fromDate);
+      const fromDate = formData.fromDate instanceof Date ? formData.fromDate : new Date(formData.fromDate);
       fromDate.setHours(0, 0, 0, 0);
-      const toDate = new Date(formData.toDate);
+      const toDate = formData.toDate instanceof Date ? formData.toDate : new Date(formData.toDate);
       toDate.setHours(0, 0, 0, 0);
-      
+
       if (toDate < fromDate) {
         errors.toDate = "To Date must be same or after From Date";
       }
@@ -576,22 +604,22 @@ export default function LeaveManagement() {
   const handleInputChange = (field: string, value: any) => {
     setFormData(prev => {
       const newData = { ...prev, [field]: value };
-      
+
       // If From Date changes and To Date becomes invalid, clear To Date
       if (field === 'fromDate' && value && newData.toDate) {
-        const fromDate = new Date(value);
+        const fromDate = value instanceof Date ? value : new Date(value);
         fromDate.setHours(0, 0, 0, 0);
-        const toDate = new Date(newData.toDate);
+        const toDate = newData.toDate instanceof Date ? newData.toDate : new Date(newData.toDate);
         toDate.setHours(0, 0, 0, 0);
-        
+
         if (toDate < fromDate) {
           newData.toDate = undefined;
         }
       }
-      
+
       return newData;
     });
-    
+
     // Clear errors for the changed field
     if (formErrors[field]) {
       setFormErrors(prev => {
@@ -747,19 +775,29 @@ export default function LeaveManagement() {
   const leaveEntryEndIndex = leaveEntryStartIndex + itemsPerPage;
   const paginatedLeaveEntries = filteredApplications.slice(leaveEntryStartIndex, leaveEntryEndIndex);
 
+  // Auto-adjust page when data changes
+  useEffect(() => {
+    if (leaveEntryCurrentPage > leaveEntryTotalPages && leaveEntryTotalPages > 0) {
+      setLeaveEntryCurrentPage(leaveEntryTotalPages);
+    }
+  }, [filteredApplications.length, leaveEntryCurrentPage, leaveEntryTotalPages]);
+
+  // Reset to page 1 when filters change
   useEffect(() => {
     setLeaveEntryCurrentPage(1);
   }, [searchQuery, dateRangeFrom, dateRangeTo]);
 
-  // Format date for display
+  // Format date for display - DD-MM-YYYY format
   const formatDateTime = (dateString: string | null) => {
     if (!dateString) return "—";
     try {
-      return new Date(dateString).toLocaleDateString('en-GB', {
-        day: '2-digit',
-        month: 'short',
-        year: 'numeric'
-      });
+      // Handle both YYYY-MM-DD and DD-MM-YYYY if needed, but standardize on ISO
+      let date = new Date(dateString);
+      if (isNaN(date.getTime())) {
+        date = parse(dateString, 'dd-MM-yyyy', new Date());
+      }
+      if (isNaN(date.getTime())) return "—";
+      return format(date, 'dd-MM-yyyy');
     } catch {
       return "—";
     }
@@ -847,244 +885,244 @@ export default function LeaveManagement() {
 
   // Render Team Time Off Calendar (Timeline View)
   const renderTeamTimeOffCalendar = () => {
-        const year = currentDate.getFullYear();
-        const month = currentDate.getMonth();
-        const daysInMonth = new Date(year, month + 1, 0).getDate();
-        const today = new Date();
-        today.setHours(0, 0, 0, 0);
+    const year = currentDate.getFullYear();
+    const month = currentDate.getMonth();
+    const daysInMonth = new Date(year, month + 1, 0).getDate();
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
 
-        // Generate array of dates for the month
-        const monthDates: Date[] = Array.from({ length: daysInMonth }, (_, i) => {
-          const date = new Date(year, month, i + 1);
-          date.setHours(0, 0, 0, 0);
-          return date;
-        });
+    // Generate array of dates for the month
+    const monthDates: Date[] = Array.from({ length: daysInMonth }, (_, i) => {
+      const date = new Date(year, month, i + 1);
+      date.setHours(0, 0, 0, 0);
+      return date;
+    });
 
-        // Get weekday abbreviations
-        const weekdayAbbr = ['Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa', 'Su'];
+    // Get weekday abbreviations
+    const weekdayAbbr = ['Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa', 'Su'];
 
-        // Use all employees from employeeOptions
-        const employees = employeeOptions;
+    // Use all employees from employeeOptions
+    const employees = employeeOptions;
 
-        // State for tooltip
-        const [hoveredLeave, setHoveredLeave] = React.useState<{
-          leave: LeaveApplication;
-          x: number;
-          y: number;
-        } | null>(null);
+    // State for tooltip
+    const [hoveredLeave, setHoveredLeave] = React.useState<{
+      leave: LeaveApplication;
+      x: number;
+      y: number;
+    } | null>(null);
 
-        // Get all leaves for an employee
-        const getEmployeeLeavesForMonth = (employeeName: string) => {
-          return leaveApplications.filter(app => app.employee === employeeName);
-        };
+    // Get all leaves for an employee
+    const getEmployeeLeavesForMonth = (employeeName: string) => {
+      return leaveApplications.filter(app => app.employee === employeeName);
+    };
 
-        // Check if a date is within a leave range
-        const isDateInLeave = (leave: LeaveApplication, date: Date) => {
-          const fromDate = new Date(leave.fromDate);
-          const toDate = new Date(leave.toDate);
-          const checkDate = new Date(date);
-          fromDate.setHours(0, 0, 0, 0);
-          toDate.setHours(0, 0, 0, 0);
-          checkDate.setHours(0, 0, 0, 0);
-          return checkDate >= fromDate && checkDate <= toDate;
-        };
+    // Check if a date is within a leave range
+    const isDateInLeave = (leave: LeaveApplication, date: Date) => {
+      const fromDate = new Date(leave.fromDate);
+      const toDate = new Date(leave.toDate);
+      const checkDate = new Date(date);
+      fromDate.setHours(0, 0, 0, 0);
+      toDate.setHours(0, 0, 0, 0);
+      checkDate.setHours(0, 0, 0, 0);
+      return checkDate >= fromDate && checkDate <= toDate;
+    };
 
-        // Check if date is start of leave
-        const isLeaveStart = (leave: LeaveApplication, date: Date) => {
-          const fromDate = new Date(leave.fromDate);
-          const checkDate = new Date(date);
-          fromDate.setHours(0, 0, 0, 0);
-          checkDate.setHours(0, 0, 0, 0);
-          return fromDate.getTime() === checkDate.getTime();
-        };
+    // Check if date is start of leave
+    const isLeaveStart = (leave: LeaveApplication, date: Date) => {
+      const fromDate = new Date(leave.fromDate);
+      const checkDate = new Date(date);
+      fromDate.setHours(0, 0, 0, 0);
+      checkDate.setHours(0, 0, 0, 0);
+      return fromDate.getTime() === checkDate.getTime();
+    };
 
-        // Check if date is end of leave
-        const isLeaveEnd = (leave: LeaveApplication, date: Date) => {
-          const toDate = new Date(leave.toDate);
-          const checkDate = new Date(date);
-          toDate.setHours(0, 0, 0, 0);
-          checkDate.setHours(0, 0, 0, 0);
-          return toDate.getTime() === checkDate.getTime();
-        };
+    // Check if date is end of leave
+    const isLeaveEnd = (leave: LeaveApplication, date: Date) => {
+      const toDate = new Date(leave.toDate);
+      const checkDate = new Date(date);
+      toDate.setHours(0, 0, 0, 0);
+      checkDate.setHours(0, 0, 0, 0);
+      return toDate.getTime() === checkDate.getTime();
+    };
 
-        return (
-          <div className="space-y-4">
-            {/* Calendar Container - Full width with better spacing */}
-            <div className="border rounded-xl bg-white overflow-hidden shadow-md">
-              <div className="overflow-x-auto">
-                <div className="min-w-full">
-                  {/* Header Row - Weekdays */}
-                  <div className="flex bg-gray-50 border-b sticky top-0 z-30">
-                    {/* Empty cell for employee column */}
-                    <div className="w-56 flex-shrink-0 border-r bg-gray-50"></div>
+    return (
+      <div className="space-y-4">
+        {/* Calendar Container - Full width with better spacing */}
+        <div className="border rounded-xl bg-white overflow-hidden shadow-md">
+          <div className="overflow-x-auto">
+            <div className="min-w-full">
+              {/* Header Row - Weekdays */}
+              <div className="flex bg-gray-50 border-b sticky top-0 z-30">
+                {/* Empty cell for employee column */}
+                <div className="w-56 flex-shrink-0 border-r bg-gray-50"></div>
 
-                    {/* Weekday headers */}
-                    {monthDates.map((date, index) => {
-                      const dayOfWeek = weekdayAbbr[date.getDay()];
-                      const isWeekend = date.getDay() === 0 || date.getDay() === 6;
-                      const isToday = date.toDateString() === today.toDateString();
-                      return (
-                        <div
-                          key={index}
-                          className={cn(
-                            "flex-1 min-w-[44px] text-center py-2 text-xs font-semibold border-r",
-                            isWeekend && "bg-red-50",
-                            isToday && "bg-blue-100",
-                            isWeekend ? "text-red-600" : "text-gray-600"
-                          )}
-                        >
-                          {dayOfWeek}
-                        </div>
-                      );
-                    })}
-                  </div>
+                {/* Weekday headers */}
+                {monthDates.map((date, index) => {
+                  const dayOfWeek = weekdayAbbr[date.getDay()];
+                  const isWeekend = date.getDay() === 0 || date.getDay() === 6;
+                  const isToday = date.toDateString() === today.toDateString();
+                  return (
+                    <div
+                      key={index}
+                      className={cn(
+                        "flex-1 min-w-[44px] text-center py-2 text-xs font-semibold border-r",
+                        isWeekend && "bg-red-50",
+                        isToday && "bg-blue-100",
+                        isWeekend ? "text-red-600" : "text-gray-600"
+                      )}
+                    >
+                      {dayOfWeek}
+                    </div>
+                  );
+                })}
+              </div>
 
-                  {/* Header Row - Date Numbers */}
-                  <div className="flex border-b bg-gray-50 sticky top-[41px] z-30">
-                    {/* Employee column header */}
-                    <div className="w-56 flex-shrink-0 border-r px-4 py-3 bg-gray-50">
-                      <span className="text-sm font-bold text-gray-700">Employee</span>
+              {/* Header Row - Date Numbers */}
+              <div className="flex border-b bg-gray-50 sticky top-[41px] z-30">
+                {/* Employee column header */}
+                <div className="w-56 flex-shrink-0 border-r px-4 py-3 bg-gray-50">
+                  <span className="text-sm font-bold text-gray-700">Employee</span>
+                </div>
+
+                {/* Date numbers */}
+                {monthDates.map((date, index) => {
+                  const isToday = date.toDateString() === today.toDateString();
+                  const isWeekend = date.getDay() === 0 || date.getDay() === 6;
+                  return (
+                    <div
+                      key={index}
+                      className={cn(
+                        "flex-1 min-w-[44px] text-center py-3 text-sm font-bold border-r",
+                        isWeekend && "bg-red-50",
+                        isToday && "bg-blue-100 text-blue-700",
+                        !isToday && isWeekend && "text-red-600",
+                        !isToday && !isWeekend && "text-gray-700"
+                      )}
+                    >
+                      {date.getDate()}
+                    </div>
+                  );
+                })}
+              </div>
+
+              {/* Employee Rows */}
+              {employees.map((employee, empIndex) => {
+                const employeeLeaves = getEmployeeLeavesForMonth(employee);
+
+                return (
+                  <div key={empIndex} className="flex border-b hover:bg-gray-50 transition-colors">
+                    {/* Employee Info Column - Sticky */}
+                    <div className="w-56 flex-shrink-0 border-r px-4 py-4 flex items-center gap-3 bg-white sticky left-0 z-10">
+                      {/* Avatar */}
+                      <div
+                        className="w-10 h-10 rounded-full flex items-center justify-center text-white text-sm font-bold flex-shrink-0 shadow-sm"
+                        style={{ backgroundColor: getAvatarColor(employee) }}
+                      >
+                        {getInitials(employee)}
+                      </div>
+                      {/* Employee Name */}
+                      <span className="text-sm font-medium text-gray-900 truncate">
+                        {employee}
+                      </span>
                     </div>
 
-                    {/* Date numbers */}
-                    {monthDates.map((date, index) => {
-                      const isToday = date.toDateString() === today.toDateString();
+                    {/* Date Cells with Leave Pills */}
+                    {monthDates.map((date, dateIndex) => {
                       const isWeekend = date.getDay() === 0 || date.getDay() === 6;
+                      const isToday = date.toDateString() === today.toDateString();
+
+                      // Find if this date has any leave
+                      const activeLeave = employeeLeaves.find(leave => isDateInLeave(leave, date));
+                      const isStart = activeLeave && isLeaveStart(activeLeave, date);
+                      const isEnd = activeLeave && isLeaveEnd(activeLeave, date);
+
                       return (
                         <div
-                          key={index}
+                          key={dateIndex}
                           className={cn(
-                            "flex-1 min-w-[44px] text-center py-3 text-sm font-bold border-r",
-                            isWeekend && "bg-red-50",
-                            isToday && "bg-blue-100 text-blue-700",
-                            !isToday && isWeekend && "text-red-600",
-                            !isToday && !isWeekend && "text-gray-700"
+                            "flex-1 min-w-[44px] h-16 border-r flex items-center justify-center relative",
+                            isWeekend && "bg-gray-50",
+                            isToday && "bg-blue-50"
                           )}
                         >
-                          {date.getDate()}
-                        </div>
-                      );
-                    })}
-                  </div>
-
-                  {/* Employee Rows */}
-                  {employees.map((employee, empIndex) => {
-                    const employeeLeaves = getEmployeeLeavesForMonth(employee);
-
-                    return (
-                      <div key={empIndex} className="flex border-b hover:bg-gray-50 transition-colors">
-                        {/* Employee Info Column - Sticky */}
-                        <div className="w-56 flex-shrink-0 border-r px-4 py-4 flex items-center gap-3 bg-white sticky left-0 z-10">
-                          {/* Avatar */}
-                          <div 
-                            className="w-10 h-10 rounded-full flex items-center justify-center text-white text-sm font-bold flex-shrink-0 shadow-sm"
-                            style={{ backgroundColor: getAvatarColor(employee) }}
-                          >
-                            {getInitials(employee)}
-                          </div>
-                          {/* Employee Name */}
-                          <span className="text-sm font-medium text-gray-900 truncate">
-                            {employee}
-                          </span>
-                        </div>
-
-                        {/* Date Cells with Leave Pills */}
-                        {monthDates.map((date, dateIndex) => {
-                          const isWeekend = date.getDay() === 0 || date.getDay() === 6;
-                          const isToday = date.toDateString() === today.toDateString();
-
-                          // Find if this date has any leave
-                          const activeLeave = employeeLeaves.find(leave => isDateInLeave(leave, date));
-                          const isStart = activeLeave && isLeaveStart(activeLeave, date);
-                          const isEnd = activeLeave && isLeaveEnd(activeLeave, date);
-
-                          return (
+                          {activeLeave && (
                             <div
-                              key={dateIndex}
                               className={cn(
-                                "flex-1 min-w-[44px] h-16 border-r flex items-center justify-center relative",
-                                isWeekend && "bg-gray-50",
-                                isToday && "bg-blue-50"
+                                "absolute inset-y-2 inset-x-0 flex items-center justify-center cursor-pointer transition-all hover:opacity-90",
+                                isStart && "rounded-l-full",
+                                isEnd && "rounded-r-full",
+                                !isStart && !isEnd && "rounded-none"
                               )}
+                              style={{
+                                backgroundColor: getLeaveTypeColor(activeLeave.leaveType),
+                                opacity: 0.85
+                              }}
+                              onMouseEnter={(e) => {
+                                setHoveredLeave({
+                                  leave: activeLeave,
+                                  x: e.clientX,
+                                  y: e.clientY
+                                });
+                              }}
+                              onMouseLeave={() => setHoveredLeave(null)}
                             >
-                              {activeLeave && (
-                                <div
-                                  className={cn(
-                                    "absolute inset-y-2 inset-x-0 flex items-center justify-center cursor-pointer transition-all hover:opacity-90",
-                                    isStart && "rounded-l-full",
-                                    isEnd && "rounded-r-full",
-                                    !isStart && !isEnd && "rounded-none"
-                                  )}
-                                  style={{ 
-                                    backgroundColor: getLeaveTypeColor(activeLeave.leaveType),
-                                    opacity: 0.85
-                                  }}
-                                  onMouseEnter={(e) => {
-                                    setHoveredLeave({
-                                      leave: activeLeave,
-                                      x: e.clientX,
-                                      y: e.clientY
-                                    });
-                                  }}
-                                  onMouseLeave={() => setHoveredLeave(null)}
-                                >
-                                  {/* Show date number on start and end */}
-                                  {(isStart || isEnd) && (
-                                    <span className="text-white text-xs font-bold">
-                                      {date.getDate()}
-                                    </span>
-                                  )}
-                                </div>
+                              {/* Show date number on start and end */}
+                              {(isStart || isEnd) && (
+                                <span className="text-white text-xs font-bold">
+                                  {date.getDate()}
+                                </span>
                               )}
                             </div>
-                          );
-                        })}
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                );
+              })}
             </div>
-
-            {/* Tooltip */}
-            {hoveredLeave && (
-              <div 
-                className="fixed z-50 bg-white border border-gray-300 rounded-lg shadow-xl p-4 max-w-sm"
-                style={{ 
-                  left: hoveredLeave.x + 15, 
-                  top: hoveredLeave.y + 15,
-                  pointerEvents: 'none'
-                }}
-              >
-                <div className="space-y-3 text-sm">
-                  <div className="font-bold text-base border-b pb-2 text-gray-900">
-                    {hoveredLeave.leave.employee}
-                  </div>
-                  <div className="grid grid-cols-2 gap-3">
-                    <span className="text-gray-600 font-medium">Leave Type:</span>
-                    <span className="font-semibold text-gray-900">{hoveredLeave.leave.leaveType}</span>
-
-                    <span className="text-gray-600 font-medium">From Date:</span>
-                    <span className="text-gray-900">{formatDateTime(hoveredLeave.leave.fromDate)}</span>
-
-                    <span className="text-gray-600 font-medium">To Date:</span>
-                    <span className="text-gray-900">{formatDateTime(hoveredLeave.leave.toDate)}</span>
-
-                    <span className="text-gray-600 font-medium">Paid Leave:</span>
-                    <span className="text-gray-900">{hoveredLeave.leave.paidLeave ? 'Yes' : 'No'}</span>
-                  </div>
-                  {hoveredLeave.leave.remark && (
-                    <div className="pt-2 border-t">
-                      <span className="text-gray-600 font-medium">Remark:</span>
-                      <p className="mt-1 text-gray-900">{hoveredLeave.leave.remark}</p>
-                    </div>
-                  )}
-                </div>
-              </div>
-            )}
           </div>
-        );
-      }
+        </div>
+
+        {/* Tooltip */}
+        {hoveredLeave && (
+          <div
+            className="fixed z-50 bg-white border border-gray-300 rounded-lg shadow-xl p-4 max-w-sm"
+            style={{
+              left: hoveredLeave.x + 15,
+              top: hoveredLeave.y + 15,
+              pointerEvents: 'none'
+            }}
+          >
+            <div className="space-y-3 text-sm">
+              <div className="font-bold text-base border-b pb-2 text-gray-900">
+                {hoveredLeave.leave.employee}
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <span className="text-gray-600 font-medium">Leave Type:</span>
+                <span className="font-semibold text-gray-900">{hoveredLeave.leave.leaveType}</span>
+
+                <span className="text-gray-600 font-medium">From Date:</span>
+                <span className="text-gray-900">{formatDateTime(hoveredLeave.leave.fromDate)}</span>
+
+                <span className="text-gray-600 font-medium">To Date:</span>
+                <span className="text-gray-900">{formatDateTime(hoveredLeave.leave.toDate)}</span>
+
+                <span className="text-gray-600 font-medium">Paid Leave:</span>
+                <span className="text-gray-900">{hoveredLeave.leave.paidLeave ? 'Yes' : 'No'}</span>
+              </div>
+              {hoveredLeave.leave.remark && (
+                <div className="pt-2 border-t">
+                  <span className="text-gray-600 font-medium">Remark:</span>
+                  <p className="mt-1 text-gray-900">{hoveredLeave.leave.remark}</p>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+      </div>
+    );
+  }
 
   const renderMonthView = () => {
     const year = currentDate.getFullYear();
@@ -1225,71 +1263,6 @@ export default function LeaveManagement() {
           </TabsList>
         </div>
 
-        {/* Dashboard Tab */}
-        <TabsContent value="dashboard" className="flex-1 space-y-6 mt-6">
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-            <Card>
-              <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                <CardTitle className="text-sm font-medium">Total Leaves (This Month)</CardTitle>
-              </CardHeader>
-              <CardContent>
-                <div className="text-2xl font-bold">
-                  {leaveApplications.filter(app => {
-                    const date = new Date(app.fromDate);
-                    const now = new Date();
-                    return date.getMonth() === now.getMonth() && date.getFullYear() === now.getFullYear();
-                  }).length}
-                </div>
-                <p className="text-xs text-muted-foreground">Leaves this month</p>
-              </CardContent>
-            </Card>
-
-            <Card>
-              <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                <CardTitle className="text-sm font-medium">Today on Leave</CardTitle>
-              </CardHeader>
-              <CardContent>
-                <div className="text-2xl font-bold">
-                  {leaveApplications.filter(app => {
-                    // Get today's date with time set to 00:00:00
-                    const today = new Date();
-                    today.setHours(0, 0, 0, 0);
-                    
-                    // Parse from and to dates and set time to 00:00:00
-                    const fromDate = new Date(app.fromDate);
-                    fromDate.setHours(0, 0, 0, 0);
-                    
-                    const toDate = new Date(app.toDate);
-                    toDate.setHours(0, 0, 0, 0);
-                    
-                    // Check if today is between from and to dates (inclusive)
-                    return today >= fromDate && today <= toDate;
-                  }).length}
-                </div>
-                <p className="text-xs text-muted-foreground">Employees on leave today</p>
-              </CardContent>
-            </Card>
-          </div>
-
-          <Card>
-            <CardHeader>
-              <CardTitle>Upcoming Holidays</CardTitle>
-            </CardHeader>
-            <CardContent>
-              <div className="space-y-3">
-                {upcomingHolidays.map((holiday, index) => (
-                  <div key={index} className="flex justify-between items-center p-3 border rounded-lg">
-                    <div>
-                      <p className="font-medium">{holiday.name}</p>
-                      <p className="text-sm text-muted-foreground">{holiday.day}</p>
-                    </div>
-                    <div className="text-sm font-medium">{formatDateTime(holiday.date)}</div>
-                  </div>
-                ))}
-              </div>
-            </CardContent>
-          </Card>
-        </TabsContent>
 
         {/* Leave Entry Tab */}
         <TabsContent value="leave-entry" className="flex-1 space-y-6 mt-6">
@@ -1390,30 +1363,17 @@ export default function LeaveManagement() {
                   ))
                 )}
               </div>
-              <div className="flex items-center justify-between px-4 py-3 border-t bg-gray-50/50">
-                <div className="text-sm text-gray-600">
-                  Showing {filteredApplications.length === 0 ? 0 : leaveEntryStartIndex + 1} to {Math.min(leaveEntryEndIndex, filteredApplications.length)} of {filteredApplications.length} entries
-                </div>
-                <div className="flex items-center gap-1">
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={() => setLeaveEntryCurrentPage(prev => Math.max(1, prev - 1))}
-                    disabled={leaveEntryCurrentPage === 1}
-                    className="h-8 w-8 p-0"
-                  >
-                    <ChevronLeft className="h-4 w-4" />
-                  </Button>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={() => setLeaveEntryCurrentPage(prev => Math.min(leaveEntryTotalPages, prev + 1))}
-                    disabled={leaveEntryCurrentPage >= leaveEntryTotalPages || leaveEntryTotalPages === 0}
-                    className="h-8 w-8 p-0"
-                  >
-                    <ChevronRight className="h-4 w-4" />
-                  </Button>
-                </div>
+              {/* Pagination - using standardized DataTablePagination component */}
+              <div className="px-4 py-3 border-t bg-gray-50/50">
+                <DataTablePagination
+                  currentPage={leaveEntryCurrentPage}
+                  totalPages={leaveEntryTotalPages}
+                  totalItems={filteredApplications.length}
+                  itemsPerPage={itemsPerPage}
+                  onPageChange={setLeaveEntryCurrentPage}
+                  onItemsPerPageChange={setItemsPerPage}
+                  options={[10, 15, 30, 50]}
+                />
               </div>
             </CardContent>
           </Card>
@@ -1457,8 +1417,8 @@ export default function LeaveManagement() {
                 <div className="flex flex-wrap items-center justify-end gap-8">
                   {leaveTypeOptions.map((leaveType) => (
                     <div key={leaveType} className="flex items-center gap-2">
-                      <div 
-                        className="w-5 h-5 rounded-full shadow-sm" 
+                      <div
+                        className="w-5 h-5 rounded-full shadow-sm"
                         style={{ backgroundColor: getLeaveTypeColor(leaveType) }}
                       />
                       <span className="text-sm font-medium text-gray-700">{leaveType}</span>
@@ -1468,6 +1428,90 @@ export default function LeaveManagement() {
               </CardContent>
             </Card>
           </div>
+        </TabsContent>
+
+        {/* Holidays Tab */}
+        <TabsContent value="holidays" className="flex-1 space-y-6 mt-6">
+          <Card>
+            <CardContent className="p-4">
+              <div className="flex items-end gap-4">
+                <div className="w-64 space-y-2">
+                  <Label>Search</Label>
+                  <Input
+                    placeholder="Search holidays..."
+                    value={holidaySearchQuery}
+                    onChange={(e) => setHolidaySearchQuery(e.target.value)}
+                  />
+                </div>
+                <Button onClick={() => {
+                  setEditingHoliday(null);
+                  setHolidayFormData({ holidayName: "", holidayDate: undefined, status: "Active" });
+                  setIsHolidayModalOpen(true);
+                }} className="h-10 ml-auto">
+                  <Plus className="mr-2 h-4 w-4" /> Add Holiday
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardContent className="p-0">
+              <div className="grid grid-cols-4 gap-4 p-4 bg-muted/40 font-medium text-sm text-muted-foreground border-b">
+                <div>Holiday Name</div>
+                <div>Date</div>
+                <div>Status</div>
+                <div className="text-right">Actions</div>
+              </div>
+              <div className="space-y-0">
+                {holidays
+                  .filter(h => h.holidayName.toLowerCase().includes(holidaySearchQuery.toLowerCase()))
+                  .length === 0 ? (
+                  <div className="text-center py-12 text-muted-foreground">
+                    <CalendarIcon className="mx-auto h-12 w-12 mb-4 opacity-50" />
+                    <p className="text-lg font-medium mb-2">No holidays found</p>
+                  </div>
+                ) : (
+                  holidays
+                    .filter(h => h.holidayName.toLowerCase().includes(holidaySearchQuery.toLowerCase()))
+                    .map((holiday) => (
+                      <div key={holiday.id} className="grid grid-cols-4 gap-4 p-4 border-b hover:bg-muted/20 transition-colors items-center">
+                        <div className="text-sm font-medium">{holiday.holidayName}</div>
+                        <div className="text-sm">
+                          <div>{formatDateTime(holiday.holidayDate)}</div>
+                          <div className="text-xs text-muted-foreground">{holiday.day}</div>
+                        </div>
+                        <div className="text-sm">
+                          <Badge variant={holiday.status === "Active" ? "default" : "secondary"} className={holiday.status === "Active" ? "bg-green-100 text-green-800 hover:bg-green-100" : ""}>
+                            {holiday.status}
+                          </Badge>
+                        </div>
+                        <div className="flex gap-2 justify-end">
+                          <Button variant="ghost" size="sm" onClick={() => {
+                            setEditingHoliday(holiday);
+                            setHolidayFormData({
+                              holidayName: holiday.holidayName,
+                              holidayDate: new Date(holiday.holidayDate),
+                              status: holiday.status as "Active" | "Inactive"
+                            });
+                            setIsHolidayModalOpen(true);
+                          }}>
+                            <Edit className="h-4 w-4" />
+                          </Button>
+                          <Button variant="ghost" size="sm" className="text-destructive" onClick={() => {
+                            if (confirm("Are you sure you want to delete this holiday?")) {
+                              setHolidays(prev => prev.filter(h => h.id !== holiday.id));
+                              toast({ title: "Holiday Deleted", description: "The holiday has been removed." });
+                            }
+                          }}>
+                            <Trash2 className="h-4 w-4" />
+                          </Button>
+                        </div>
+                      </div>
+                    ))
+                )}
+              </div>
+            </CardContent>
+          </Card>
         </TabsContent>
       </Tabs>
 
@@ -1561,7 +1605,7 @@ export default function LeaveManagement() {
 
           <DialogFooter>
             <Button variant="outline" onClick={handleCancel}>Cancel</Button>
-            <Button 
+            <Button
               onClick={handleSubmit}
               disabled={!formData.employee || !formData.leaveType || !formData.fromDate || !formData.toDate}
             >
@@ -1604,10 +1648,10 @@ export default function LeaveManagement() {
                 </div>
                 <div className="space-y-2">
                   <Label>Duration</Label>
-                  <Input 
-                    value={`${calculateDuration(new Date(selectedApplication.fromDate), new Date(selectedApplication.toDate))} days`} 
-                    disabled 
-                    className="bg-muted" 
+                  <Input
+                    value={`${calculateDuration(parse(selectedApplication.fromDate, 'dd-MM-yyyy', new Date()), parse(selectedApplication.toDate, 'dd-MM-yyyy', new Date()))} days`}
+                    disabled
+                    className="bg-muted"
                   />
                 </div>
                 <div className="space-y-2 md:col-span-2">
@@ -1627,8 +1671,8 @@ export default function LeaveManagement() {
           <DialogFooter className="flex justify-between items-center">
             <AlertDialog open={isDeleteDialogOpen} onOpenChange={setIsDeleteDialogOpen}>
               <AlertDialogTrigger asChild>
-                <Button 
-                  variant="destructive" 
+                <Button
+                  variant="destructive"
                   className="mr-auto"
                   onClick={() => selectedApplication && handleDeleteLeave(selectedApplication.id)}
                 >
@@ -1645,7 +1689,7 @@ export default function LeaveManagement() {
                 </AlertDialogHeader>
                 <AlertDialogFooter>
                   <AlertDialogCancel>Cancel</AlertDialogCancel>
-                  <AlertDialogAction 
+                  <AlertDialogAction
                     onClick={confirmDelete}
                     className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
                   >
@@ -1655,6 +1699,84 @@ export default function LeaveManagement() {
               </AlertDialogContent>
             </AlertDialog>
             <Button variant="outline" onClick={() => setIsViewModalOpen(false)}>Close</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Holiday Modal */}
+      <Dialog open={isHolidayModalOpen} onOpenChange={setIsHolidayModalOpen}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>{editingHoliday ? "Edit Holiday" : "Add Holiday"}</DialogTitle>
+            <DialogDescription>
+              {editingHoliday ? "Update the holiday details" : "Add a new holiday to the calendar"}
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-4 py-4">
+            <div className="space-y-2">
+              <Label>Holiday Name <span className="text-red-500">*</span></Label>
+              <Input
+                placeholder="e.g. Christmas Day"
+                value={holidayFormData.holidayName}
+                onChange={(e) => setHolidayFormData(prev => ({ ...prev, holidayName: e.target.value }))}
+              />
+            </div>
+
+            <div className="space-y-2">
+              <Label>Date <span className="text-red-500">*</span></Label>
+              <DatePicker
+                date={holidayFormData.holidayDate}
+                setDate={(date) => setHolidayFormData(prev => ({ ...prev, holidayDate: date }))}
+              />
+            </div>
+
+            <div className="space-y-2">
+              <Label>Status</Label>
+              <Select
+                value={holidayFormData.status}
+                onValueChange={(val: any) => setHolidayFormData(prev => ({ ...prev, status: val }))}
+              >
+                <SelectTrigger>
+                  <SelectValue placeholder="Select Status" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="Active">Active</SelectItem>
+                  <SelectItem value="Inactive">Inactive</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
+
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setIsHolidayModalOpen(false)}>Cancel</Button>
+            <Button
+              disabled={!holidayFormData.holidayName || !holidayFormData.holidayDate}
+              onClick={() => {
+                const dayNames = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+                const newHoliday = {
+                  id: editingHoliday ? editingHoliday.id : `hol_${Date.now()}`,
+                  holidayName: holidayFormData.holidayName,
+                  holidayDate: format(holidayFormData.holidayDate!, 'yyyy-MM-dd'),
+                  day: dayNames[holidayFormData.holidayDate!.getDay()],
+                  status: holidayFormData.status
+                };
+
+                if (editingHoliday) {
+                  setHolidays(prev => prev.map(h => h.id === editingHoliday.id ? newHoliday : h));
+                } else {
+                  setHolidays(prev => [...prev, newHoliday]);
+                }
+
+                setIsHolidayModalOpen(false);
+                toast({
+                  title: editingHoliday ? "Holiday Updated" : "Holiday Added",
+                  description: editingHoliday ? "The holiday has been updated." : "The holiday has been added."
+                });
+              }}
+            >
+              Save
+            </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

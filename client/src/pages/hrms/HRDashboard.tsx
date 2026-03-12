@@ -16,9 +16,9 @@ const attendanceData = [
 ];
 
 const upcomingHolidays = [
-  { name: "Independence Day", date: "2026-08-15", day: "Saturday" },
-  { name: "Gandhi Jayanti", date: "2026-10-02", day: "Friday" },
-  { name: "Diwali", date: "2026-11-01", day: "Sunday" }
+  { name: "Independence Day", date: "15-08-2026", day: "Saturday" },
+  { name: "Gandhi Jayanti", date: "02-10-2026", day: "Friday" },
+  { name: "Diwali", date: "01-11-2026", day: "Sunday" }
 ];
 
 const departmentData = [

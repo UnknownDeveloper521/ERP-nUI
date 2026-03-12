@@ -33,9 +33,18 @@ import {
   CommandInputBorderless,
 } from "@/components/ui/command";
 import { Badge } from "@/components/ui/badge";
-import { Plus, Search, Eye, ChevronLeft, ChevronRight, ChevronsUpDown, Check } from "lucide-react";
+import { Plus, Search, Eye, ChevronLeft, ChevronRight, ChevronsUpDown, Check, Upload, Printer } from "lucide-react";
+import { DataTablePagination } from "@/components/shared/DataTablePagination";
 import { useToast } from "@/hooks/use-toast";
 import { cn } from "@/lib/utils";
+import * as XLSX from "xlsx";
+import { mockBatchRecords } from "@/lib/batchSharedData";
+import { 
+  mockReleaseRecords, 
+  addReleaseRecord, 
+  OperationRelease, 
+  ProducedItem 
+} from "@/lib/releaseSharedData";
 
 // ============================================================================
 // OPERATION-WISE RELEASE REQUEST / ISSUE TO WH MODULE
@@ -124,21 +133,11 @@ const generateReleaseNumber = (existingReleases: OperationRelease[]): string => 
  * @property workCenter - Work center where production occurred
  * @property warehouse - Target warehouse for delivery
  * @property batchIds - Array of batch IDs included in this release
- * @property status - Current status: "Issued to WH" or "Received by WH"
+ * @property status - Current status: "Issued to Warehouse" or "Received By Warehouse"
  * @property items - Array of produced items included in this release
  */
-interface OperationRelease {
-  id: number;
-  releaseNo: string;
-  releaseDate: string;
-  releasedBy: string;
-  operation: string;
-  workCenter: string;
-  warehouse: string;
-  batchIds: string[];
-  status: "Issued to WH" | "Received by WH";
-  items: ProducedItem[];
-}
+// OperationRelease and ProducedItem are imported from @/lib/releaseSharedData
+
 
 /**
  * Produced Item Interface
@@ -151,13 +150,8 @@ interface OperationRelease {
  * @property uom - Unit of measurement (e.g., PCS, KG, MTR)
  * @property qtyProduced - Total quantity produced across selected batches
  */
-interface ProducedItem {
-  id: number;
-  itemCode: string;
-  itemName: string;
-  uom: string;
-  qtyProduced: number;
-}
+// ProducedItem is imported from @/lib/releaseSharedData
+
 
 /**
  * Operation Master Interface
@@ -209,8 +203,8 @@ interface BatchTracking {
   warehouse: string;
   shift: "Morning" | "Night";
   status: string;
-  qcStatus: "Verified" | "Pending" | "N/A";
-  outputItems: ProducedItem[];
+  qcStatus: string; // Changed to string for flexibility with "Verified" value
+  outputItems: ProducedItem[]; // Use imported ProducedItem
 }
 
 // ============================================================================
@@ -332,32 +326,37 @@ export default function MaterialRelease() {
   // ============================================================================
   // STATE - LISTING PAGE
   // ============================================================================
-  
+
   const [searchTerm, setSearchTerm] = useState("");
-  const [statusFilter, setStatusFilter] = useState("Issued to WH");
+  const [statusFilter, setStatusFilter] = useState("Issued to Warehouse"); // Default filter to show issued
   const [currentPage, setCurrentPage] = useState(1);
   const [isViewModalOpen, setIsViewModalOpen] = useState(false);
   const [viewingRelease, setViewingRelease] = useState<OperationRelease | null>(null);
-  const itemsPerPage = 10;
+  const [releases, setReleases] = useState<OperationRelease[]>(mockReleaseRecords);
+  // Pagination state - using DataTablePagination component
+  const [itemsPerPage, setItemsPerPage] = useState(10);
 
   // ============================================================================
   // STATE - CREATE MODAL
   // ============================================================================
-  
+
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
   const [selectedOperation, setSelectedOperation] = useState("");
   const [selectedWorkCenter, setSelectedWorkCenter] = useState("");
   const [selectedWarehouse, setSelectedWarehouse] = useState("");
   const [eligibleBatches, setEligibleBatches] = useState<BatchTracking[]>([]);
   const [selectedBatchIds, setSelectedBatchIds] = useState<number[]>([]);
-  
+
   const [formData, setFormData] = useState({
     releaseNo: "",
     releaseDate: getCurrentDateForInput(),
     releasedBy: "Admin User", // TODO: Get from login context
   });
-  
+
   const [producedItems, setProducedItems] = useState<ProducedItem[]>([]);
+
+  // Serial Numbers for batches/items: Record<batchNo, Record<itemCode, serialNumbers[]>>
+  const [batchSerialNumbers, setBatchSerialNumbers] = useState<Record<string, Record<string, string[]>>>({});
 
   // ============================================================================
   // EFFECTS
@@ -373,144 +372,25 @@ export default function MaterialRelease() {
 
   // Operation Masters with QC requirements
   const operationMasters: OperationMaster[] = [
-    { operation: "Cutting", qcRequired: false },
-    { operation: "Welding", qcRequired: true },
-    { operation: "Assembly", qcRequired: true },
+    { operation: "Lead Generation & Purification", qcRequired: true },
+    { operation: "Case Creation", qcRequired: false },
+    { operation: "Grid Creation & Oxidization", qcRequired: true },
+    { operation: "Assembly line & Packaging", qcRequired: true },
   ];
 
   // Work Centers mapped to operations
   const workCenterMappings: WorkCenterMapping[] = [
-    { operation: "Cutting", workCenter: "WC-001 Cutting Bay" },
-    { operation: "Cutting", workCenter: "WC-005 Cutting Station 2" },
-    { operation: "Welding", workCenter: "WC-002 Welding Station" },
-    { operation: "Welding", workCenter: "WC-006 Welding Bay 2" },
-    { operation: "Assembly", workCenter: "WC-003 Assembly Line" },
-    { operation: "Assembly", workCenter: "WC-007 Assembly Station 2" },
+    { operation: "Lead Generation & Purification", workCenter: "Lead Furnace Center" },
+    { operation: "Case Creation", workCenter: "Plastic Casing Center" },
+    { operation: "Grid Creation & Oxidization", workCenter: "Grid Generation Center" },
+    { operation: "Assembly line & Packaging", workCenter: "Assembly Line" },
   ];
 
   // Warehouses
-  const warehouses = ["Production Store", "Raw Material Store", "Finished Goods Store"];
+  const warehouses = ["Jinja WH"];
 
-  // Sample Batch Tracking data with QC status
-  const allBatches: BatchTracking[] = [
-    // Cutting batches (QC not required - show if Completed)
-    {
-      id: 1,
-      batchNo: "BATCH-2026-001",
-      operation: "Cutting",
-      workCenter: "WC-001 Cutting Bay",
-      warehouse: "Production Store",
-      shift: "Morning",
-      status: "Completed",
-      qcStatus: "N/A",
-      outputItems: [
-        { id: 1, itemCode: "FG001", itemName: "Steel Plate Cut", uom: "PCS", qtyProduced: 50 },
-        { id: 2, itemCode: "FG002", itemName: "Steel Rod Cut", uom: "PCS", qtyProduced: 100 },
-      ]
-    },
-    {
-      id: 2,
-      batchNo: "BATCH-2026-006",
-      operation: "Cutting",
-      workCenter: "WC-001 Cutting Bay",
-      warehouse: "Production Store",
-      shift: "Night",
-      status: "Completed",
-      qcStatus: "N/A",
-      outputItems: [
-        { id: 3, itemCode: "FG001", itemName: "Steel Plate Cut", uom: "PCS", qtyProduced: 45 },
-      ]
-    },
-    // Welding batches (QC required - show only if Verified)
-    {
-      id: 3,
-      batchNo: "BATCH-2026-002",
-      operation: "Welding",
-      workCenter: "WC-002 Welding Station",
-      warehouse: "Production Store",
-      shift: "Morning",
-      status: "Completed",
-      qcStatus: "Verified",
-      outputItems: [
-        { id: 4, itemCode: "FG003", itemName: "Welded Frame", uom: "PCS", qtyProduced: 25 },
-      ]
-    },
-    {
-      id: 4,
-      batchNo: "BATCH-2026-003",
-      operation: "Welding",
-      workCenter: "WC-002 Welding Station",
-      warehouse: "Production Store",
-      shift: "Night",
-      status: "Completed",
-      qcStatus: "Verified",
-      outputItems: [
-        { id: 5, itemCode: "FG003", itemName: "Welded Frame", uom: "PCS", qtyProduced: 30 },
-        { id: 6, itemCode: "FG006", itemName: "Welded Bracket", uom: "PCS", qtyProduced: 15 },
-      ]
-    },
-    {
-      id: 5,
-      batchNo: "BATCH-2026-004",
-      operation: "Welding",
-      workCenter: "WC-002 Welding Station",
-      warehouse: "Production Store",
-      shift: "Morning",
-      status: "Completed",
-      qcStatus: "Pending", // Should NOT show - QC not verified yet
-      outputItems: [
-        { id: 7, itemCode: "FG003", itemName: "Welded Frame", uom: "PCS", qtyProduced: 20 },
-      ]
-    },
-    // Assembly batches (QC required - show only if Verified)
-    {
-      id: 6,
-      batchNo: "BATCH-2026-005",
-      operation: "Assembly",
-      workCenter: "WC-003 Assembly Line",
-      warehouse: "Production Store",
-      shift: "Morning",
-      status: "Completed",
-      qcStatus: "Verified",
-      outputItems: [
-        { id: 8, itemCode: "FG004", itemName: "Assembled Unit", uom: "PCS", qtyProduced: 10 },
-        { id: 9, itemCode: "FG005", itemName: "Sub Assembly", uom: "PCS", qtyProduced: 20 },
-      ]
-    },
-  ];
+  // Sample operation releases data moved to releaseSharedData.ts
 
-  // Sample operation releases data
-  const [releases, setReleases] = useState<OperationRelease[]>([
-    {
-      id: 1,
-      releaseNo: "REL-2026-001",
-      releaseDate: "2026-02-10",
-      releasedBy: "John Doe",
-      operation: "Welding",
-      workCenter: "WC-002 Welding Station",
-      warehouse: "Production Store",
-      batchIds: ["BATCH-2026-002"],
-      status: "Issued to WH",
-      items: [
-        { id: 1, itemCode: "FG003", itemName: "Welded Frame", uom: "PCS", qtyProduced: 25 },
-      ]
-    },
-    {
-      id: 2,
-      releaseNo: "REL-2026-002",
-      releaseDate: "2026-02-15",
-      releasedBy: "Jane Smith",
-      operation: "Cutting",
-      workCenter: "WC-001 Cutting Bay",
-      warehouse: "Production Store",
-      batchIds: ["BATCH-2026-001"],
-      status: "Received by WH",
-      items: [
-        { id: 2, itemCode: "FG001", itemName: "Steel Plate Cut", uom: "PCS", qtyProduced: 50 },
-        { id: 3, itemCode: "FG002", itemName: "Steel Rod Cut", uom: "PCS", qtyProduced: 100 },
-      ]
-    },
-  ]);
 
   // ============================================================================
   // EFFECTS
@@ -525,26 +405,16 @@ export default function MaterialRelease() {
   // - If QC Required = YES: Show only batches with QC Status = "Verified"
   // - If QC Required = NO: Show only batches with Batch Status = "Completed"
   useEffect(() => {
-    if (selectedOperation && selectedWorkCenter) {
-      const operationMaster = operationMasters.find(om => om.operation === selectedOperation);
-      const qcRequired = operationMaster?.qcRequired || false;
-
-      // Filter batches by Operation + Work Center + Eligibility
-      const filtered = allBatches.filter(batch => {
+    if (selectedOperation && selectedWorkCenter && selectedWarehouse) {
+      // Filter batches by Operation + Work Center + Eligibility from shared records
+      const filtered = (mockBatchRecords as any[]).filter(batch => {
         const matchesOperation = batch.operation === selectedOperation;
         const matchesWorkCenter = batch.workCenter === selectedWorkCenter;
+        const matchesWarehouse = batch.warehouse === selectedWarehouse;
         
-        // Eligibility check based on QC requirement
-        let isEligible = false;
-        if (qcRequired) {
-          // QC Required = YES: Show only batches with QC Status = Verified
-          isEligible = batch.qcStatus === "Verified";
-        } else {
-          // QC Required = NO: Show only batches with Batch Status = Completed
-          isEligible = batch.status === "Completed";
-        }
-
-        return matchesOperation && matchesWorkCenter && isEligible;
+        // Per User Rule: Show only "Verified QC" batches
+        // Note: qcStatus is "Verified" when QC is completed successfully
+        return matchesOperation && matchesWorkCenter && matchesWarehouse && batch.qcStatus === "Verified";
       });
 
       setEligibleBatches(filtered);
@@ -555,15 +425,14 @@ export default function MaterialRelease() {
       setSelectedBatchIds([]);
       setProducedItems([]);
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedOperation, selectedWorkCenter]);
+  }, [selectedOperation, selectedWorkCenter, selectedWarehouse]);
 
   // Auto-calculate produced items when batch selection changes
   // Groups items by itemCode and sums quantities across all selected batches
   useEffect(() => {
     if (selectedBatchIds.length > 0) {
       const selectedBatches = eligibleBatches.filter(b => selectedBatchIds.includes(b.id));
-      
+
       // Group items by itemCode and sum quantities
       const itemsMap = new Map<string, ProducedItem>();
 
@@ -613,7 +482,7 @@ export default function MaterialRelease() {
       releaseNo: generateReleaseNumber(releases),
       releaseDate: getCurrentDateForInput(),
     }));
-    
+
     // Open modal
     setIsCreateModalOpen(true);
   };
@@ -628,7 +497,7 @@ export default function MaterialRelease() {
   const handleCancel = () => {
     // Close modal
     setIsCreateModalOpen(false);
-    
+
     // Reset form
     setSelectedOperation("");
     setSelectedWorkCenter("");
@@ -719,8 +588,16 @@ export default function MaterialRelease() {
     const selectedBatches = eligibleBatches.filter(b => selectedBatchIds.includes(b.id));
     const batchNumbers = selectedBatches.map(b => b.batchNo);
 
+    // ✅ ADDED: Store batch-wise produced qty breakdown for Release Details view (frontend-only)
+    // NOTE: Frontend-only grouping using existing response data; no backend changes
+    const batchDetails = selectedBatches.map(batch => ({
+      batchNo: batch.batchNo,
+      shift: batch.shift,
+      items: batch.outputItems
+    }));
+
     const newRelease: OperationRelease = {
-      id: releases.length + 1,
+      id: mockReleaseRecords.length + 1,
       releaseNo: formData.releaseNo,
       releaseDate: formData.releaseDate,
       releasedBy: formData.releasedBy,
@@ -728,20 +605,12 @@ export default function MaterialRelease() {
       workCenter: selectedWorkCenter,
       warehouse: selectedWarehouse,
       batchIds: batchNumbers,
-      status: "Issued to WH",
+      status: "Issued to Warehouse",
       items: producedItems,
+      batchDetails: batchDetails,
     };
 
-    setReleases([...releases, newRelease]);
-
-    // Update batch statuses to "Issued to WH / Pending WH Receipt"
-    // TODO: In real implementation, update batch records in database
-    console.log("Updating batch statuses to 'Issued to WH':", batchNumbers);
-
-    // Push to Inventory module
-    // TODO: In real implementation, create inventory receipt record
-    console.log("Creating inventory receipt record for warehouse:", selectedWarehouse);
-    console.log("Items:", producedItems);
+    setReleases(addReleaseRecord(newRelease));
 
     toast({
       title: "Success",
@@ -756,6 +625,151 @@ export default function MaterialRelease() {
     setEligibleBatches([]);
     setSelectedBatchIds([]);
     setProducedItems([]);
+    setBatchSerialNumbers({}); // Reset serial numbers
+  };
+
+  /**
+   * Handle Excel import for serial numbers
+   */
+  const handleImportSerialNumbers = (batchNo: string, itemCode: string, file: File, expectedQty: number) => {
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      try {
+        const data = new Uint8Array(e.target?.result as ArrayBuffer);
+        const workbook = XLSX.read(data, { type: "array" });
+        const sheetName = workbook.SheetNames[0];
+        const worksheet = workbook.Sheets[sheetName];
+        const json = XLSX.utils.sheet_to_json(worksheet, { header: 1 }) as any[][];
+
+        // Assuming serial numbers are in the first column, skipping header if exists
+        // Filter out empty rows
+        let serialNumbers = json
+          .map(row => row[0])
+          .filter(val => val !== undefined && val !== "" && val !== null)
+          .map(val => String(val).trim());
+
+        // If the first row is likely a header (non-numeric and count is one extra), skip it
+        if (serialNumbers.length === expectedQty + 1 && isNaN(Number(serialNumbers[0]))) {
+          serialNumbers.shift();
+        }
+
+        if (serialNumbers.length !== expectedQty) {
+          toast({
+            title: "Import Error",
+            description: `Number of serial numbers (${serialNumbers.length}) does not match produced quantity (${expectedQty}).`,
+            variant: "destructive",
+          });
+          return;
+        }
+
+        setBatchSerialNumbers(prev => ({
+          ...prev,
+          [batchNo]: {
+            ...(prev[batchNo] || {}),
+            [itemCode]: serialNumbers,
+          },
+        }));
+
+        toast({
+          title: "Import Success",
+          description: `Imported ${serialNumbers.length} serial numbers for batch ${batchNo}.`,
+        });
+      } catch (error) {
+        console.error("Excel import error:", error);
+        toast({
+          title: "Import Error",
+          description: "Failed to parse Excel file.",
+          variant: "destructive",
+        });
+      }
+    };
+    reader.readAsArrayBuffer(file);
+  };
+
+  /**
+   * Handle QR code generation and printing
+   */
+  const handleGenerateQR = (batchNo: string, itemCode: string, itemName: string) => {
+    const serialNumbers = batchSerialNumbers[batchNo]?.[itemCode];
+    if (!serialNumbers || serialNumbers.length === 0) {
+      toast({
+        title: "Error",
+        description: "No serial numbers imported for this batch.",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    // Create a printable window
+    const printWindow = window.open("", "_blank");
+    if (!printWindow) return;
+
+    const qrItemsHtml = serialNumbers.map(srNo => `
+      <div class="qr-item">
+        <div class="qr-code">
+          <!-- Simplified representation as we can't easily inject React component -->
+          <img src="https://api.qrserver.com/v1/create-qr-code/?size=150x150&data=${encodeURIComponent(`Batch:${batchNo}|SrNo:${srNo}|Item:${itemName}|Code:${itemCode}`)}" alt="QR" />
+        </div>
+        <div class="qr-info">
+          <div><strong>Batch:</strong> ${batchNo}</div>
+          <div><strong>SrNo:</strong> ${srNo}</div>
+          <div><strong>Item:</strong> ${itemName}</div>
+          <div><strong>Code:</strong> ${itemCode}</div>
+        </div>
+      </div>
+    `).join("");
+
+    printWindow.document.write(`
+      <html>
+        <head>
+          <title>QR Codes - ${batchNo}</title>
+          <style>
+            @page { size: auto; margin: 10mm; }
+            body { font-family: 'Inter', sans-serif; margin: 0; padding: 10px; color: #333; }
+            h2 { text-align: center; color: #000; margin-bottom: 20px; border-bottom: 2px solid #eee; padding-bottom: 10px; }
+            .print-grid {
+              display: grid;
+              grid-template-columns: repeat(2, 1fr);
+              gap: 15px;
+            }
+            .qr-item {
+              border: 1.5px solid #e2e8f0;
+              border-radius: 8px;
+              padding: 15px;
+              text-align: center;
+              page-break-inside: avoid;
+              display: flex;
+              flex-direction: column;
+              align-items: center;
+              justify-content: center;
+              background: #fff;
+              height: 250px;
+            }
+            .qr-code { margin-bottom: 10px; }
+            .qr-info { 
+              font-size: 11px; 
+              line-height: 1.4;
+              text-align: left;
+              width: 100%;
+              max-width: 180px;
+              margin: 0 auto;
+            }
+            .qr-info div { margin-bottom: 2px; }
+            .qr-info strong { color: #64748b; font-size: 9px; text-transform: uppercase; letter-spacing: 0.05em; margin-right: 4px; }
+            @media print {
+              .qr-item { border-color: #eee; }
+            }
+          </style>
+        </head>
+        <body onload="window.print(); window.close();">
+          <h2>QR Code Generation - Batch: ${batchNo}</h2>
+          <div class="print-grid">
+            ${qrItemsHtml}
+          </div>
+        </body>
+      </html>
+    `);
+    printWindow.document.close();
   };
 
   // ============================================================================
@@ -763,11 +777,11 @@ export default function MaterialRelease() {
   // ============================================================================
 
   const filteredReleases = releases.filter(release => {
-    const matchesSearch = 
+    const matchesSearch =
       release.releaseNo.toLowerCase().includes(searchTerm.toLowerCase()) ||
       release.operation.toLowerCase().includes(searchTerm.toLowerCase()) ||
       release.workCenter.toLowerCase().includes(searchTerm.toLowerCase());
-    
+
     const matchesStatus = statusFilter === "All" || release.status === statusFilter;
 
     return matchesSearch && matchesStatus;
@@ -779,6 +793,18 @@ export default function MaterialRelease() {
     currentPage * itemsPerPage
   );
 
+  // Auto-adjust page when data changes
+  useEffect(() => {
+    if (currentPage > totalPages && totalPages > 0) {
+      setCurrentPage(totalPages);
+    }
+  }, [filteredReleases.length, currentPage, totalPages]);
+
+  // Reset to page 1 when filters change
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [searchTerm, statusFilter]);
+
   // ============================================================================
   // RENDER - LISTING PAGE
   // ============================================================================
@@ -786,63 +812,67 @@ export default function MaterialRelease() {
   // Get work centers for selected operation (used in create modal)
   const availableWorkCenters = selectedOperation
     ? workCenterMappings
-        .filter(wc => wc.operation === selectedOperation)
-        .map(wc => wc.workCenter)
+      .filter(wc => wc.operation === selectedOperation)
+      .map(wc => wc.workCenter)
     : [];
 
   // Check if primary button should be disabled (used in create modal)
-  const isPrimaryButtonDisabled = 
-    !selectedOperation || 
+  const isPrimaryButtonDisabled =
+    !selectedOperation ||
     !selectedWorkCenter ||
     !selectedWarehouse ||
     selectedBatchIds.length === 0;
+
+  // Check if any selected item is Finished Good (FG)
+  const isFGProduced = producedItems.some(item => item.itemCode.toLowerCase().startsWith("fg-"));
+  const selectedBatches = eligibleBatches.filter(b => selectedBatchIds.includes(b.id));
 
   return (
     <div className="flex flex-col gap-6 h-full">
       {/* Page Header */}
       <div className="flex flex-col gap-2">
-        <h1 className="text-3xl font-bold tracking-tight">Material Release</h1>
+        <h1 className="text-3xl font-bold tracking-tight text-[#1a1c1e]">Material Release</h1>
         <p className="text-muted-foreground">
           Release produced output from production operations to warehouse
         </p>
       </div>
 
       {/* Search and Filter Section */}
-      <div className="flex flex-col sm:flex-row items-end gap-4 bg-card p-4 rounded-lg border shadow-sm">
-        <div className="w-full sm:flex-1">
-          <Label className="mb-1.5 block text-xs font-medium text-muted-foreground uppercase tracking-wider">
+      <div className="flex flex-col md:flex-row items-end justify-between gap-4 bg-card p-4 rounded-lg border shadow-sm">
+        <div className="flex-1 w-full max-w-md space-y-1.5">
+          <Label className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">
             Search
           </Label>
           <div className="relative">
             <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
             <Input
-              placeholder="Search by Release No / Operation / Work Center..."
-              className="pl-9 h-10"
+              placeholder="Search by Release No / Operation..."
+              className="pl-9 h-10 border-input"
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
             />
           </div>
         </div>
 
-        <div className="w-full sm:w-48">
-          <Label className="mb-1.5 block text-xs font-medium text-muted-foreground uppercase tracking-wider">
-            Status
-          </Label>
-          <SearchableSelect
-            value={statusFilter}
-            onValueChange={setStatusFilter}
-            options={[
-              { value: "All", label: "All" },
-              { value: "Issued to WH", label: "Issued to WH" },
-              { value: "Received by WH", label: "Received by WH" },
-            ]}
-            placeholder="Select Status"
-            searchPlaceholder="Search status..."
-          />
-        </div>
-
-        <div className="w-full sm:w-auto">
-          <Button onClick={handleAddRelease}>
+        <div className="flex items-end gap-3 w-full md:w-auto">
+          <div className="w-full md:w-64 space-y-1.5">
+            <Label className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">
+              Status
+            </Label>
+            <SearchableSelect
+              value={statusFilter}
+              onValueChange={setStatusFilter}
+              options={[
+                { value: "All", label: "All" },
+                { value: "Issued to Warehouse", label: "Issued to Warehouse" },
+                { value: "Received By Warehouse", label: "Received By Warehouse" },
+              ]}
+              placeholder="Select Status"
+              searchPlaceholder="Search status..."
+            />
+          </div>
+          
+          <Button onClick={handleAddRelease} className="h-10 px-6">
             <Plus className="mr-2 h-4 w-4" />
             Add Release
           </Button>
@@ -881,9 +911,10 @@ export default function MaterialRelease() {
                       <TableCell>{release.workCenter}</TableCell>
                       <TableCell>{release.warehouse}</TableCell>
                       <TableCell>
-                        <Badge variant={
-                          release.status === "Issued to WH" ? "default" : "secondary"
-                        }>
+                        <Badge 
+                          variant={release.status === "Issued to Warehouse" ? "default" : "secondary"}
+                          className="whitespace-nowrap w-fit px-2.5 py-0.5"
+                        >
                           {release.status}
                         </Badge>
                       </TableCell>
@@ -904,33 +935,17 @@ export default function MaterialRelease() {
             </Table>
           </div>
 
-          {/* Pagination */}
+          {/* Pagination - using standardized DataTablePagination component */}
           {filteredReleases.length > 0 && (
-            <div className="flex justify-between items-center px-1 mt-4">
-              <div className="text-sm text-muted-foreground">
-                Showing {(currentPage - 1) * itemsPerPage + 1} to{" "}
-                {Math.min(currentPage * itemsPerPage, filteredReleases.length)} of{" "}
-                {filteredReleases.length} entries
-              </div>
-              <div className="flex gap-2">
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
-                  disabled={currentPage === 1}
-                >
-                  <ChevronLeft className="h-4 w-4" />
-                </Button>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
-                  disabled={currentPage >= totalPages || totalPages === 0}
-                >
-                  <ChevronRight className="h-4 w-4" />
-                </Button>
-              </div>
-            </div>
+            <DataTablePagination
+              currentPage={currentPage}
+              totalPages={totalPages}
+              totalItems={filteredReleases.length}
+              itemsPerPage={itemsPerPage}
+              onPageChange={setCurrentPage}
+              onItemsPerPageChange={setItemsPerPage}
+              options={[10, 15, 30, 50]}
+            />
           )}
         </CardContent>
       </Card>
@@ -958,9 +973,10 @@ export default function MaterialRelease() {
                 </div>
                 <div>
                   <Label className="text-xs text-muted-foreground">Status</Label>
-                  <Badge variant={
-                    viewingRelease.status === "Issued to WH" ? "default" : "secondary"
-                  }>
+                  <Badge 
+                    variant={viewingRelease.status === "Issued to Warehouse" ? "default" : "secondary"}
+                    className="whitespace-nowrap w-fit px-2.5 py-0.5"
+                  >
                     {viewingRelease.status}
                   </Badge>
                 </div>
@@ -986,15 +1002,55 @@ export default function MaterialRelease() {
                 </div>
               </div>
 
-              {/* Produced Items Table */}
+              {/* Batch-wise Produced Items (Breakdown) */}
+              {/* ✅ ADDED: Release Details shows batch-wise produced qty breakdown (batch -> items -> qty) */}
+              {/* ✅ NOTE: Frontend-only grouping using existing response data; no backend changes */}
+              {viewingRelease.batchDetails && viewingRelease.batchDetails.length > 0 && (
+                <div>
+                  <Label className="text-sm font-semibold mb-2 block">Batch-wise Produced Items (Breakdown)</Label>
+                  <div className="rounded-md border">
+                    <Table>
+                      <TableHeader>
+                        <TableRow className="bg-muted/50">
+                          <TableHead>Shift</TableHead>
+                          <TableHead>Batch No</TableHead>
+                          <TableHead>Items Produced</TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {viewingRelease.batchDetails.map((batchDetail, idx) => (
+                          <TableRow key={idx}>
+                            <TableCell>
+                              <Badge variant="outline">{batchDetail.shift}</Badge>
+                            </TableCell>
+                            <TableCell className="font-medium">{batchDetail.batchNo}</TableCell>
+                            <TableCell>
+                              <div className="flex flex-col gap-1">
+                                {batchDetail.items.map((item, itemIdx) => (
+                                  <div key={itemIdx} className="text-sm">
+                                    <span className="font-medium">{item.itemCode}:</span>{" "}
+                                    <span className="text-muted-foreground">{item.qtyProduced} {item.uom}</span>
+                                  </div>
+                                ))}
+                              </div>
+                            </TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  </div>
+                </div>
+              )}
+
+              {/* Total Summary - Produced Items Table */}
               <div>
-                <Label className="text-sm font-semibold mb-2 block">Produced Items</Label>
+                <Label className="text-sm font-semibold mb-2 block">Total Summary</Label>
                 <div className="rounded-md border">
                   <Table>
                     <TableHeader>
                       <TableRow className="bg-muted/50">
                         <TableHead>Item</TableHead>
-                        <TableHead>Qty Produced</TableHead>
+                        <TableHead className="text-right">Total Qty</TableHead>
                       </TableRow>
                     </TableHeader>
                     <TableBody>
@@ -1007,7 +1063,7 @@ export default function MaterialRelease() {
                               <div className="text-xs text-muted-foreground">{item.uom}</div>
                             </div>
                           </TableCell>
-                          <TableCell>{item.qtyProduced}</TableCell>
+                          <TableCell className="text-right font-medium">{item.qtyProduced}</TableCell>
                         </TableRow>
                       ))}
                     </TableBody>
@@ -1030,7 +1086,7 @@ export default function MaterialRelease() {
           handleCancel();
         }
       }}>
-        <DialogContent className="sm:max-w-[900px] max-h-[90vh] overflow-y-auto">
+        <DialogContent className="sm:max-w-[950px] max-h-[95vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle>Create Material Release</DialogTitle>
             <DialogDescription>
@@ -1038,7 +1094,7 @@ export default function MaterialRelease() {
             </DialogDescription>
           </DialogHeader>
 
-          <div className="space-y-4">
+          <div className="space-y-6">
             {/* Header Summary Section */}
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
               {/* Auto-filled fields (read-only) */}
@@ -1048,11 +1104,11 @@ export default function MaterialRelease() {
               </div>
               <div>
                 <Label>Release Date</Label>
-                <Input 
-                  type="date" 
-                  value={formData.releaseDate} 
-                  readOnly 
-                  className="bg-muted" 
+                <Input
+                  type="date"
+                  value={formData.releaseDate}
+                  readOnly
+                  className="bg-muted"
                 />
               </div>
               <div>
@@ -1168,21 +1224,130 @@ export default function MaterialRelease() {
               )}
             </div>
 
+            {/* ✅ NEW: Import Serial Number & QR Generation Table */}
+            {isFGProduced && selectedBatches.length > 0 && (
+              <div className="space-y-3 animate-in fade-in slide-in-from-top-4 duration-300">
+                <div className="flex items-center justify-between">
+                  <Label className="text-sm font-semibold text-primary">Serial Number Import & QR Generation</Label>
+                  <Badge variant="secondary" className="font-normal text-[10px] uppercase tracking-wider px-2">
+                    Finished Goods Detected
+                  </Badge>
+                </div>
+                <div className="rounded-md border border-primary/20 bg-primary/5 p-1">
+                  <Table>
+                    <TableHeader>
+                      <TableRow className="bg-primary/10 border-none hover:bg-primary/10">
+                        <TableHead className="text-primary font-bold">Batch No</TableHead>
+                        <TableHead className="text-primary font-bold">Item Details</TableHead>
+                        <TableHead className="text-primary font-bold">Import Serial No</TableHead>
+                        <TableHead className="text-primary font-bold">Import Count</TableHead>
+                        <TableHead className="text-right text-primary font-bold">Generate QR</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {selectedBatches.flatMap((batch) => {
+                        // Filter for FG items in this batch
+                        const fgItems = batch.outputItems.filter(item =>
+                          item.itemCode.toLowerCase().startsWith("fg-")
+                        );
+
+                        return fgItems.map((item) => {
+                          const importedCount = batchSerialNumbers[batch.batchNo]?.[item.itemCode]?.length || 0;
+                          const expectedQty = item.qtyProduced;
+
+                          return (
+                            <TableRow key={`${batch.id}-${item.itemCode}`} className="border-primary/10">
+                              <TableCell className="font-medium">
+                                <div className="flex flex-col">
+                                  <span>{batch.batchNo}</span>
+                                  <Badge variant="outline" className="w-fit text-[10px] h-4 px-1 mt-1 font-normal">
+                                    {batch.shift}
+                                  </Badge>
+                                </div>
+                              </TableCell>
+                              <TableCell>
+                                <div className="flex flex-col">
+                                  <span className="font-bold text-sm">{item.itemName}</span>
+                                  <span className="text-xs text-muted-foreground">{item.itemCode}</span>
+                                </div>
+                              </TableCell>
+                              <TableCell>
+                                <div className="flex items-center gap-2">
+                                  <Input
+                                    type="file"
+                                    accept=".xlsx, .xls"
+                                    className="hidden"
+                                    id={`file-import-${batch.id}-${item.itemCode}`}
+                                    onChange={(e) => {
+                                      const file = e.target.files?.[0];
+                                      if (file) {
+                                        handleImportSerialNumbers(batch.batchNo, item.itemCode, file, expectedQty);
+                                      }
+                                    }}
+                                  />
+                                  <Button
+                                    variant="outline"
+                                    size="sm"
+                                    className="h-8 border-dashed border-primary/30 hover:bg-primary/10"
+                                    onClick={() => document.getElementById(`file-import-${batch.id}-${item.itemCode}`)?.click()}
+                                  >
+                                    <Upload className="h-3.5 w-3.5 mr-2" />
+                                    Import Excel
+                                  </Button>
+                                  {importedCount > 0 && (
+                                    <Badge variant="default" className="bg-green-600 hover:bg-green-700 h-5 px-1.5 animate-in zoom-in-50 duration-300">
+                                      <Check className="h-3 w-3" />
+                                    </Badge>
+                                  )}
+                                </div>
+                              </TableCell>
+                              <TableCell>
+                                <div className="flex flex-col">
+                                  <span className={cn(
+                                    "font-bold",
+                                    importedCount === expectedQty ? "text-green-600" : "text-amber-600"
+                                  )}>
+                                    {importedCount} / {expectedQty}
+                                  </span>
+                                  <span className="text-[10px] text-muted-foreground uppercase">Imported</span>
+                                </div>
+                              </TableCell>
+                              <TableCell className="text-right">
+                                <Button
+                                  size="sm"
+                                  onClick={() => handleGenerateQR(batch.batchNo, item.itemCode, item.itemName)}
+                                  disabled={importedCount === 0}
+                                  className="h-8 shadow-sm"
+                                >
+                                  <Printer className="h-3.5 w-3.5 mr-2" />
+                                  Generate Labels
+                                </Button>
+                              </TableCell>
+                            </TableRow>
+                          );
+                        });
+                      })}
+                    </TableBody>
+                  </Table>
+                </div>
+              </div>
+            )}
+
             {/* Produced Items Section - Auto-calculated from selected batches */}
-            <div>
+            <div className="space-y-3">
               <Label className="text-sm font-semibold mb-2 block">Produced Items (Total from Selected Batches)</Label>
               {producedItems.length === 0 ? (
                 <div className="text-center py-8 text-muted-foreground border rounded-md">
                   No items to display. Select batches to see produced items.
                 </div>
               ) : (
-                <div className="rounded-md border">
+                <div className="rounded-md border shadow-sm overflow-hidden">
                   <Table>
                     <TableHeader>
-                      <TableRow className="bg-muted/50">
-                        <TableHead>Item</TableHead>
-                        <TableHead>UOM</TableHead>
-                        <TableHead>Total Qty Produced</TableHead>
+                      <TableRow className="bg-muted/50 border-none">
+                        <TableHead className="font-semibold text-foreground">Item</TableHead>
+                        <TableHead className="font-semibold text-foreground">UOM</TableHead>
+                        <TableHead className="font-semibold text-foreground text-right pr-6">Total Qty</TableHead>
                       </TableRow>
                     </TableHeader>
                     <TableBody>
@@ -1195,7 +1360,7 @@ export default function MaterialRelease() {
                             </div>
                           </TableCell>
                           <TableCell>{item.uom}</TableCell>
-                          <TableCell className="font-medium">{item.qtyProduced}</TableCell>
+                          <TableCell className="font-bold text-right pr-6">{item.qtyProduced}</TableCell>
                         </TableRow>
                       ))}
                     </TableBody>
@@ -1205,7 +1370,7 @@ export default function MaterialRelease() {
             </div>
           </div>
 
-          <DialogFooter>
+          <DialogFooter className="mt-6 border-t pt-4">
             <Button variant="outline" onClick={handleCancel}>
               Cancel
             </Button>

@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from "react";
 import { useLocation, useRoute } from "wouter";
 import { useQueryClient } from "@tanstack/react-query"; // Fixed import
+import * as XLSX from 'xlsx';
 import { useEmployees, useCreateEmployee, useUpdateEmployee, useDeleteEmployee, useDepartments } from "@/hooks/useApi";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription, CardFooter } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -28,11 +29,13 @@ import { Calendar } from "@/components/ui/calendar"; // Check if used or using H
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Command, CommandInput, CommandList, CommandEmpty, CommandGroup, CommandItem, CommandInputBorderless } from "@/components/ui/command";
-import { format } from "date-fns";
+import { format, parse } from "date-fns";
 import { CalendarIcon, Plus, Edit, Upload, Trash2, Search, User, Briefcase, FileText, ShieldCheck, FileSpreadsheet, ChevronLeft, ChevronRight, Eye, EyeOff, ChevronDown, ExternalLink, Download, ChevronsUpDown, Check, Copy, Key, Info, CheckCircle2, AlertCircle } from "lucide-react";
+import { DataTablePagination } from "@/components/shared/DataTablePagination";
 import { cn } from "@/lib/utils";
 import { useToast } from "@/hooks/use-toast";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { mockWorkCenters, mockWarehouses, mockOperations, mockLocations } from "@/lib/masterMockData";
 
 // --- Types ---
 
@@ -107,6 +110,13 @@ function SearchableSelect({
 }: SearchableSelectProps) {
     const [open, setOpen] = useState(false);
 
+    // Auto-select if only one option is available
+    useEffect(() => {
+        if (options.length === 1 && !value && !disabled) {
+            onChange(options[0]);
+        }
+    }, [options, value, onChange, disabled]);
+
     return (
         <div className="space-y-2">
             <Label>
@@ -171,7 +181,7 @@ const stateOptions: string[] = ["Maharashtra", "Delhi", "Karnataka", "Telangana"
 const countryOptions: string[] = ["India", "USA", "UK", "Canada", "Australia"];
 const designationOptions: string[] = ["Software Engineer", "Manager", "Team Lead", "Senior Engineer", "HR Manager"];
 const gradeOptions: string[] = ["A", "B", "C", "D", "E"];
-const workLocationOptions: string[] = ["Head Office", "Branch Office", "Remote", "Factory"];
+const workLocationOptions: string[] = mockLocations.map(loc => loc.name);
 const shiftOptions: string[] = ["General Shift (9 AM - 6 PM)", "Night Shift (10 PM - 7 AM)", "Flexible"];
 const employmentTypeOptions: string[] = ["Full-time", "Part-time", "Full-time on Probation", "Part-time on Probation", "Contractual"];
 const employmentStatusOptions: string[] = ["Active", "Inactive", "Terminated"];
@@ -183,23 +193,10 @@ const probationPeriodOptions: Array<{ value: string; label: string }> = [
 const genderOptions: string[] = ["Male", "Female", "Other"];
 
 // --- Mock Data for System Access ---
-// Copied from respective master files to support dropdowns
-const initialWorkCenters = [
-    { id: 1, name: "Assembly Line 1" },
-    { id: 2, name: "Packaging Unit" },
-];
-
-const initialWarehouses = [
-    { id: 1, name: "Main Warehouse" },
-    { id: 2, name: "Cold Storage" },
-];
-
-const initialOperations = [
-    { id: 1, name: "Molding" },
-    { id: 2, name: "Cutting" },
-    { id: 3, name: "Welding" },
-    { id: 4, name: "Painting" },
-];
+// Synced with masterMockData.ts
+const initialWorkCenters = mockWorkCenters.map(wc => ({ id: wc.id, name: wc.name }));
+const initialWarehouses = mockWarehouses.map(wh => ({ id: wh.id, name: wh.name }));
+const initialOperations = mockOperations.map(op => ({ id: op.id, name: op.name }));
 
 
 // --- Components ---
@@ -223,11 +220,11 @@ export default function CoreHR() {
             departmentId: "dept-001",
             designation: "Software Engineer",
             status: "active",
-            dateOfJoining: "2025-01-15",
+            dateOfJoining: "15-01-2025",
             type: "Full Time",
             address: "123 Main Street, Mumbai",
             postalCode: "400001",
-            dateOfBirth: "1995-05-15",
+            dateOfBirth: "15-05-1995",
             gender: "Male",
             employmentType: "Full Time",
             reportingTo: "Manager"
@@ -523,7 +520,8 @@ export default function CoreHR() {
     // List View State
     const [searchTerm, setSearchTerm] = useState("");
     const [currentPage, setCurrentPage] = useState(1);
-    const itemsPerPage = 10;
+    // Pagination state - using DataTablePagination component
+    const [itemsPerPage, setItemsPerPage] = useState(10);
 
     // Row Selection State
     const [selectedEmployeeIds, setSelectedEmployeeIds] = useState<string[]>([]);
@@ -704,17 +702,36 @@ export default function CoreHR() {
         return { headers, rows };
     };
 
-    // Read actual file content
-    const readFileContent = (file: File): Promise<string> => {
+    // Read actual file content as ArrayBuffer
+    const readFileContent = (file: File): Promise<ArrayBuffer> => {
         return new Promise((resolve, reject) => {
             const reader = new FileReader();
             reader.onload = (e) => {
-                const content = e.target?.result as string;
+                const content = e.target?.result as ArrayBuffer;
                 resolve(content);
             };
             reader.onerror = () => reject(new Error('Failed to read file'));
-            reader.readAsText(file);
+            reader.readAsArrayBuffer(file);
         });
+    };
+
+    // Parse file content using XLSX (handles both .csv and .xlsx)
+    const parseFileWithXLSX = (data: ArrayBuffer): { headers: string[], rows: string[][] } => {
+        const workbook = XLSX.read(data, { type: 'array' });
+        const firstSheetName = workbook.SheetNames[0];
+        const worksheet = workbook.Sheets[firstSheetName];
+
+        // Use sheet_to_json to get data as array of arrays
+        const jsonData = XLSX.utils.sheet_to_json(worksheet, { header: 1 }) as string[][];
+
+        if (jsonData.length === 0) return { headers: [], rows: [] };
+
+        const headers = jsonData[0].map(h => String(h || '').trim());
+        const rows = jsonData.slice(1).map(row =>
+            row.map(cell => String(cell || '').trim())
+        );
+
+        return { headers, rows };
     };
 
     // Validate file columns and row data
@@ -735,9 +752,9 @@ export default function CoreHR() {
             }
 
             // Read actual file content
-            let fileContent: string;
+            let fileArrayBuffer: ArrayBuffer;
             try {
-                fileContent = await readFileContent(importFile);
+                fileArrayBuffer = await readFileContent(importFile);
             } catch (error) {
                 setValidationMessage('❌ Could not read file content');
                 setIsImportValid(false);
@@ -746,8 +763,8 @@ export default function CoreHR() {
                 return;
             }
 
-            // Parse the actual CSV content
-            const { headers, rows } = parseCSVContent(fileContent);
+            // Parse the content using XLSX library (handles CSV and XLSX)
+            const { headers, rows } = parseFileWithXLSX(fileArrayBuffer);
 
             if (headers.length === 0) {
                 setValidationMessage('❌ File appears to be empty or invalid');
@@ -873,9 +890,9 @@ export default function CoreHR() {
                 className: "bg-blue-50 border-blue-200 text-blue-900"
             });
 
-            // Read and parse the actual CSV file
-            const fileContent = await readFileContent(importFile);
-            const { headers, rows } = parseCSVContent(fileContent);
+            // Read and parse the file using XLSX
+            const fileArrayBuffer = await readFileContent(importFile);
+            const { headers, rows } = parseFileWithXLSX(fileArrayBuffer);
 
             if (rows.length === 0) {
                 toast({
@@ -1051,6 +1068,18 @@ export default function CoreHR() {
     const totalPages = Math.ceil(filteredEmployees.length / itemsPerPage);
     const paginatedEmployees = filteredEmployees.slice((currentPage - 1) * itemsPerPage, currentPage * itemsPerPage);
 
+    // Auto-adjust page when data changes
+    useEffect(() => {
+        if (currentPage > totalPages && totalPages > 0) {
+            setCurrentPage(totalPages);
+        }
+    }, [filteredEmployees.length, currentPage, totalPages]);
+
+    // Reset to page 1 when filters change
+    useEffect(() => {
+        setCurrentPage(1);
+    }, [searchTerm]);
+
     console.log('Pagination:', {
         totalPages,
         paginatedEmployees: paginatedEmployees.length,
@@ -1117,7 +1146,7 @@ export default function CoreHR() {
             if (!date) return '';
             try {
                 const dateObj = typeof date === 'string' ? new Date(date) : date;
-                return isNaN(dateObj.getTime()) ? '' : format(dateObj, 'dd/MM/yyyy');
+                return isNaN(dateObj.getTime()) ? '' : format(dateObj, 'dd-MM-yyyy');
             } catch {
                 return '';
             }
@@ -1352,11 +1381,11 @@ export default function CoreHR() {
                     reportingManager: employee.reportingTo || employee.reportingManager || "",
                     workLocation: employee.workLocation || "Office",
                     shift: employee.shift || "",
-                    // Date conversions
-                    dateOfBirth: employee.dateOfBirth ? new Date(employee.dateOfBirth) : undefined,
-                    dateOfJoining: employee.dateOfJoining ? new Date(employee.dateOfJoining) : undefined,
-                    anniversaryDate: employee.anniversaryDate ? new Date(employee.anniversaryDate) : undefined,
-                    exitDate: employee.exitDate ? new Date(employee.exitDate) : undefined,
+                    // Date conversions - parse DD-MM-YYYY format
+                    dateOfBirth: employee.dateOfBirth ? parse(employee.dateOfBirth, 'dd-MM-yyyy', new Date()) : undefined,
+                    dateOfJoining: employee.dateOfJoining ? parse(employee.dateOfJoining, 'dd-MM-yyyy', new Date()) : undefined,
+                    anniversaryDate: employee.anniversaryDate ? parse(employee.anniversaryDate, 'dd-MM-yyyy', new Date()) : undefined,
+                    exitDate: employee.exitDate ? parse(employee.exitDate, 'dd-MM-yyyy', new Date()) : undefined,
                     employmentStatus: employee.status || employee.employmentStatus || "Active",
                     gender: employee.gender || "Male",
                     employmentType: employee.employmentType || employee.type || "Full Time",
@@ -1809,126 +1838,118 @@ export default function CoreHR() {
                         </div>
                     </div>
 
-                    {/* Table-like Card Layout */}
-                    <div className="bg-card border rounded-lg overflow-hidden shadow-sm" key={`employee-list-${employees.length}`}>
-                        {/* Header Row */}
-                        <div className="grid grid-cols-13 gap-4 p-4 bg-muted/40 font-medium text-sm text-muted-foreground border-b">
-                            <div className="col-span-1 flex items-center">
-                                <Checkbox
-                                    checked={isIndeterminate ? "indeterminate" : isAllSelected}
-                                    onCheckedChange={handleSelectAll}
-                                />
-                            </div>
-                            <div className="col-span-3">Name</div>
-                            <div className="col-span-2">Email</div>
-                            <div className="col-span-2">Phone No.</div>
-                            <div className="col-span-1">Gender</div>
-                            <div className="col-span-1">Dept</div>
-                            <div className="col-span-1">Designation</div>
-                            <div className="col-span-1">Status</div>
-                            <div className="col-span-1 text-right">Action</div>
-                        </div>
-
-                        {/* Loading State */}
-                        {isLoading ? (
-                            <div className="p-8 text-center text-muted-foreground">Loading employees...</div>
-                        ) : (
-                            <div className="divide-y">
-                                {paginatedEmployees.map((emp: any) => (
-                                    <div
-                                        key={emp.id}
-                                        className="grid grid-cols-13 gap-4 p-4 items-center hover:bg-muted/30 transition-colors group"
-                                    >
-                                        {/* Checkbox */}
-                                        <div className="col-span-1 flex items-center" onClick={(e) => e.stopPropagation()}>
+                    {/* Table-like Card Layout - UI matches Materials reference */}
+                    <Card>
+                        <CardContent className="pt-6">
+                            <div className="rounded-md border">
+                                <div className="bg-card overflow-hidden">
+                                    {/* Header Row */}
+                                    <div className="grid grid-cols-13 gap-4 p-4 bg-muted/50 font-semibold text-xs text-muted-foreground border-b uppercase tracking-wider">
+                                        <div className="col-span-1 flex items-center">
                                             <Checkbox
-                                                checked={selectedEmployeeIds.includes(emp.id)}
-                                                onCheckedChange={(checked) => handleSelectEmployee(emp.id, checked as boolean)}
+                                                checked={isIndeterminate ? "indeterminate" : isAllSelected}
+                                                onCheckedChange={handleSelectAll}
                                             />
                                         </div>
-
-                                        {/* Name with Avatar */}
-                                        <div className="col-span-3 flex items-center gap-3 cursor-pointer" onClick={() => handleEdit(emp)}>
-                                            <div className="h-9 w-9 rounded-full bg-primary/10 flex items-center justify-center text-primary font-semibold text-sm">
-                                                {emp.firstName.charAt(0)}{emp.lastName.charAt(0)}
-                                            </div>
-                                            <div className="flex flex-col">
-                                                <span className="font-medium text-sm text-foreground">{emp.firstName} {emp.lastName}</span>
-                                                <span className="text-xs text-muted-foreground">{emp.employeeId}</span>
-                                            </div>
-                                        </div>
-
-                                        {/* Email */}
-                                        <div className="col-span-2 text-sm text-muted-foreground truncate cursor-pointer" title={emp.email} onClick={() => handleEdit(emp)}>
-                                            {emp.email}
-                                        </div>
-
-                                        {/* Phone */}
-                                        <div className="col-span-2 text-sm text-muted-foreground cursor-pointer" onClick={() => handleEdit(emp)}>
-                                            {emp.phone}
-                                        </div>
-
-                                        {/* Gender */}
-                                        <div className="col-span-1 text-sm text-muted-foreground cursor-pointer" onClick={() => handleEdit(emp)}>
-                                            {emp.gender || "Male"}
-                                        </div>
-
-                                        {/* Department */}
-                                        <div className="col-span-1 text-sm text-muted-foreground cursor-pointer" onClick={() => handleEdit(emp)}>
-                                            {departments.find((d: any) => d.id === emp.departmentId)?.code || emp.departmentId}
-                                        </div>
-
-                                        {/* Designation */}
-                                        <div className="col-span-1 text-sm text-muted-foreground truncate cursor-pointer" onClick={() => handleEdit(emp)}>
-                                            {emp.designation}
-                                        </div>
-
-                                        {/* Status */}
-                                        <div className="col-span-1 cursor-pointer" onClick={() => handleEdit(emp)}>
-                                            <Badge variant={emp.status?.toLowerCase() === 'active' ? 'default' : 'secondary'} className={cn("text-xs font-normal lowercase", emp.status?.toLowerCase() === 'active' ? "bg-green-100 text-green-700 hover:bg-green-100" : "bg-gray-100 text-gray-700")}>
-                                                {emp.status?.toLowerCase()}
-                                            </Badge>
-                                        </div>
-
-                                        {/* Actions */}
-                                        <div className="col-span-1 flex justify-end gap-2" onClick={(e) => e.stopPropagation()}>
-                                            <Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground hover:text-primary" onClick={() => handleEdit(emp)}>
-                                                <Eye className="h-4 w-4" />
-                                            </Button>
-                                        </div>
+                                        <div className="col-span-3">Name</div>
+                                        <div className="col-span-2">Email</div>
+                                        <div className="col-span-2">Phone No.</div>
+                                        <div className="col-span-1">Gender</div>
+                                        <div className="col-span-1">Dept</div>
+                                        <div className="col-span-1">Designation</div>
+                                        <div className="col-span-1">Status</div>
+                                        <div className="col-span-1 text-right pr-6">Action</div>
                                     </div>
-                                ))}
-                                {paginatedEmployees.length === 0 && (
-                                    <div className="p-8 text-center text-muted-foreground">No employees found.</div>
-                                )}
-                            </div>
-                        )}
-                    </div>
 
-                    {/* Pagination */}
-                    <div className="flex justify-between items-center px-1">
-                        <div className="text-sm text-muted-foreground">
-                            Showing {(currentPage - 1) * itemsPerPage + 1} to {Math.min(currentPage * itemsPerPage, filteredEmployees.length)} of {filteredEmployees.length} entries
-                        </div>
-                        <div className="flex gap-2">
-                            <Button
-                                variant="outline"
-                                size="sm"
-                                onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
-                                disabled={currentPage === 1}
-                            >
-                                <ChevronLeft className="h-4 w-4" />
-                            </Button>
-                            <Button
-                                variant="outline"
-                                size="sm"
-                                onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
-                                disabled={currentPage >= totalPages || totalPages === 0}
-                            >
-                                <ChevronRight className="h-4 w-4" />
-                            </Button>
-                        </div>
-                    </div>
+                                    {/* Loading State */}
+                                    {isLoading ? (
+                                        <div className="p-8 text-center text-muted-foreground">Loading employees...</div>
+                                    ) : (
+                                        <div className="divide-y">
+                                            {paginatedEmployees.map((emp: any) => (
+                                                <div
+                                                    key={emp.id}
+                                                    className="grid grid-cols-13 gap-4 p-4 items-center hover:bg-muted/30 transition-colors group border-b"
+                                                >
+                                                    {/* Checkbox */}
+                                                    <div className="col-span-1 flex items-center" onClick={(e) => e.stopPropagation()}>
+                                                        <Checkbox
+                                                            checked={selectedEmployeeIds.includes(emp.id)}
+                                                            onCheckedChange={(checked) => handleSelectEmployee(emp.id, checked as boolean)}
+                                                        />
+                                                    </div>
+
+                                                    {/* Name with Avatar */}
+                                                    <div className="col-span-3 flex items-center gap-3 cursor-pointer" onClick={() => handleEdit(emp)}>
+                                                        <div className="h-9 w-9 rounded-full bg-primary/10 flex items-center justify-center text-primary font-semibold text-sm">
+                                                            {emp.firstName.charAt(0)}{emp.lastName.charAt(0)}
+                                                        </div>
+                                                        <div className="flex flex-col">
+                                                            <span className="font-medium text-sm text-foreground">{emp.firstName} {emp.lastName}</span>
+                                                            <span className="text-xs text-muted-foreground">{emp.employeeId}</span>
+                                                        </div>
+                                                    </div>
+
+                                                    {/* Email */}
+                                                    <div className="col-span-2 text-sm text-muted-foreground truncate cursor-pointer" title={emp.email} onClick={() => handleEdit(emp)}>
+                                                        {emp.email}
+                                                    </div>
+
+                                                    {/* Phone */}
+                                                    <div className="col-span-2 text-sm text-muted-foreground cursor-pointer" onClick={() => handleEdit(emp)}>
+                                                        {emp.phone}
+                                                    </div>
+
+                                                    {/* Gender */}
+                                                    <div className="col-span-1 text-sm text-muted-foreground cursor-pointer" onClick={() => handleEdit(emp)}>
+                                                        {emp.gender || "Male"}
+                                                    </div>
+
+                                                    {/* Department */}
+                                                    <div className="col-span-1 text-sm text-muted-foreground cursor-pointer" onClick={() => handleEdit(emp)}>
+                                                        {departments.find((d: any) => d.id === emp.departmentId)?.code || emp.departmentId}
+                                                    </div>
+
+                                                    {/* Designation */}
+                                                    <div className="col-span-1 text-sm text-muted-foreground truncate cursor-pointer" onClick={() => handleEdit(emp)}>
+                                                        {emp.designation}
+                                                    </div>
+
+                                                    {/* Status */}
+                                                    <div className="col-span-1 cursor-pointer" onClick={() => handleEdit(emp)}>
+                                                        <Badge variant={emp.status?.toLowerCase() === 'active' ? 'default' : 'secondary'} className={cn("text-xs font-normal lowercase", emp.status?.toLowerCase() === 'active' ? "bg-green-100 text-green-700 hover:bg-green-100" : "bg-gray-100 text-gray-700")}>
+                                                            {emp.status?.toLowerCase()}
+                                                        </Badge>
+                                                    </div>
+
+                                                    {/* Actions */}
+                                                    <div className="col-span-1 flex justify-end gap-2 pr-6" onClick={(e) => e.stopPropagation()}>
+                                                        <Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground hover:text-primary" onClick={() => handleEdit(emp)}>
+                                                            <Eye className="h-4 w-4" />
+                                                        </Button>
+                                                    </div>
+                                                </div>
+                                            ))}
+                                            {paginatedEmployees.length === 0 && (
+                                                <div className="p-8 text-center text-muted-foreground">No employees found.</div>
+                                            )}
+                                        </div>
+                                    )}
+                                </div>
+                            </div>
+
+                            {/* Pagination - Same position as Materials reference */}
+                            <DataTablePagination
+                                currentPage={currentPage}
+                                totalPages={totalPages}
+                                totalItems={filteredEmployees.length}
+                                itemsPerPage={itemsPerPage}
+                                onPageChange={setCurrentPage}
+                                onItemsPerPageChange={setItemsPerPage}
+                                options={[10, 15, 30, 50]}
+                            />
+                        </CardContent>
+                    </Card>
                 </div>
             )}
 
@@ -3419,6 +3440,25 @@ function SystemAccessForm({ data, updateData, readOnly }: any) {
     const [isWarehouseOpen, setIsWarehouseOpen] = useState(false);
     const [isOperationOpen, setIsOperationOpen] = useState(false);
 
+    // Auto-select if only one option is available in master lists
+    useEffect(() => {
+        if (initialWorkCenters.length === 1 && !selectedWorkCenterId) {
+            setSelectedWorkCenterId(initialWorkCenters[0].id.toString());
+        }
+    }, [selectedWorkCenterId]);
+
+    useEffect(() => {
+        if (initialWarehouses.length === 1 && !selectedWarehouseId) {
+            setSelectedWarehouseId(initialWarehouses[0].id.toString());
+        }
+    }, [selectedWarehouseId]);
+
+    useEffect(() => {
+        if (initialOperations.length === 1 && !selectedOperationId) {
+            setSelectedOperationId(initialOperations[0].id.toString());
+        }
+    }, [selectedOperationId]);
+
     // Mock roles - in production, fetch from Users & Roles module
     const availableRoles = [
         { id: "admin", name: "Administrator" },
@@ -4072,7 +4112,7 @@ function DatePicker({ date, setDate, disabled = false }: { date?: Date, setDate:
     const formatDisplayDate = (date: Date | undefined) => {
         if (!date) return "Pick a date";
         try {
-            return format(date, "dd/MM/yyyy");
+            return format(date, "dd-MM-yyyy");
         } catch (error) {
             return "Pick a date";
         }

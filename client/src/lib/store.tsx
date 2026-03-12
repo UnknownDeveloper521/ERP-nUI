@@ -1,5 +1,12 @@
 import React, { createContext, useContext, useState, useEffect, ReactNode } from 'react';
-import { getCurrentUser, onAuthStateChange, signInWithEmail, signOut, signUpWithEmail } from './supabase';
+import {
+  getCurrentUser,
+  onAuthStateChange,
+  signInWithEmail,
+  signOut,
+  signUpWithEmail,
+  signInCompanyWithEmail
+} from './customAuth';
 
 // --- Types ---
 
@@ -131,11 +138,9 @@ export const MODULE_HIERARCHY: ModuleHierarchyItem[] = [
   },
   {
     name: "Accounting",
-    submodules: []
-  },
-  {
-    name: "Logistics",
-    submodules: []
+    submodules: [
+      { name: "Invoicing" }
+    ]
   },
   {
     name: "System",
@@ -227,7 +232,6 @@ const DEFAULT_ROLE_PERMISSIONS: RolePermissions = {
   "Operator": [
     ...getModulePermissions("Dashboard", ["View"]),
     ...getModulePermissions("Inventory", ["View", "Create"]),
-    ...getModulePermissions("Logistics", ["View", "Create"]),
   ],
   "Accountant": [
     ...getModulePermissions("Dashboard", ["View"]),
@@ -248,12 +252,12 @@ const DEFAULT_ROLE_PERMISSIONS: RolePermissions = {
 };
 
 const DEFAULT_MODULE_VISIBILITY: ModuleVisibility = {
-  "Admin": { "Dashboard": true, "HRMS": true, "Products": true, "Inventory": true, "Sales": true, "Purchases": true, "Customers": true, "Accounting": true, "Logistics": true, "System": true },
-  "Manager": { "Dashboard": true, "HRMS": true, "Inventory": true, "Sales": true, "Customers": true, "Products": true, "Purchases": false, "Accounting": false, "Logistics": false, "System": false },
-  "Operator": { "Dashboard": true, "Inventory": true, "Logistics": true, "HRMS": false, "Products": false, "Sales": false, "Purchases": false, "Customers": false, "Accounting": false, "System": false },
-  "Accountant": { "Dashboard": true, "Accounting": true, "Sales": true, "Purchases": true, "HRMS": false, "Inventory": false, "Products": false, "Customers": false, "Logistics": false, "System": false },
-  "Supervisor": { "Dashboard": true, "Inventory": true, "HRMS": true, "Accounting": false, "Sales": false, "Purchases": false, "Customers": false, "Products": false, "Logistics": false, "System": false },
-  "Quality Control": { "Dashboard": true, "Products": true, "Inventory": true, "HRMS": false, "Sales": false, "Purchases": false, "Customers": false, "Accounting": false, "Logistics": false, "System": false },
+  "Admin": { "Dashboard": true, "HRMS": true, "Products": true, "Inventory": true, "Sales": true, "Purchases": true, "Customers": true, "Accounting": true, "System": true },
+  "Manager": { "Dashboard": true, "HRMS": true, "Inventory": true, "Sales": true, "Customers": true, "Products": true, "Purchases": false, "Accounting": false, "System": false },
+  "Operator": { "Dashboard": true, "Inventory": true, "HRMS": false, "Products": false, "Sales": false, "Purchases": false, "Customers": false, "Accounting": false, "System": false },
+  "Accountant": { "Dashboard": true, "Accounting": true, "Sales": true, "Purchases": true, "HRMS": false, "Inventory": false, "Products": false, "Customers": false, "System": false },
+  "Supervisor": { "Dashboard": true, "Inventory": true, "HRMS": true, "Accounting": false, "Sales": false, "Purchases": false, "Customers": false, "Products": false, "System": false },
+  "Quality Control": { "Dashboard": true, "Products": true, "Inventory": true, "HRMS": false, "Sales": false, "Purchases": false, "Customers": false, "Accounting": false, "System": false },
 };
 
 const DEFAULT_USERS: User[] = [
@@ -361,17 +365,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const login = async (email: string, password: string): Promise<boolean> => {
     const { data, error } = await signInWithEmail(email, password);
     if (error) {
-      console.error("Supabase login error:", error.message, error);
+      console.error("Custom auth login error:", error.message, error);
       return false;
     }
 
-    const supaUser = data.user;
-    if (!supaUser?.email) {
-      console.error("Supabase login: no user email returned");
+    const authUser = data.user;
+    if (!authUser?.email) {
+      console.error("Custom auth login: no user email returned");
       return false;
     }
 
-    const localUser = upsertLocalUserFromEmail(supaUser.email, supaUser.id);
+    const localUser = upsertLocalUserFromEmail(authUser.email, authUser.id);
     if (localUser.status === "Inactive") {
       console.error("Local user is inactive");
       return false;
@@ -380,8 +384,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return true;
   };
 
-  const register = async (email: string, password: string) => {
-    const { error } = await signUpWithEmail(email, password);
+  const register = async (email: string, password: string, username?: string) => {
+    const { error } = await signUpWithEmail(email, password, username);
     if (error) throw error;
   };
 
@@ -395,9 +399,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
     (async () => {
       try {
-        const supaUser = await getCurrentUser();
-        if (supaUser?.email) {
-          const localUser = upsertLocalUserFromEmail(supaUser.email, supaUser.id);
+        const authUser = await getCurrentUser();
+        if (authUser?.email) {
+          const localUser = upsertLocalUserFromEmail(authUser.email, authUser.id);
           setUser(localUser.status === "Inactive" ? null : localUser);
         } else {
           setUser(null);

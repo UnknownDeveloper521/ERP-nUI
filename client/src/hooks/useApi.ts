@@ -31,7 +31,7 @@ export function useCreateEmployee() {
 export function useUpdateEmployee() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: ({ id, data }: { id: string; data: any }) => 
+    mutationFn: ({ id, data }: { id: string; data: any }) =>
       api.employeesApi.update(id, data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['employees'] });
@@ -69,7 +69,7 @@ export function useCreateDepartment() {
 export function useUpdateDepartment() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: ({ id, data }: { id: string; data: any }) => 
+    mutationFn: ({ id, data }: { id: string; data: any }) =>
       api.departmentsApi.update(id, data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['departments'] });
@@ -140,7 +140,7 @@ export function useCreateLeave() {
 export function useUpdateLeaveStatus() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: ({ id, status, approvedBy }: { id: string; status: string; approvedBy?: string }) => 
+    mutationFn: ({ id, status, approvedBy }: { id: string; status: string; approvedBy?: string }) =>
       api.leavesApi.updateStatus(id, status, approvedBy),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['leaves'] });
@@ -176,7 +176,7 @@ export function useCreatePayroll() {
 export function useUpdatePayroll() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: ({ id, data }: { id: string; data: any }) => 
+    mutationFn: ({ id, data }: { id: string; data: any }) =>
       api.payrollApi.update(id, data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['payroll'] });
@@ -212,7 +212,7 @@ export function useCreateJobPosting() {
 export function useUpdateJobPosting() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: ({ id, data }: { id: string; data: any }) => 
+    mutationFn: ({ id, data }: { id: string; data: any }) =>
       api.jobPostingsApi.update(id, data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['job-postings'] });
@@ -275,7 +275,7 @@ export function useCreateProduct() {
 export function useUpdateProduct() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: ({ id, data }: { id: string; data: any }) => 
+    mutationFn: ({ id, data }: { id: string; data: any }) =>
       api.productsApi.update(id, data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['products'] });
@@ -315,7 +315,7 @@ export function useCreateCustomer() {
 export function useUpdateCustomer() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: ({ id, data }: { id: string; data: any }) => 
+    mutationFn: ({ id, data }: { id: string; data: any }) =>
       api.customersApi.update(id, data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['customers'] });
@@ -388,7 +388,7 @@ export function useCreateLead() {
 export function useUpdateLead() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: ({ id, data }: { id: string; data: any }) => 
+    mutationFn: ({ id, data }: { id: string; data: any }) =>
       api.leadsApi.update(id, data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['leads'] });
@@ -419,28 +419,4 @@ export function useTransactions() {
   });
 }
 
-// ==================== LOGISTICS HOOKS ====================
 
-export function useVehicles() {
-  return useQuery({
-    queryKey: ['vehicles'],
-    queryFn: api.vehiclesApi.getAll,
-  });
-}
-
-export function useTrips() {
-  return useQuery({
-    queryKey: ['trips'],
-    queryFn: api.tripsApi.getAll,
-  });
-}
-
-export function useCreateTrip() {
-  const queryClient = useQueryClient();
-  return useMutation({
-    mutationFn: api.tripsApi.create,
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['trips'] });
-    },
-  });
-}

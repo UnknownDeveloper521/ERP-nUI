@@ -26,7 +26,7 @@ const initialTransactions = [
   { id: "INV-2024-001", date: "2024-03-15", description: "Sugar Sales - Global Traders", amount: 250000.00, type: "Income", status: "Paid", category: "Sugar Sales" },
   { id: "PAY-F-1023", date: "2024-03-14", description: "Cane Payment - Patil Farms", amount: 45000.00, type: "Expense", status: "Processed", category: "Cane Procurement" },
   { id: "INV-2024-002", date: "2024-03-12", description: "Molasses Sales - Ethanol Corp", amount: 180000.00, type: "Income", status: "Pending", category: "Molasses Sales" },
-  { id: "PAY-T-5012", date: "2024-03-10", description: "Transport Charges - Sharma Logistics", amount: 12000.00, type: "Expense", status: "Cleared", category: "Transport & Freight" },
+  { id: "PAY-T-5012", date: "2024-03-10", description: "Transport Charges - Sharma Transport", amount: 12000.00, type: "Expense", status: "Cleared", category: "Transport & Freight" },
   { id: "INV-2024-003", date: "2024-03-08", description: "Bagasse Sales - Power Gen Ltd", amount: 90000.00, type: "Income", status: "Paid", category: "Bagasse Sales" },
   { id: "PAY-S-2045", date: "2024-03-05", description: "Chemical Supplies - ChemIndia", amount: 28000.00, type: "Expense", status: "Cleared", category: "Production Chemicals" },
 ];
@@ -66,7 +66,7 @@ export default function Accounting() {
     const id = `TRX-${Math.floor(Math.random() * 1000)}`;
     const date = new Date().toISOString().split('T')[0];
     const amount = parseFloat(newTransaction.amount) || 0;
-    
+
     const transaction = {
       id,
       date,
@@ -80,7 +80,7 @@ export default function Accounting() {
     setTransactions([transaction, ...transactions]);
     setIsNewTransactionOpen(false);
     setNewTransaction({ description: "", amount: "", type: "Income", status: "Pending", category: "General" });
-    
+
     toast({
       title: "Transaction Recorded",
       description: `Successfully recorded ${newTransaction.category} of $${amount.toLocaleString()}`,
@@ -109,7 +109,7 @@ export default function Accounting() {
     const blob = new Blob([csvString], { type: "text/csv" });
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
-    
+
     link.href = url;
     link.download = `${reportType.replace(/\s+/g, '_').toLowerCase()}_${new Date().toISOString().split('T')[0]}.csv`;
     document.body.appendChild(link);
@@ -148,9 +148,9 @@ export default function Accounting() {
                 <div className="grid gap-4 py-4">
                   <div className="grid grid-cols-4 items-center gap-4">
                     <Label htmlFor="type" className="text-right">Entry Type</Label>
-                    <Select 
-                      value={newTransaction.type} 
-                      onValueChange={(value) => setNewTransaction({...newTransaction, type: value})}
+                    <Select
+                      value={newTransaction.type}
+                      onValueChange={(value) => setNewTransaction({ ...newTransaction, type: value })}
                     >
                       <SelectTrigger className="col-span-3">
                         <SelectValue placeholder="Select type" />
@@ -164,9 +164,9 @@ export default function Accounting() {
 
                   <div className="grid grid-cols-4 items-center gap-4">
                     <Label htmlFor="category" className="text-right">Category</Label>
-                    <Select 
-                      value={newTransaction.category} 
-                      onValueChange={(value) => setNewTransaction({...newTransaction, category: value})}
+                    <Select
+                      value={newTransaction.category}
+                      onValueChange={(value) => setNewTransaction({ ...newTransaction, category: value })}
                     >
                       <SelectTrigger className="col-span-3">
                         <SelectValue placeholder="Select category" />
@@ -196,31 +196,31 @@ export default function Accounting() {
 
                   <div className="grid grid-cols-4 items-center gap-4">
                     <Label htmlFor="description" className="text-right">Description</Label>
-                    <Input 
-                      id="description" 
+                    <Input
+                      id="description"
                       placeholder="e.g., Invoice #123 or Farmer Name"
-                      value={newTransaction.description} 
-                      onChange={(e) => setNewTransaction({...newTransaction, description: e.target.value})} 
-                      className="col-span-3" 
+                      value={newTransaction.description}
+                      onChange={(e) => setNewTransaction({ ...newTransaction, description: e.target.value })}
+                      className="col-span-3"
                     />
                   </div>
 
                   <div className="grid grid-cols-4 items-center gap-4">
                     <Label htmlFor="amount" className="text-right">Amount ($)</Label>
-                    <Input 
-                      id="amount" 
+                    <Input
+                      id="amount"
                       type="number"
-                      value={newTransaction.amount} 
-                      onChange={(e) => setNewTransaction({...newTransaction, amount: e.target.value})} 
-                      className="col-span-3" 
+                      value={newTransaction.amount}
+                      onChange={(e) => setNewTransaction({ ...newTransaction, amount: e.target.value })}
+                      className="col-span-3"
                     />
                   </div>
 
                   <div className="grid grid-cols-4 items-center gap-4">
                     <Label htmlFor="status" className="text-right">Status</Label>
-                    <Select 
-                      value={newTransaction.status} 
-                      onValueChange={(value) => setNewTransaction({...newTransaction, status: value})}
+                    <Select
+                      value={newTransaction.status}
+                      onValueChange={(value) => setNewTransaction({ ...newTransaction, status: value })}
                     >
                       <SelectTrigger className="col-span-3">
                         <SelectValue placeholder="Select status" />
@@ -307,8 +307,8 @@ export default function Accounting() {
                     <AreaChart data={revenueData}>
                       <defs>
                         <linearGradient id="colorSugar" x1="0" y1="0" x2="0" y2="1">
-                          <stop offset="5%" stopColor="hsl(var(--primary))" stopOpacity={0.3}/>
-                          <stop offset="95%" stopColor="hsl(var(--primary))" stopOpacity={0}/>
+                          <stop offset="5%" stopColor="hsl(var(--primary))" stopOpacity={0.3} />
+                          <stop offset="95%" stopColor="hsl(var(--primary))" stopOpacity={0} />
                         </linearGradient>
                       </defs>
                       <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="hsl(var(--border))" />
@@ -405,7 +405,7 @@ export default function Accounting() {
         </TabsContent>
 
         <TabsContent value="production" className="space-y-4">
-           <Card>
+          <Card>
             <CardHeader>
               <CardTitle>Production Cost Sheet</CardTitle>
               <CardDescription>Cost of production per quintal breakdown</CardDescription>
@@ -413,33 +413,33 @@ export default function Accounting() {
             <CardContent>
               <div className="grid gap-6 md:grid-cols-2">
                 <div className="space-y-4">
-                   <div className="flex justify-between items-center border-b pb-2">
-                     <span className="font-medium">Direct Material (Cane)</span>
-                     <span>$2,100.00 / Qtl</span>
-                   </div>
-                   <div className="flex justify-between items-center border-b pb-2">
-                     <span className="font-medium">Direct Labor</span>
-                     <span>$150.00 / Qtl</span>
-                   </div>
-                   <div className="flex justify-between items-center border-b pb-2">
-                     <span className="font-medium">Chemicals & Consumables</span>
-                     <span>$85.00 / Qtl</span>
-                   </div>
-                   <div className="flex justify-between items-center border-b pb-2">
-                     <span className="font-medium">Power & Fuel</span>
-                     <span>$65.00 / Qtl</span>
-                   </div>
-                   <div className="flex justify-between items-center border-b pb-2">
-                     <span className="font-medium">Repairs & Maintenance</span>
-                     <span>$50.00 / Qtl</span>
-                   </div>
-                   <div className="flex justify-between items-center pt-2 text-lg font-bold">
-                     <span>Total Cost of Production</span>
-                     <span>$2,450.00 / Qtl</span>
-                   </div>
+                  <div className="flex justify-between items-center border-b pb-2">
+                    <span className="font-medium">Direct Material (Cane)</span>
+                    <span>$2,100.00 / Qtl</span>
+                  </div>
+                  <div className="flex justify-between items-center border-b pb-2">
+                    <span className="font-medium">Direct Labor</span>
+                    <span>$150.00 / Qtl</span>
+                  </div>
+                  <div className="flex justify-between items-center border-b pb-2">
+                    <span className="font-medium">Chemicals & Consumables</span>
+                    <span>$85.00 / Qtl</span>
+                  </div>
+                  <div className="flex justify-between items-center border-b pb-2">
+                    <span className="font-medium">Power & Fuel</span>
+                    <span>$65.00 / Qtl</span>
+                  </div>
+                  <div className="flex justify-between items-center border-b pb-2">
+                    <span className="font-medium">Repairs & Maintenance</span>
+                    <span>$50.00 / Qtl</span>
+                  </div>
+                  <div className="flex justify-between items-center pt-2 text-lg font-bold">
+                    <span>Total Cost of Production</span>
+                    <span>$2,450.00 / Qtl</span>
+                  </div>
                 </div>
                 <div className="h-[300px]">
-                   <ResponsiveContainer width="100%" height="100%">
+                  <ResponsiveContainer width="100%" height="100%">
                     <BarChart data={[
                       { name: "Cane", value: 2100 },
                       { name: "Labor", value: 150 },
@@ -450,7 +450,7 @@ export default function Accounting() {
                       <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="hsl(var(--border))" />
                       <XAxis dataKey="name" stroke="hsl(var(--muted-foreground))" fontSize={12} tickLine={false} axisLine={false} />
                       <YAxis stroke="hsl(var(--muted-foreground))" fontSize={12} tickLine={false} axisLine={false} />
-                      <Tooltip cursor={{fill: 'transparent'}} contentStyle={{ backgroundColor: "hsl(var(--card))", borderColor: "hsl(var(--border))" }} />
+                      <Tooltip cursor={{ fill: 'transparent' }} contentStyle={{ backgroundColor: "hsl(var(--card))", borderColor: "hsl(var(--border))" }} />
                       <Bar dataKey="value" fill="hsl(var(--primary))" radius={[4, 4, 0, 0]} />
                     </BarChart>
                   </ResponsiveContainer>
@@ -471,7 +471,7 @@ export default function Accounting() {
                 <p className="text-xs text-muted-foreground">Collected this month</p>
               </CardContent>
             </Card>
-             <Card>
+            <Card>
               <CardHeader>
                 <CardTitle className="text-sm font-medium">GST Input (Purchases)</CardTitle>
               </CardHeader>
@@ -480,7 +480,7 @@ export default function Accounting() {
                 <p className="text-xs text-muted-foreground">Eligible credit</p>
               </CardContent>
             </Card>
-             <Card>
+            <Card>
               <CardHeader>
                 <CardTitle className="text-sm font-medium">Net Payable</CardTitle>
               </CardHeader>

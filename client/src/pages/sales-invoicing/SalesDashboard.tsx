@@ -1,24 +1,14 @@
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import ModuleTabs from "@/components/shared/ModuleTabs";
 import { DollarSign, ShoppingCart, TrendingUp, FileText } from "lucide-react";
 
-const salesTabs = [
-  { name: "Dashboard", path: "/sales-invoicing" },
-  { name: "Sales Order", path: "/sales-invoicing/orders" },
-  { name: "Dispatch Note", path: "/sales-invoicing/dispatch" },
-  { name: "Invoice", path: "/sales-invoicing/invoices" },
-  { name: "Purchase Orders", path: "/sales-invoicing/purchases" },
-  { name: "Reports", path: "/sales-invoicing/reports" },
-];
-
-export { salesTabs };
 
 export default function SalesDashboard() {
   return (
     <div className="space-y-4">
-      <h1 className="text-xl font-semibold" data-testid="text-page-title">Sales and Invoicing</h1>
-      <ModuleTabs tabs={salesTabs} />
-      
+      <div className="flex items-center justify-between mt-2">
+        <h2 className="text-3xl font-bold tracking-tight text-slate-900">Sales Dashboard</h2>
+      </div>
+
       <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4 mt-4">
         <Card>
           <CardHeader className="flex flex-row items-center justify-between gap-2 space-y-0 pb-2">
@@ -30,7 +20,7 @@ export default function SalesDashboard() {
             <p className="text-xs text-muted-foreground">+12.5% from last month</p>
           </CardContent>
         </Card>
-        
+
         <Card>
           <CardHeader className="flex flex-row items-center justify-between gap-2 space-y-0 pb-2">
             <CardTitle className="text-sm font-medium">Orders This Month</CardTitle>
@@ -41,7 +31,7 @@ export default function SalesDashboard() {
             <p className="text-xs text-muted-foreground">+8 from last month</p>
           </CardContent>
         </Card>
-        
+
         <Card>
           <CardHeader className="flex flex-row items-center justify-between gap-2 space-y-0 pb-2">
             <CardTitle className="text-sm font-medium">Avg Order Value</CardTitle>
@@ -52,7 +42,7 @@ export default function SalesDashboard() {
             <p className="text-xs text-muted-foreground">+5.2% from last month</p>
           </CardContent>
         </Card>
-        
+
         <Card>
           <CardHeader className="flex flex-row items-center justify-between gap-2 space-y-0 pb-2">
             <CardTitle className="text-sm font-medium">Pending Invoices</CardTitle>
@@ -64,7 +54,7 @@ export default function SalesDashboard() {
           </CardContent>
         </Card>
       </div>
-      
+
       <div className="grid gap-4 md:grid-cols-2 mt-4">
         <Card>
           <CardHeader>
@@ -84,10 +74,9 @@ export default function SalesDashboard() {
                   </div>
                   <div className="text-right">
                     <span className="font-medium">{order.amount}</span>
-                    <span className={`ml-2 px-2 py-0.5 rounded-full text-xs ${
-                      order.status === 'Confirmed' ? 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400' : 
+                    <span className={`ml-2 px-2 py-0.5 rounded-full text-xs ${order.status === 'Confirmed' ? 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400' :
                       order.status === 'Shipped' ? 'bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400' : 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400'
-                    }`}>
+                      }`}>
                       {order.status}
                     </span>
                   </div>
@@ -96,7 +85,7 @@ export default function SalesDashboard() {
             </div>
           </CardContent>
         </Card>
-        
+
         <Card>
           <CardHeader>
             <CardTitle className="text-base">Overdue Invoices</CardTitle>

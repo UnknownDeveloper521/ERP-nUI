@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -34,8 +34,15 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Search, ChevronLeft, ChevronRight, ChevronsUpDown, Check, Eye } from "lucide-react";
+import { DataTablePagination } from "@/components/shared/DataTablePagination";
 import { useToast } from "@/hooks/use-toast";
 import { cn } from "@/lib/utils";
+import { 
+  mockReleaseRecords, 
+  updateReleaseRecord, 
+  OperationRelease, 
+  ProducedItem 
+} from "@/lib/releaseSharedData";
 
 // ============================================================================
 // HELPER FUNCTIONS
@@ -56,82 +63,18 @@ const formatDate = (date: Date | string): string => {
 // TYPE DEFINITIONS
 // ============================================================================
 
-/**
- * WH Receive Item interface
- * Represents individual items in a warehouse receipt from production
- */
-interface WHReceiveItem {
-    id: number;
-    batchNo: string;
-    batchDate: string;
-    producedItem: string;
-    uom: string;
-    opQty: number;
-    receivedQty: number;
-    received: boolean;
-}
+// WHReceive interfaces are replaced by OperationRelease and ProducedItem from shared data
 
-/**
- * WH Receive interface
- * Represents a warehouse receipt record from production release
- */
-interface WHReceive {
-    id: number;
-    releaseNo: string;
-    releaseDate: string;
-    operation: string;
-    workCenter: string;
-    warehouse: string;
-    releasedBy: string;
-    qcVerifiedBy: string;
-    qcVerifiedOn: string;
-    status: "Issued to Warehouse" | "Received By Warehouse";
-    totalItems: number;
-    items: WHReceiveItem[];
-}
 
 // ============================================================================
 // MOCK DATA
 // ============================================================================
 
-const MOCK_WH_RECEIVE: WHReceive[] = [
-    {
-        id: 1,
-        releaseNo: "REL-2024-001",
-        releaseDate: "2024-02-21",
-        operation: "Core Preparation",
-        workCenter: "WP-01 Core Shop",
-        warehouse: "Finished Goods Store",
-        releasedBy: "John Doe",
-        qcVerifiedBy: "Sarah QC",
-        qcVerifiedOn: "2024-02-21",
-        status: "Issued to Warehouse",
-        totalItems: 2,
-        items: [
-            { id: 101, batchNo: "BT-SC-001", batchDate: "2024-02-20", producedItem: "Sand Core Type A", uom: "NOS", opQty: 100, receivedQty: 100, received: true },
-            { id: 102, batchNo: "BT-SC-002", batchDate: "2024-02-20", producedItem: "Sand Core Type B", uom: "NOS", opQty: 50, receivedQty: 0, received: false },
-        ]
-    },
-    {
-        id: 2,
-        releaseNo: "REL-2024-002",
-        releaseDate: "2024-02-22",
-        operation: "Casting",
-        workCenter: "WP-02 Melting",
-        warehouse: "Main Warehouse",
-        releasedBy: "Mike Ross",
-        qcVerifiedBy: "Sarah QC",
-        qcVerifiedOn: "2024-02-22",
-        status: "Received By Warehouse",
-        totalItems: 1,
-        items: [
-            { id: 201, batchNo: "BT-CT-005", batchDate: "2024-02-21", producedItem: "Iron Casting 5kg", uom: "KG", opQty: 500, receivedQty: 500, received: true },
-        ]
-    }
-];
+// MOCK_WH_RECEIVE is replaced by mockReleaseRecords from shared data
 
-const WAREHOUSES = ["Production Store", "Raw Material Store", "Finished Goods Store", "Main Warehouse"];
-const WORK_CENTERS = ["WP-01 Core Shop", "WP-02 Melting", "WP-03 Molding", "WC-001 Cutting Bay", "WC-002 Welding Station"];
+
+const WAREHOUSES = ["Jinja WH"];
+const WORK_CENTERS = ["Lead Furnace Center", "Plastic Casing Center", "Grid Generation Center", "Assembly Line"];
 
 // ============================================================================
 // SEARCHABLE SELECT COMPONENT
@@ -217,17 +160,18 @@ function SearchableSelect({ label, value, options, onChange, placeholder, requir
 export default function WHReceive() {
     const { toast } = useToast();
 
-    const [whReceives, setWhReceives] = useState<WHReceive[]>(MOCK_WH_RECEIVE);
+    const [whReceives, setWhReceives] = useState<OperationRelease[]>(mockReleaseRecords);
     const [searchTerm, setSearchTerm] = useState("");
     const [warehouseFilter, setWarehouseFilter] = useState("");
     const [workCenterFilter, setWorkCenterFilter] = useState("");
     const [statusFilter, setStatusFilter] = useState("Issued to Warehouse"); // Default to Issued to Warehouse
     const [currentPage, setCurrentPage] = useState(1);
-    const itemsPerPage = 10;
+    // Pagination state - using DataTablePagination component
+    const [itemsPerPage, setItemsPerPage] = useState(10);
 
     // Modal State
     const [isViewModalOpen, setIsViewModalOpen] = useState(false);
-    const [selectedWHReceive, setSelectedWHReceive] = useState<WHReceive | null>(null);
+    const [selectedWHReceive, setSelectedWHReceive] = useState<OperationRelease | null>(null);
 
     // Filter Logic
     const filteredWHReceives = whReceives.filter(whr => {
@@ -243,30 +187,30 @@ export default function WHReceive() {
     const totalPages = Math.ceil(filteredWHReceives.length / itemsPerPage);
     const paginatedWHReceives = filteredWHReceives.slice((currentPage - 1) * itemsPerPage, currentPage * itemsPerPage);
 
+    // Auto-adjust page when data changes
+    useEffect(() => {
+        if (currentPage > totalPages && totalPages > 0) {
+            setCurrentPage(totalPages);
+        }
+    }, [filteredWHReceives.length, currentPage, totalPages]);
+
+    // Reset to page 1 when filters change
+    useEffect(() => {
+        setCurrentPage(1);
+    }, [searchTerm, statusFilter]);
+
     // Handlers
-    const handleView = (whr: WHReceive) => {
+    const handleView = (whr: OperationRelease) => {
         setSelectedWHReceive({ ...whr });
         setIsViewModalOpen(true);
     };
 
     const handleItemCheckChange = (itemId: number, checked: boolean) => {
-        if (!selectedWHReceive) return;
-        setSelectedWHReceive({
-            ...selectedWHReceive,
-            items: selectedWHReceive.items.map(item =>
-                item.id === itemId ? { ...item, received: checked, receivedQty: checked ? item.opQty : 0 } : item
-            )
-        });
+        // Not implemented in the new item-wise grouping logic but kept for type compatibility
     };
 
     const handleItemQtyChange = (itemId: number, qty: number) => {
-        if (!selectedWHReceive) return;
-        setSelectedWHReceive({
-            ...selectedWHReceive,
-            items: selectedWHReceive.items.map(item =>
-                item.id === itemId ? { ...item, receivedQty: qty } : item
-            )
-        });
+        // Not implemented in the new item-wise grouping logic but kept for type compatibility
     };
 
     /**
@@ -278,12 +222,8 @@ export default function WHReceive() {
     const handleMarkAsReceived = () => {
         if (!selectedWHReceive) return;
 
-        // Update status and items
-        setWhReceives(whReceives.map(whr =>
-            whr.id === selectedWHReceive.id
-                ? { ...selectedWHReceive, status: "Received By Warehouse" as const }
-                : whr
-        ));
+        // Update status in shared storage
+        setWhReceives(updateReleaseRecord(selectedWHReceive.id, { status: "Received By Warehouse" }));
 
         // TODO: In real implementation:
         // 1. Increase stock in warehouse for each item by receivedQty
@@ -361,13 +301,13 @@ export default function WHReceive() {
                         <Table>
                             <TableHeader>
                                 <TableRow className="bg-muted/50 hover:bg-muted/50">
-                                    <TableHead className="font-semibold text-xs uppercase tracking-wider">Release No</TableHead>
-                                    <TableHead className="font-semibold text-xs uppercase tracking-wider">Release Date</TableHead>
-                                    <TableHead className="font-semibold text-xs uppercase tracking-wider">Operation</TableHead>
-                                    <TableHead className="font-semibold text-xs uppercase tracking-wider">Work Center</TableHead>
-                                    <TableHead className="font-semibold text-xs uppercase tracking-wider">Warehouse</TableHead>
-                                    <TableHead className="font-semibold text-xs uppercase tracking-wider">Status</TableHead>
-                                    <TableHead className="text-right font-semibold text-xs uppercase tracking-wider pr-6">Action</TableHead>
+                                    <TableHead className="font-semibold text-xs uppercase tracking-wider">RELEASE NO</TableHead>
+                                    <TableHead className="font-semibold text-xs uppercase tracking-wider">RELEASE DATE</TableHead>
+                                    <TableHead className="font-semibold text-xs uppercase tracking-wider">OPERATION</TableHead>
+                                    <TableHead className="font-semibold text-xs uppercase tracking-wider">WORK CENTER</TableHead>
+                                    <TableHead className="font-semibold text-xs uppercase tracking-wider">WAREHOUSE</TableHead>
+                                    <TableHead className="font-semibold text-xs uppercase tracking-wider">STATUS</TableHead>
+                                    <TableHead className="text-right font-semibold text-xs uppercase tracking-wider pr-6">ACTION</TableHead>
                                 </TableRow>
                             </TableHeader>
                             <TableBody>
@@ -389,7 +329,7 @@ export default function WHReceive() {
                                                 <Badge
                                                     variant="outline"
                                                     className={cn(
-                                                        "font-medium",
+                                                        "font-medium whitespace-nowrap w-fit px-2.5 py-0.5",
                                                         whr.status === "Issued to Warehouse" && "border-amber-500 text-amber-600 bg-amber-50",
                                                         whr.status === "Received By Warehouse" && "border-green-500 text-green-600 bg-green-50"
                                                     )}
@@ -415,30 +355,17 @@ export default function WHReceive() {
                     </div>
 
                     {/* Pagination */}
+                    {/* Pagination - using standardized DataTablePagination component */}
                     {filteredWHReceives.length > 0 && (
-                        <div className="flex justify-between items-center px-1 mt-4">
-                            <div className="text-sm text-muted-foreground">
-                                Showing {(currentPage - 1) * itemsPerPage + 1} to {Math.min(currentPage * itemsPerPage, filteredWHReceives.length)} of {filteredWHReceives.length} entries
-                            </div>
-                            <div className="flex gap-2">
-                                <Button
-                                    variant="outline"
-                                    size="sm"
-                                    onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
-                                    disabled={currentPage === 1}
-                                >
-                                    <ChevronLeft className="h-4 w-4" />
-                                </Button>
-                                <Button
-                                    variant="outline"
-                                    size="sm"
-                                    onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
-                                    disabled={currentPage >= totalPages || totalPages === 0}
-                                >
-                                    <ChevronRight className="h-4 w-4" />
-                                </Button>
-                            </div>
-                        </div>
+                        <DataTablePagination
+                            currentPage={currentPage}
+                            totalPages={totalPages}
+                            totalItems={filteredWHReceives.length}
+                            itemsPerPage={itemsPerPage}
+                            onPageChange={setCurrentPage}
+                            onItemsPerPageChange={setItemsPerPage}
+                            options={[10, 15, 30, 50]}
+                        />
                     )}
                 </CardContent>
             </Card>
@@ -487,62 +414,92 @@ export default function WHReceive() {
                                         </div>
                                         <div>
                                             <Label>QC Verified By</Label>
-                                            <Input value={selectedWHReceive.qcVerifiedBy} readOnly className="bg-muted" />
+                                            <Input value={selectedWHReceive.qcVerifiedBy || 'N/A'} readOnly className="bg-muted" />
                                         </div>
                                         <div>
                                             <Label>QC Verified On</Label>
-                                            <Input value={formatDate(selectedWHReceive.qcVerifiedOn)} readOnly className="bg-muted" />
+                                            <Input value={selectedWHReceive.qcVerifiedOn ? formatDate(selectedWHReceive.qcVerifiedOn) : 'N/A'} readOnly className="bg-muted" />
                                         </div>
                                     </div>
                                 </CardContent>
                             </Card>
 
-                            {/* Items Table - Eligible Batches Style */}
+                            {/* Items Table - Item-wise View */}
+                            {/* ✅ CHANGED: WH Receive - replaced batch-wise table with item-wise (Item + Qty) table only */}
+                            {/* ✅ NOTE: Frontend-only grouping; header/footer unchanged; no backend changes */}
+                            {/* ✅ CHANGED: Removed Check and Qty columns, Received Qty auto-filled and read-only */}
                             <Card>
                                 <CardContent className="pt-6">
-                                    <h3 className="text-sm font-semibold uppercase tracking-wider text-muted-foreground mb-4 font-bold">Eligible Batches</h3>
-                                    <div className="rounded-md border">
-                                        <Table>
-                                            <TableHeader>
-                                                <TableRow className="bg-muted/30 hover:bg-muted/30">
-                                                    <TableHead className="text-[10px] uppercase font-bold">Batch No</TableHead>
-                                                    <TableHead className="text-[10px] uppercase font-bold">Batch Date</TableHead>
-                                                    <TableHead className="text-[10px] uppercase font-bold">Produced Item</TableHead>
-                                                    <TableHead className="text-[10px] uppercase font-bold text-right">Op Qty</TableHead>
-                                                    <TableHead className="text-[10px] uppercase font-bold text-center">Check</TableHead>
-                                                    <TableHead className="text-[10px] uppercase font-bold text-center">Received Qty</TableHead>
-                                                </TableRow>
-                                            </TableHeader>
-                                            <TableBody>
-                                                {selectedWHReceive.items.map((item) => (
-                                                    <TableRow key={item.id}>
-                                                        <TableCell className="font-medium text-primary">{item.batchNo}</TableCell>
-                                                        <TableCell>{formatDate(item.batchDate)}</TableCell>
-                                                        <TableCell className="max-w-[150px] truncate">{item.producedItem}</TableCell>
-                                                        <TableCell className="text-right font-medium">{item.opQty}</TableCell>
-                                                        <TableCell className="text-center">
-                                                            <Checkbox
-                                                                checked={item.received}
-                                                                onCheckedChange={(checked) => handleItemCheckChange(item.id, !!checked)}
-                                                                disabled={selectedWHReceive.status === "Received"}
-                                                            />
-                                                        </TableCell>
-                                                        <TableCell className="text-center w-[120px]">
-                                                            <Input
-                                                                type="number"
-                                                                value={item.receivedQty}
-                                                                onChange={(e) => handleItemQtyChange(item.id, parseFloat(e.target.value) || 0)}
-                                                                className="h-8 text-right bg-background"
-                                                                disabled={!item.received || selectedWHReceive.status === "Received"}
-                                                            />
-                                                        </TableCell>
-                                                    </TableRow>
-                                                ))}
-                                            </TableBody>
-                                        </Table>
-                                    </div>
+
+                                    {(() => {
+                                        // ✅ ADDED: Group items by itemName (frontend-only grouping)
+                                        try {
+                                            const itemsMap = new Map<string, {
+                                                itemName: string;
+                                                uom: string;
+                                                qtyProduced: number;
+                                            }>();
+
+                                            selectedWHReceive.items.forEach(item => {
+                                                const key = `${item.itemName}-${item.uom}`;
+                                                if (itemsMap.has(key)) {
+                                                    const existing = itemsMap.get(key)!;
+                                                    existing.qtyProduced += item.qtyProduced;
+                                                } else {
+                                                    itemsMap.set(key, {
+                                                        itemName: item.itemName,
+                                                        uom: item.uom,
+                                                        qtyProduced: item.qtyProduced,
+                                                    });
+                                                }
+                                            });
+
+                                            const groupedItems = Array.from(itemsMap.values());
+
+
+                                            if (groupedItems.length === 0) {
+                                                // ✅ FALLBACK: If item-wise data missing, show existing batch table to avoid blank UI
+                                                return (
+                                                    <div className="text-center py-8 text-muted-foreground border rounded-md">
+                                                        No items available
+                                                    </div>
+                                                );
+                                            }
+
+                                            return (
+                                                <div className="rounded-md border">
+                                                    <Table>
+                                                        <TableHeader>
+                                                            <TableRow className="bg-muted/30 hover:bg-muted/30">
+                                                                <TableHead className="text-[10px] uppercase font-bold">Item</TableHead>
+                                                                <TableHead className="text-[10px] uppercase font-bold">UOM</TableHead>
+                                                                <TableHead className="text-[10px] uppercase font-bold text-right">Received Qty</TableHead>
+                                                            </TableRow>
+                                                        </TableHeader>
+                                                        <TableBody>
+                                                            {groupedItems.map((groupedItem, index) => (
+                                                                <TableRow key={index}>
+                                                                    <TableCell className="font-medium">{groupedItem.itemName}</TableCell>
+                                                                    <TableCell>{groupedItem.uom}</TableCell>
+                                                                    <TableCell className="text-right font-medium text-primary">{groupedItem.qtyProduced}</TableCell>
+                                                                </TableRow>
+                                                            ))}
+                                                        </TableBody>
+                                                    </Table>
+                                                </div>
+                                            );
+                                        } catch (error) {
+                                            console.error("Error grouping items:", error);
+                                            return (
+                                                <div className="rounded-md border p-4">
+                                                    <p className="text-sm text-amber-600 mb-4">⚠️ Item-wise view not available</p>
+                                                </div>
+                                            );
+                                        }
+                                    })()}
 
                                     {/* Summary */}
+                                    {/* ✅ CHANGED: Removed "Total Op Qty" from summary */}
                                     <div className="mt-4 flex justify-end">
                                         <div className="bg-muted/20 p-4 rounded-lg border space-y-2 min-w-[250px]">
                                             <div className="flex justify-between text-sm">
@@ -550,12 +507,8 @@ export default function WHReceive() {
                                                 <span className="font-semibold">{selectedWHReceive.items.length}</span>
                                             </div>
                                             <div className="flex justify-between text-sm">
-                                                <span className="text-muted-foreground">Total Op Qty:</span>
-                                                <span className="font-semibold">{selectedWHReceive.items.reduce((sum, item) => sum + item.opQty, 0)}</span>
-                                            </div>
-                                            <div className="flex justify-between text-sm">
                                                 <span className="text-muted-foreground">Total Received Qty:</span>
-                                                <span className="font-semibold text-primary">{selectedWHReceive.items.reduce((sum, item) => sum + (item.received ? item.receivedQty : 0), 0)}</span>
+                                                <span className="font-semibold text-primary">{selectedWHReceive.items.reduce((sum, item) => sum + item.qtyProduced, 0)}</span>
                                             </div>
                                         </div>
                                     </div>

@@ -7,15 +7,13 @@ import MainLayout from "@/components/layout/MainLayout";
 import NotFound from "@/pages/not-found";
 import Login from "@/pages/Login";
 import Register from "@/pages/Register";
+import VerifyEmail from "@/pages/VerifyEmail";
+import RegistrationSuccess from "@/pages/RegistrationSuccess";
 import ProtectedRoute from "@/components/auth/ProtectedRoute";
 import Dashboard from "@/pages/Dashboard";
 import HRMS from "@/pages/HRMS";
-import Customers from "@/pages/Customers";
 import Accounting from "@/pages/Accounting";
-import LogisticsDashboard from "@/pages/logistics/LogisticsDashboard";
-import NewTrip from "@/pages/logistics/NewTrip";
-import Weighment from "@/pages/logistics/Weighment";
-import TripHistory from "@/pages/logistics/TripHistory";
+// Removed: Non-existent accounting/Invoicing import
 
 import SuperAdminLogin from "@/pages/super-admin/Login";
 import SuperAdminLayout from "@/components/layout/SuperAdminLayout";
@@ -24,16 +22,15 @@ import TenantManagement from "@/pages/super-admin/TenantManagement";
 import CompanyManagement from "@/pages/super-admin/CompanyManagement";
 
 
-import Products from "@/pages/Products";
+import Vendors from "@/pages/Vendors";
+import Customers from "@/pages/Customers";
 import Sales from "@/pages/Sales";
-import Purchases from "@/pages/Purchases";
 import UsersRoles from "@/pages/UsersRoles";
 import MyAccount from "@/pages/MyAccount";
 
-import CRM from "@/pages/CRM";
 import PerformanceDashboard from "@/pages/PerformanceDashboard";
 
-import InternalChat from "@/pages/InternalChat";
+
 
 import ESS from "@/pages/hrms/ESS";
 import HRDashboard from "@/pages/hrms/HRDashboard";
@@ -41,27 +38,41 @@ import CoreHR from "@/pages/hrms/CoreHR";
 import AttendancePage from "@/pages/hrms/Attendance";
 import LeaveManagement from "@/pages/hrms/LeaveManagement";
 import PayrollManagement from "@/pages/hrms/PayrollManagement";
+import WorkerPayrolls from "@/pages/hrms/WorkerPayrolls";
 
 import InventoryDashboard from "@/pages/inventory/InventoryDashboard";
 import Materials from "@/pages/inventory/Materials";
+import GRN from "@/pages/inventory/GRN";
+import Dispatch from "@/pages/inventory/Dispatch";
 import MaterialLedger from "@/pages/inventory/MaterialLedger";
+// Inventory Material Requisitions - for issuing materials to service center
+import InventorySMRRequests from "@/pages/inventory/SMRRequests";
 
-import QualityCheck from "@/pages/production/QualityCheck";
-import MaterialOperation from "@/pages/production/MaterialOperation";
+// Removed old Production QC import (moved to Quality Check > Batch QC)
+// import QualityCheck from "@/pages/production/QualityCheck";
+import QualityCheckDashboard from "@/pages/quality-check/Dashboard";
+import BatchQC from "@/pages/quality-check/BatchQC";
+
+import MyRequest from "@/pages/production/MyRequest";
+import BatchTracking from "@/pages/production/BatchTracking";
 import MaterialRelease from "@/pages/production/MaterialRelease";
 import BOM from "@/pages/production/BOM";
 import ProductionPlan from "@/pages/production/ProductionPlan";
+import WarrantyService from "@/pages/service-center/WarrantyService";
+// Service Center Material Requisitions - for requesting and receiving materials
+import SMRRequests from "@/pages/service-center/SMRRequests";
 
 import SalesDashboard from "@/pages/sales-invoicing/SalesDashboard";
 import SalesOrder from "@/pages/sales-invoicing/SalesOrder";
-import DispatchNote from "@/pages/sales-invoicing/DispatchNote";
-import Invoice from "@/pages/sales-invoicing/Invoice";
-import PurchaseOrders from "@/pages/sales-invoicing/PurchaseOrders";
-import SalesReports from "@/pages/sales-invoicing/SalesReports";
-import HRMSMasters from "@/pages/masters/HRMSMasters";
+import FollowUp from "@/pages/sales-invoicing/FollowUp";
+// Removed: Leads import - module removed from Sales
+import Quotations from "@/pages/sales-invoicing/Quotations";
+import Invoicing from "@/pages/accounting/Invoicing"; // Moved: Invoicing module to Accounting
+import WorkerPayments from "@/pages/accounting/WorkerPayments";
+import PaymentFollowUp from "@/pages/accounting/PaymentFollowUp"; // Payment Follow Up module in Accounting
+import CoreMasters from "@/pages/masters/CoreMasters";
 import ProcurementMasters from "@/pages/masters/ProcurementMasters";
 import InventoryMasters from "@/pages/masters/InventoryMasters";
-import SalesMasters from "@/pages/masters/SalesMasters";
 import ProductionMasters from "@/pages/masters/ProductionMasters";
 
 import HRSetupDashboard from "@/pages/hr-setup/HRSetupDashboard";
@@ -69,6 +80,12 @@ import EmployeeSalaryDetails from "@/pages/hr-setup/EmployeeSalaryDetails";
 import SalaryComponent from "@/pages/hr-setup/SalaryComponent";
 import SalaryStructure from "@/pages/hr-setup/SalaryStructure";
 import PayPeriod from "@/pages/hr-setup/PayPeriod";
+import WorkersWagePeriod from "@/pages/hr-setup/WorkersWagePeriod";
+
+import MRRequest from "@/pages/procurement/MRRequest";
+import MRExecution from "@/pages/procurement/MRExecution";
+import PO from "@/pages/procurement/PO";
+
 
 // Placeholder pages for other modules
 const PlaceholderPage = ({ title }: { title: string }) => (
@@ -88,6 +105,8 @@ function Router() {
     <Switch>
       <Route path="/login" component={Login} />
       <Route path="/register" component={Register} />
+      <Route path="/verify-email" component={VerifyEmail} />
+      <Route path="/registration-success" component={RegistrationSuccess} />
 
       {/* Super Admin Routes */}
       <Route path="/super-admin/login" component={SuperAdminLogin} />
@@ -164,15 +183,7 @@ function Router() {
         )}
       </Route>
 
-      <Route path="/hrms/leave-management/dashboard">
-        {() => (
-          <ProtectedRoute>
-            <MainLayout>
-              <LeaveManagement />
-            </MainLayout>
-          </ProtectedRoute>
-        )}
-      </Route>
+
 
       <Route path="/hrms/leave-management/leave-entry">
         {() => (
@@ -185,6 +196,16 @@ function Router() {
       </Route>
 
       <Route path="/hrms/leave-management/calendar">
+        {() => (
+          <ProtectedRoute>
+            <MainLayout>
+              <LeaveManagement />
+            </MainLayout>
+          </ProtectedRoute>
+        )}
+      </Route>
+
+      <Route path="/hrms/leave-management/holidays">
         {() => (
           <ProtectedRoute>
             <MainLayout>
@@ -237,7 +258,7 @@ function Router() {
           </ProtectedRoute>
         )}
       </Route>
-      <Route path="/hrms/attendance">
+      <Route path="/hrms/attendance/:tab?">
         {() => (
           <ProtectedRoute>
             <MainLayout>
@@ -255,18 +276,49 @@ function Router() {
           </ProtectedRoute>
         )}
       </Route>
-
-      <Route path="/products">
+      <Route path="/hrms/worker-payrolls">
         {() => (
           <ProtectedRoute>
             <MainLayout>
-              <Products />
+              <WorkerPayrolls />
             </MainLayout>
           </ProtectedRoute>
         )}
       </Route>
 
+      <Route path="/vendors">
+        {() => (
+          <ProtectedRoute>
+            <MainLayout>
+              <Vendors />
+            </MainLayout>
+          </ProtectedRoute>
+        )}
+      </Route>
+
+      <Route path="/customers">
+        {() => (
+          <ProtectedRoute>
+            <MainLayout>
+              <Customers />
+            </MainLayout>
+          </ProtectedRoute>
+        )}
+      </Route>
+
+      {/* Inventory Routes */}
+      {/* Inventory default redirect to dashboard */}
       <Route path="/inventory">
+        {() => (
+          <ProtectedRoute>
+            <MainLayout>
+              <InventoryDashboard />
+            </MainLayout>
+          </ProtectedRoute>
+        )}
+      </Route>
+
+      <Route path="/inventory/dashboard">
         {() => (
           <ProtectedRoute>
             <MainLayout>
@@ -296,11 +348,20 @@ function Router() {
         )}
       </Route>
 
-      <Route path="/inventory/materials/grn">
+      <Route path="/inventory/grn">
         {() => (
           <ProtectedRoute>
             <MainLayout>
-              <Materials />
+              <GRN />
+            </MainLayout>
+          </ProtectedRoute>
+        )}
+      </Route>
+      <Route path="/inventory/dispatch">
+        {() => (
+          <ProtectedRoute>
+            <MainLayout>
+              <Dispatch />
             </MainLayout>
           </ProtectedRoute>
         )}
@@ -326,116 +387,65 @@ function Router() {
         )}
       </Route>
 
+      {/* Material Requisitions Route */}
+      <Route path="/inventory/smr-requests">
+        {() => (
+          <ProtectedRoute>
+            <MainLayout>
+              <InventorySMRRequests />
+            </MainLayout>
+          </ProtectedRoute>
+        )}
+      </Route>
 
 
-      <Route path="/production">
+
+      {/* ✅ CHANGED: Updated to cleaner routes - My Request now uses modal for new/edit */}
+      {/* Removed route-based New MR Request page; now opened as modal from My Request list */}
+      <Route path="/production/my-request">
         {() => (
           <ProtectedRoute>
             <MainLayout>
-              <MaterialOperation />
+              <MyRequest />
             </MainLayout>
           </ProtectedRoute>
         )}
       </Route>
-      <Route path="/production/material-operation/mr-request">
+
+      {/* ✅ CHANGED: Batch Tracking now uses separate component */}
+      <Route path="/production/batch-tracking">
         {() => (
           <ProtectedRoute>
             <MainLayout>
-              <MaterialOperation />
+              <BatchTracking />
             </MainLayout>
           </ProtectedRoute>
         )}
       </Route>
-      <Route path="/production/material-operation/mr-request">
+      <Route path="/production/batch-tracking/new">
         {() => (
           <ProtectedRoute>
             <MainLayout>
-              <MaterialOperation />
+              <BatchTracking />
             </MainLayout>
           </ProtectedRoute>
         )}
       </Route>
-      <Route path="/production/material-operation/new">
+      <Route path="/production/batch-tracking/:id/edit">
         {() => (
           <ProtectedRoute>
             <MainLayout>
-              <MaterialOperation />
+              <BatchTracking />
             </MainLayout>
           </ProtectedRoute>
         )}
       </Route>
-      <Route path="/production/material-operation/pre-procure/new">
-        {() => (
-          <ProtectedRoute>
-            <MainLayout>
-              <MaterialOperation />
-            </MainLayout>
-          </ProtectedRoute>
-        )}
-      </Route>
-      <Route path="/production/material-operation/pre-procure">
-        {() => (
-          <ProtectedRoute>
-            <MainLayout>
-              <MaterialOperation />
-            </MainLayout>
-          </ProtectedRoute>
-        )}
-      </Route>
-      <Route path="/production/material-operation/batch-tracking/:id/edit">
-        {() => (
-          <ProtectedRoute>
-            <MainLayout>
-              <MaterialOperation />
-            </MainLayout>
-          </ProtectedRoute>
-        )}
-      </Route>
-      <Route path="/production/material-operation/batch-tracking/new">
-        {() => (
-          <ProtectedRoute>
-            <MainLayout>
-              <MaterialOperation />
-            </MainLayout>
-          </ProtectedRoute>
-        )}
-      </Route>
-      <Route path="/production/material-operation/batch-tracking">
-        {() => (
-          <ProtectedRoute>
-            <MainLayout>
-              <MaterialOperation />
-            </MainLayout>
-          </ProtectedRoute>
-        )}
-      </Route>
-      <Route path="/production/material-operation/:id">
-        {() => (
-          <ProtectedRoute>
-            <MainLayout>
-              <MaterialOperation />
-            </MainLayout>
-          </ProtectedRoute>
-        )}
-      </Route>
-      <Route path="/production/material-operation">
-        {() => (
-          <ProtectedRoute>
-            <MainLayout>
-              <MaterialOperation />
-            </MainLayout>
-          </ProtectedRoute>
-        )}
-      </Route>
-      <Route path="/production/quality-check">
-        {() => (
-          <ProtectedRoute>
-            <MainLayout>
-              <QualityCheck />
-            </MainLayout>
-          </ProtectedRoute>
-        )}
-      </Route>
+
+
+
+      {/* Production routes */}
+      {/* Removed old Production QC route (moved to Quality Check > Batch QC) */}
+      {/* <Route path="/production/quality-check"> ... </Route> */}
       <Route path="/production/bom">
         {() => (
           <ProtectedRoute>
@@ -446,37 +456,7 @@ function Router() {
         )}
       </Route>
 
-      <Route path="/production/bom/new">
-        {() => (
-          <ProtectedRoute>
-            <MainLayout>
-              <BOM />
-            </MainLayout>
-          </ProtectedRoute>
-        )}
-      </Route>
-
-      <Route path="/production/bom/:id">
-        {() => (
-          <ProtectedRoute>
-            <MainLayout>
-              <BOM />
-            </MainLayout>
-          </ProtectedRoute>
-        )}
-      </Route>
-
       <Route path="/production/production-plan">
-        {() => (
-          <ProtectedRoute>
-            <MainLayout>
-              <ProductionPlan />
-            </MainLayout>
-          </ProtectedRoute>
-        )}
-      </Route>
-
-      <Route path="/production/production-plan/:tab">
         {() => (
           <ProtectedRoute>
             <MainLayout>
@@ -505,7 +485,8 @@ function Router() {
         )}
       </Route>
 
-      <Route path="/sales-invoicing">
+      {/* Sales Module - Updated: Changed base path from /sales-invoicing to /sales */}
+      <Route path="/sales">
         {() => (
           <ProtectedRoute>
             <MainLayout>
@@ -514,7 +495,16 @@ function Router() {
           </ProtectedRoute>
         )}
       </Route>
-      <Route path="/sales-invoicing/orders">
+      <Route path="/sales/quotations">
+        {() => (
+          <ProtectedRoute>
+            <MainLayout>
+              <Quotations />
+            </MainLayout>
+          </ProtectedRoute>
+        )}
+      </Route>
+      <Route path="/sales/orders">
         {() => (
           <ProtectedRoute>
             <MainLayout>
@@ -523,82 +513,105 @@ function Router() {
           </ProtectedRoute>
         )}
       </Route>
-      <Route path="/sales-invoicing/dispatch">
+      <Route path="/sales/follow-up">
         {() => (
           <ProtectedRoute>
             <MainLayout>
-              <DispatchNote />
-            </MainLayout>
-          </ProtectedRoute>
-        )}
-      </Route>
-      <Route path="/sales-invoicing/invoices">
-        {() => (
-          <ProtectedRoute>
-            <MainLayout>
-              <Invoice />
-            </MainLayout>
-          </ProtectedRoute>
-        )}
-      </Route>
-      <Route path="/sales-invoicing/purchases">
-        {() => (
-          <ProtectedRoute>
-            <MainLayout>
-              <PurchaseOrders />
-            </MainLayout>
-          </ProtectedRoute>
-        )}
-      </Route>
-      <Route path="/sales-invoicing/reports">
-        {() => (
-          <ProtectedRoute>
-            <MainLayout>
-              <SalesReports />
+              <FollowUp />
             </MainLayout>
           </ProtectedRoute>
         )}
       </Route>
 
-      <Route path="/sales">
+      {/* Procurement Routes */}
+      {/* MR Execution - separate page */}
+      <Route path="/procurement/mr-execution">
         {() => (
           <ProtectedRoute>
             <MainLayout>
-              <Sales />
+              <MRExecution />
             </MainLayout>
           </ProtectedRoute>
         )}
       </Route>
 
-      <Route path="/purchases">
+      {/* PO - separate page */}
+      <Route path="/procurement/po">
         {() => (
           <ProtectedRoute>
             <MainLayout>
-              <Purchases />
+              <PO />
             </MainLayout>
           </ProtectedRoute>
         )}
       </Route>
 
-      <Route path="/customers">
+      {/* My MR - separate page */}
+      <Route path="/procurement/mr-request">
         {() => (
           <ProtectedRoute>
             <MainLayout>
-              <CRM />
+              <MRRequest />
             </MainLayout>
           </ProtectedRoute>
         )}
       </Route>
 
-      <Route path="/crm">
+      {/* Quality Check Routes - New module (moved from Production > QC) */}
+      {/* Quality Check default redirect to dashboard */}
+      <Route path="/quality-check">
         {() => (
           <ProtectedRoute>
             <MainLayout>
-              <CRM />
+              <QualityCheckDashboard />
             </MainLayout>
           </ProtectedRoute>
         )}
       </Route>
+
+      <Route path="/quality-check/dashboard">
+        {() => (
+          <ProtectedRoute>
+            <MainLayout>
+              <QualityCheckDashboard />
+            </MainLayout>
+          </ProtectedRoute>
+        )}
+      </Route>
+
+      <Route path="/quality-check/batch-qc">
+        {() => (
+          <ProtectedRoute>
+            <MainLayout>
+              <BatchQC />
+            </MainLayout>
+          </ProtectedRoute>
+        )}
+      </Route>
+
+      {/* Service Center Routes */}
+      <Route path="/service-center/warranty-service">
+        {() => (
+          <ProtectedRoute>
+            <MainLayout>
+              <WarrantyService />
+            </MainLayout>
+          </ProtectedRoute>
+        )}
+      </Route>
+
+      <Route path="/service-center/smr-request">
+        {() => (
+          <ProtectedRoute>
+            <MainLayout>
+              <SMRRequests />
+            </MainLayout>
+          </ProtectedRoute>
+        )}
+      </Route>
+
+
+
 
       <Route path="/accounting">
         {() => (
@@ -610,46 +623,36 @@ function Router() {
         )}
       </Route>
 
-      {/* Logistics Module Routes */}
-      <Route path="/logistics">
+      <Route path="/accounting/invoicing">
         {() => (
           <ProtectedRoute>
             <MainLayout>
-              <LogisticsDashboard />
+              <Invoicing />
             </MainLayout>
           </ProtectedRoute>
         )}
       </Route>
 
-      <Route path="/logistics/new-trip">
+      <Route path="/accounting/worker-payments">
         {() => (
           <ProtectedRoute>
             <MainLayout>
-              <NewTrip />
+              <WorkerPayments />
+            </MainLayout>
+          </ProtectedRoute>
+        )}
+      </Route>
+      <Route path="/accounting/pending-payment">
+        {() => (
+          <ProtectedRoute>
+            <MainLayout>
+              <PaymentFollowUp />
             </MainLayout>
           </ProtectedRoute>
         )}
       </Route>
 
-      <Route path="/logistics/weighment/:id">
-        {() => (
-          <ProtectedRoute>
-            <MainLayout>
-              <Weighment />
-            </MainLayout>
-          </ProtectedRoute>
-        )}
-      </Route>
 
-      <Route path="/logistics/history">
-        {() => (
-          <ProtectedRoute>
-            <MainLayout>
-              <TripHistory />
-            </MainLayout>
-          </ProtectedRoute>
-        )}
-      </Route>
 
       <Route path="/settings">
         {() => (
@@ -769,17 +772,26 @@ function Router() {
           </ProtectedRoute>
         )}
       </Route>
-      <Route path="/masters/hrms/:tab?/:type?">
+      <Route path="/hr-setup/workers-wage-period">
         {() => (
           <ProtectedRoute>
             <MainLayout>
-              <HRMSMasters />
+              <WorkersWagePeriod />
+            </MainLayout>
+          </ProtectedRoute>
+        )}
+      </Route>
+      <Route path="/masters/core/:type?">
+        {() => (
+          <ProtectedRoute>
+            <MainLayout>
+              <CoreMasters />
             </MainLayout>
           </ProtectedRoute>
         )}
       </Route>
 
-      <Route path="/masters/procurement/:tab?/:type?">
+      <Route path="/masters/procurement/:type?">
         {() => (
           <ProtectedRoute>
             <MainLayout>
@@ -790,7 +802,7 @@ function Router() {
       </Route>
 
       {/* Inventory Masters */}
-      <Route path="/masters/inventory/:tab?/:type?">
+      <Route path="/masters/inventory/:type?">
         {() => (
           <ProtectedRoute>
             <MainLayout>
@@ -800,17 +812,8 @@ function Router() {
         )}
       </Route>
 
-      <Route path="/masters/sales/:tab?/:type?">
-        {() => (
-          <ProtectedRoute>
-            <MainLayout>
-              <SalesMasters />
-            </MainLayout>
-          </ProtectedRoute>
-        )}
-      </Route>
 
-      <Route path="/masters/production/:tab?/:type?">
+      <Route path="/masters/production/:type?">
         {() => (
           <ProtectedRoute>
             <MainLayout>
@@ -840,15 +843,7 @@ function Router() {
         )}
       </Route>
 
-      <Route path="/chat">
-        {() => (
-          <ProtectedRoute>
-            <MainLayout>
-              <InternalChat />
-            </MainLayout>
-          </ProtectedRoute>
-        )}
-      </Route>
+
 
       {/* Home route - exact match for / */}
       <Route path="/">
@@ -865,7 +860,7 @@ function Router() {
       <Route path="/:rest*">
         {() => <NotFound />}
       </Route>
-    </Switch>
+    </Switch >
   );
 }
 
@@ -881,3 +876,4 @@ function App() {
 }
 
 export default App;
+

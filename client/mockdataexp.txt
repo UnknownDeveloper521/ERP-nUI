@@ -1,0 +1,65 @@
+Locations{
+    Jinja,
+    Kampala,
+}
+
+Operations{
+    Lead Generation & Purification,
+    Case Creation,
+    Grid Creation & Oxidization,
+    Assembly line & Packaging
+}
+
+Work Centers{
+    Lead Furnace Center,
+    Plastic Casing Center,
+    Grid Generation Center,
+    Assembly Line
+}   
+
+
+Note : Here Warehouses has multiple Bins and followings are bins under the Jinja WH.
+Warehouses{
+    Jinja WH{
+            Bin1{Scarp Battery},
+            Bin2{Purified Lead},
+            Bin3{Grid},
+            Bin4{Terminals},
+            Bin5{Connectors}
+    }
+}   
+
+
+
+RM(Raw Materials){
+    Scrap Battery,
+    Plastic Pallets,
+    Acid Type A,
+    Acid Type B,
+    Acid Type C,
+    
+}   
+
+
+SFG(Semi Finished Goods){
+    Purified Lead,
+    Battery Cases,
+    Battery Lids,
+    Separators,
+    Terminals,
+    Connectors
+}
+
+
+FG(Finished Goods){
+    GSV 7,
+    GSV 8,
+    GSMX 2.5,
+    GSMx 6.5,
+    SMF 20,
+    SMF 40,
+    MF N 40,
+    MF NS 60
+}
+
+

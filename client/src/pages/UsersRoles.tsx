@@ -40,7 +40,7 @@ import { useAuth, Role, ACTIONS_LIST, MODULE_HIERARCHY, constructPermissionId } 
 import { useToast } from "@/hooks/use-toast";
 import { Switch } from "@/components/ui/switch";
 
-const mockDepartments = ["IT", "Sales", "Weighbridge", "Finance", "Inventory", "Production", "Logistics"];
+const mockDepartments = ["IT", "HR", "Finance", "Sales", "Operations", "Quality"];
 
 export default function UsersRoles() {
   const {

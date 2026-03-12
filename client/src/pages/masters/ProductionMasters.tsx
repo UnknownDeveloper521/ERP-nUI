@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useLocation, useParams } from "wouter";
 import {
     Table,
@@ -12,7 +12,7 @@ import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Plus, Search, Pencil, Trash2, ChevronsUpDown, Check, ChevronLeft, ChevronRight } from "lucide-react";
+import { Plus, Search, Pencil, Trash2, ChevronsUpDown, Check } from "lucide-react";
 import {
     Dialog,
     DialogContent,
@@ -47,6 +47,8 @@ import {
     PopoverTrigger,
 } from "@/components/ui/popover";
 import { cn } from "@/lib/utils";
+import { DataTablePagination } from "@/components/shared/DataTablePagination";
+import { mockLocations, mockOperations, mockWorkCenters, allMockMaterials } from "@/lib/masterMockData";
 
 
 // --- Types & Interfaces ---
@@ -68,6 +70,7 @@ interface WorkCenter {
     name: string;
     description?: string;
     location: string;
+    department: string;
     status: "Active" | "Inactive";
     linked_operations?: number[]; // IDs of linked operations
     created_at?: string;
@@ -92,14 +95,14 @@ interface Item {
     id: number;
     code: string;
     name: string;
-    type: "RM" | "SFG" | "FG" | "Waste" | "Consumable";
+    type: "RM" | "SFG" | "FG" | "Waste" | "Consumables";
     uom: string;
 }
 
 interface OperationItem {
     id: number;
     item_id: number;
-    type: "RM" | "SFG" | "FG" | "Waste" | "Consumable";
+    type: "RM" | "SFG" | "FG" | "Waste" | "Consumables";
     quantity: number;
 }
 
@@ -114,10 +117,12 @@ interface Operation {
     code: string;
     name: string;
     description?: string;
+    department: string;
     inputs: OperationItem[];
     outputs: OperationItem[];
     is_qc_required: boolean;
     is_qc_required_batch_wise: boolean;
+    cycle_time: number;
     qc_parameters: QCParameter[];
     status: "Active" | "Inactive";
     created_at?: string;
@@ -126,45 +131,81 @@ interface Operation {
 
 // --- Mock Data ---
 
-const MOCK_ITEMS: Item[] = [
-    { id: 101, code: "RM001", name: "Steel Sheet", type: "RM", uom: "Sheet" },
-    { id: 102, code: "RM002", name: "Plastic Granules", type: "RM", uom: "Kg" },
-    { id: 103, code: "RM003", name: "Paint", type: "Consumable", uom: "Ltr" },
-    { id: 201, code: "SFG001", name: "Molded Body", type: "SFG", uom: "Nos" },
-    { id: 202, code: "SFG002", name: "Metal Frame", type: "SFG", uom: "Nos" },
-    { id: 301, code: "FG001", name: "Finished Chair", type: "FG", uom: "Nos" },
-    { id: 401, code: "W001", name: "Scrap Metal", type: "Waste", uom: "Kg" },
-    { id: 402, code: "W002", name: "Plastic Waste", type: "Waste", uom: "Kg" },
+const DEPARTMENTS = [
+    { id: 1, name: "Production" },
+    { id: 2, name: "Quality Control" },
+    { id: 3, name: "Warehouse & Logistics" },
+    { id: 4, name: "Maintenance" },
+    { id: 5, name: "Research & Development" },
 ];
 
-const initialWorkCenters: WorkCenter[] = [
-    { id: 1, code: "WC001", name: "Assembly Line 1", description: "Main assembly line for electronics", location: "Plant A", status: "Active" },
-    { id: 2, code: "WC002", name: "Packaging Unit", description: "Final packaging area", location: "Plant B", status: "Active" },
-];
+const LOCATIONS = mockLocations.map(loc => loc.name);
 
-const initialMachines: Machine[] = [
-    { id: 1, code: "M001", name: "Conveyor Belt A", description: "Main conveyor", work_center_id: 1, status: "Active" },
-    { id: 2, code: "M002", name: "Soldering Station 1", description: "Robotic soldering", work_center_id: 1, status: "Active" },
-];
+const hoursToHHMM = (hours: number) => {
+    if (!isFinite(hours) || hours < 0) return "";
+    const totalMinutes = Math.round(hours * 60);
+    const h = Math.floor(totalMinutes / 60);
+    const m = totalMinutes % 60;
+    return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
+};
 
-const initialOperations: Operation[] = [
-    {
-        id: 1,
-        code: "OP001",
-        name: "Molding",
-        description: "Initial molding process",
-        inputs: [{ id: 1, item_id: 102, type: "RM", quantity: 10 }],
-        outputs: [{ id: 1, item_id: 201, type: "SFG", quantity: 1 }],
-        is_qc_required: true,
-        is_qc_required_batch_wise: false,
-        qc_parameters: [{ id: 1, name: "Dimensions", description: "Check length and width" }],
-        status: "Active"
-    },
-];
+const hoursToHHMMParts = (hours: number) => {
+    if (!isFinite(hours) || hours < 0) return { hh: "00", mm: "00" };
+    const totalMinutes = Math.round(hours * 60);
+    const h = Math.floor(totalMinutes / 60);
+    const m = totalMinutes % 60;
+    return { hh: String(h).padStart(2, "0"), mm: String(m).padStart(2, "0") };
+};
+
+const DURATION_HOURS = Array.from({ length: 100 }, (_, i) => String(i).padStart(2, "0"));
+const DURATION_MINUTES = Array.from({ length: 60 }, (_, i) => String(i).padStart(2, "0"));
+
+const MOCK_ITEMS: Item[] = allMockMaterials.map((material, index) => ({
+    id: index + 1,
+    code: material.id.toUpperCase().replace('-', ''),
+    name: material.name,
+    type: material.type as "RM" | "SFG" | "FG" | "Waste" | "Consumables",
+    uom: "kg"
+}));
+
+const initialWorkCenters: WorkCenter[] = Array.from({ length: 5 }).map((_, index) => {
+    const mockWc = mockWorkCenters[index % mockWorkCenters.length];
+    return {
+        id: index + 1,
+        code: `WC${(index + 1).toString().padStart(3, '0')}`,
+        name: index < mockWorkCenters.length ? mockWc.name : `Work Center ${index + 1}`,
+        description: `Description for Work Center ${index + 1}`,
+        location: mockLocations[index % mockLocations.length]?.name || "Plant A",
+        department: DEPARTMENTS[index % DEPARTMENTS.length].name,
+        status: "Active" as const,
+        linked_operations: []
+    };
+});
+
+const initialMachines: Machine[] = initialWorkCenters.flatMap((wc, index) => [
+    { id: index * 2 + 1, code: `M${String(index * 2 + 1).padStart(3, '0')}`, name: `Machine A - ${wc.name}`, description: `Primary machine for ${wc.name}`, work_center_id: wc.id, status: "Active" as const },
+    { id: index * 2 + 2, code: `M${String(index * 2 + 2).padStart(3, '0')}`, name: `Machine B - ${wc.name}`, description: `Secondary machine for ${wc.name}`, work_center_id: wc.id, status: "Active" as const },
+]).slice(0, 5);
+
+const initialOperations: Operation[] = Array.from({ length: 5 }).map((_, index) => {
+    const mockOp = mockOperations[index % mockOperations.length];
+    return {
+        id: index + 1,
+        code: `OP${(index + 1).toString().padStart(3, '0')}`,
+        name: index < mockOperations.length ? mockOp.name : `Operation ${index + 1}`,
+        description: `Description for ${index < mockOperations.length ? mockOp.name : `Operation ${index + 1}`}`,
+        department: DEPARTMENTS[index % DEPARTMENTS.length].name,
+        inputs: [{ id: index * 10 + 1, item_id: (index % 10) + 1, type: "RM", quantity: 10 }],
+        outputs: [{ id: index * 10 + 2, item_id: (index % 10) + 11, type: "SFG", quantity: 1 }],
+        is_qc_required: index % 3 !== 0,
+        is_qc_required_batch_wise: index % 2 === 0,
+        cycle_time: (index + 1) * 1.5, // Cycle time in hours
+        qc_parameters: [{ id: index * 10 + 3, name: "Parameter 1", description: "Standard check" }],
+        status: "Active" as const
+    };
+});
 
 
-
-const LOCATIONS = ["Plant A", "Plant B", "Plant C", "Plant D"];
 
 // --- Sub-components for Form Sections ---
 
@@ -187,8 +228,6 @@ export default function ProductionMasters() {
     const [location, setLocation] = useLocation();
     const params = useParams();
 
-    const activeTab = params.tab || "basic";
-
     const getValidMaster = (type: string | undefined): MasterType => {
         if (type) {
             const entry = Object.entries(MASTER_SLUGS).find(([_, slug]) => slug === type);
@@ -198,24 +237,38 @@ export default function ProductionMasters() {
     };
 
     const selectedMaster = getValidMaster(params.type);
+    const [activeTab, setActiveTab] = useState(MASTER_SLUGS[selectedMaster]);
 
     const [searchTerm, setSearchTerm] = useState("");
     const [open, setOpen] = useState(false);
     const [currentPage, setCurrentPage] = useState(1);
-    const itemsPerPage = 10;
+    const [itemsPerPage, setItemsPerPage] = useState(10);
 
-    const updateRoute = (tab: string, type: MasterType) => {
+    const updateRoute = (type: MasterType) => {
         const slug = MASTER_SLUGS[type] || type.toLowerCase();
-        setLocation(`/masters/production/${tab}/${slug}`);
+        setLocation(`/masters/production/${slug}`);
     };
 
     const handleMasterChange = (newMaster: MasterType) => {
-        updateRoute(activeTab, newMaster);
+        const slug = MASTER_SLUGS[newMaster];
+        setActiveTab(slug);
+        setLocation(`/masters/production/${slug}`);
         setSearchTerm("");
         setOpen(false);
         setFilterStatus("All");
         setCurrentPage(1);
     };
+
+    useEffect(() => {
+        const newMaster = getValidMaster(params.type);
+        const newSlug = MASTER_SLUGS[newMaster];
+        if (newSlug !== activeTab) {
+            setActiveTab(newSlug);
+        }
+        if (location === '/masters/production') {
+            setLocation('/masters/production/work-centers');
+        }
+    }, [params.type, location]);
 
     // State for mock data
     const [workCenters, setWorkCenters] = useState<WorkCenter[]>(initialWorkCenters);
@@ -235,13 +288,15 @@ export default function ProductionMasters() {
     const [operations, setOperations] = useState<Operation[]>(initialOperations);
     const [selectedInputId, setSelectedInputId] = useState<string>("");
     const [isInputComboboxOpen, setIsInputComboboxOpen] = useState(false);
-    const [selectedInputType, setSelectedInputType] = useState<"RM" | "SFG" | "FG" | "Waste" | "Consumable">("RM");
+    const [selectedInputType, setSelectedInputType] = useState<"RM" | "SFG" | "FG" | "Waste" | "Consumables">("RM");
 
     const [selectedOutputId, setSelectedOutputId] = useState<string>("");
     const [isOutputComboboxOpen, setIsOutputComboboxOpen] = useState(false);
-    const [selectedOutputType, setSelectedOutputType] = useState<"RM" | "SFG" | "FG" | "Waste" | "Consumable">("SFG");
+    const [selectedOutputType, setSelectedOutputType] = useState<"RM" | "SFG" | "FG" | "Waste" | "Consumables">("SFG");
 
     const [isOpWCComboboxOpen, setIsOpWCComboboxOpen] = useState(false);
+    const [cycleTimeHH, setCycleTimeHH] = useState<string>("00");
+    const [cycleTimeMM, setCycleTimeMM] = useState<string>("00");
 
     // Work Center Operations State
     const [selectedWCOpId, setSelectedWCOpId] = useState<string>("");
@@ -398,12 +453,15 @@ export default function ProductionMasters() {
         } else if (selectedMaster === "Operations") {
             setFormData({
                 status: "Active",
-                is_qc_required: false,
-                is_qc_required_batch_wise: false,
+                is_qc_required: true,
+                is_qc_required_batch_wise: true,
+                cycle_time: 0,
                 inputs: [],
                 outputs: [],
                 qc_parameters: [],
             });
+            setCycleTimeHH("00");
+            setCycleTimeMM("00");
         }
         setIsDialogOpen(true);
     };
@@ -424,6 +482,9 @@ export default function ProductionMasters() {
             data.qc_parameters = item.qc_parameters || [];
             data.is_qc_required = item.is_qc_required || false;
             data.is_qc_required_batch_wise = item.is_qc_required_batch_wise || false;
+            const parts = hoursToHHMMParts(Number(item.cycle_time || 0));
+            setCycleTimeHH(parts.hh);
+            setCycleTimeMM(parts.mm);
         }
         setFormData(data);
         setIsDialogOpen(true);
@@ -452,7 +513,7 @@ export default function ProductionMasters() {
         const now = new Date().toISOString();
 
         if (selectedMaster === "Work Centers") {
-            if (!formData.code || !formData.name || !formData.status || !formData.location) {
+            if (!formData.code || !formData.name || !formData.status || !formData.location || !formData.department) {
                 toast({ variant: "destructive", title: "Validation Error", description: "Please fill all required fields." });
                 return;
             }
@@ -494,8 +555,12 @@ export default function ProductionMasters() {
                 toast({ title: "Created", description: "Machine created successfully" });
             }
         } else if (selectedMaster === "Operations") {
-            if (!formData.code || !formData.name || !formData.status) {
-                toast({ variant: "destructive", title: "Validation Error", description: "Please fill all required fields." });
+            if (!formData.code || !formData.name || !formData.status || !formData.department || (formData.cycle_time === undefined || formData.cycle_time === null || isNaN(formData.cycle_time))) {
+                toast({ variant: "destructive", title: "Validation Error", description: "Please fill all required fields including a valid Cycle Time." });
+                return;
+            }
+            if (formData.cycle_time < 0) {
+                toast({ variant: "destructive", title: "Validation Error", description: "Cycle Time cannot be negative." });
                 return;
             }
             if (operations.some(o => o.id !== editingId && o.code.toLowerCase() === formData.code.toLowerCase())) {
@@ -539,6 +604,7 @@ export default function ProductionMasters() {
                             <TableHead>Work Center Name</TableHead>
                             <TableHead>Description</TableHead>
                             <TableHead>Location</TableHead>
+                            <TableHead>Department</TableHead>
                             <TableHead>Status</TableHead>
                             <TableHead className="text-right">Actions</TableHead>
                         </TableRow>
@@ -546,7 +612,7 @@ export default function ProductionMasters() {
                     <TableBody>
                         {paginatedData.length === 0 ? (
                             <TableRow>
-                                <TableCell colSpan={6} className="h-24 text-center text-muted-foreground">
+                                <TableCell colSpan={7} className="h-24 text-center text-muted-foreground">
                                     No work centers found.
                                 </TableCell>
                             </TableRow>
@@ -557,6 +623,7 @@ export default function ProductionMasters() {
                                     <TableCell>{item.name}</TableCell>
                                     <TableCell className="max-w-[200px] truncate">{item.description || "-"}</TableCell>
                                     <TableCell>{item.location}</TableCell>
+                                    <TableCell>{item.department}</TableCell>
                                     <TableCell><StatusBadge status={item.status} /></TableCell>
                                     <TableCell className="text-right">
                                         <div className="flex justify-end gap-2">
@@ -629,6 +696,7 @@ export default function ProductionMasters() {
                         <TableRow className="bg-muted/50">
                             <TableHead>Code</TableHead>
                             <TableHead>Operation Name</TableHead>
+                            <TableHead className="text-center">Cycle Time (HH:MM)</TableHead>
                             <TableHead className="text-center">QC Required</TableHead>
                             <TableHead className="text-center">Batchwise Tracking</TableHead>
                             <TableHead>Status</TableHead>
@@ -648,6 +716,9 @@ export default function ProductionMasters() {
                                     <TableRow key={item.id}>
                                         <TableCell className="font-medium">{item.code}</TableCell>
                                         <TableCell>{item.name}</TableCell>
+                                        <TableCell className="text-center font-medium">
+                                            {hoursToHHMM(Number(item.cycle_time || 0))}
+                                        </TableCell>
                                         <TableCell className="text-center">
                                             {item.is_qc_required ? (
                                                 <Badge variant="secondary" className="bg-blue-50 text-blue-700 border-blue-200">Yes</Badge>
@@ -742,6 +813,17 @@ export default function ProductionMasters() {
                                     </Command>
                                 </PopoverContent>
                             </Popover>
+                        </div>
+                        <div className="space-y-2">
+                            <Label>Department *</Label>
+                            <Select value={formData.department} onValueChange={(val: any) => setFormData({ ...formData, department: val })}>
+                                <SelectTrigger><SelectValue placeholder="Select Department" /></SelectTrigger>
+                                <SelectContent>
+                                    {DEPARTMENTS.map(dept => (
+                                        <SelectItem key={dept.id} value={dept.name}>{dept.name}</SelectItem>
+                                    ))}
+                                </SelectContent>
+                            </Select>
                         </div>
                         <div className="space-y-2">
                             <Label>Status *</Label>
@@ -931,6 +1013,17 @@ export default function ProductionMasters() {
                                 <Input id="name" value={formData.name || ""} onChange={e => setFormData({ ...formData, name: e.target.value })} placeholder="Operation Name" />
                             </div>
                             <div className="space-y-2">
+                                <Label>Department *</Label>
+                                <Select value={formData.department} onValueChange={(val: any) => setFormData({ ...formData, department: val })}>
+                                    <SelectTrigger><SelectValue placeholder="Select Department" /></SelectTrigger>
+                                    <SelectContent>
+                                        {DEPARTMENTS.map(dept => (
+                                            <SelectItem key={dept.id} value={dept.name}>{dept.name}</SelectItem>
+                                        ))}
+                                    </SelectContent>
+                                </Select>
+                            </div>
+                            <div className="space-y-2">
                                 <Label>Status *</Label>
                                 <Select value={formData.status || ""} onValueChange={(val: any) => setFormData({ ...formData, status: val })}>
                                     <SelectTrigger><SelectValue placeholder="Select Status" /></SelectTrigger>
@@ -939,6 +1032,44 @@ export default function ProductionMasters() {
                                         <SelectItem value="Inactive">Inactive</SelectItem>
                                     </SelectContent>
                                 </Select>
+                            </div>
+                            <div className="space-y-2 col-span-2">
+                                <Label htmlFor="cycle_time">Cycle Time (HH:MM) *</Label>
+                                <div className="flex items-center gap-2">
+                                    <Select
+                                        value={cycleTimeHH}
+                                        onValueChange={(val: string) => {
+                                            setCycleTimeHH(val);
+                                            const h = Number(val);
+                                            const m = Number(cycleTimeMM);
+                                            setFormData({ ...formData, cycle_time: h + m / 60 });
+                                        }}
+                                    >
+                                        <SelectTrigger className="w-[110px]"><SelectValue placeholder="HH" /></SelectTrigger>
+                                        <SelectContent className="max-h-[220px]">
+                                            {DURATION_HOURS.map((h) => (
+                                                <SelectItem key={h} value={h}>{h}</SelectItem>
+                                            ))}
+                                        </SelectContent>
+                                    </Select>
+                                    <span className="text-muted-foreground font-medium">:</span>
+                                    <Select
+                                        value={cycleTimeMM}
+                                        onValueChange={(val: string) => {
+                                            setCycleTimeMM(val);
+                                            const h = Number(cycleTimeHH);
+                                            const m = Number(val);
+                                            setFormData({ ...formData, cycle_time: h + m / 60 });
+                                        }}
+                                    >
+                                        <SelectTrigger className="w-[110px]"><SelectValue placeholder="MM" /></SelectTrigger>
+                                        <SelectContent className="max-h-[220px]">
+                                            {DURATION_MINUTES.map((m) => (
+                                                <SelectItem key={m} value={m}>{m}</SelectItem>
+                                            ))}
+                                        </SelectContent>
+                                    </Select>
+                                </div>
                             </div>
                         </div>
                         <div className="mt-4 space-y-2">
@@ -957,7 +1088,7 @@ export default function ProductionMasters() {
                                     <SelectContent>
                                         <SelectItem value="RM">RM</SelectItem>
                                         <SelectItem value="SFG">SFG</SelectItem>
-                                        <SelectItem value="Waste">Waste</SelectItem>
+                                        <SelectItem value="Consumables">Consumables</SelectItem>
                                     </SelectContent>
                                 </Select>
                             </div>
@@ -1011,7 +1142,6 @@ export default function ProductionMasters() {
                                         <TableHead>Item Details</TableHead>
                                         <TableHead>UOM</TableHead>
                                         <TableHead>Type</TableHead>
-                                        <TableHead className="w-[100px]">Quantity</TableHead>
                                         <TableHead className="w-[50px]"></TableHead>
                                     </TableRow>
                                 </TableHeader>
@@ -1027,9 +1157,6 @@ export default function ProductionMasters() {
                                                 <TableCell>{originalItem?.uom}</TableCell>
                                                 <TableCell><Badge variant="outline">{item.type}</Badge></TableCell>
                                                 <TableCell>
-                                                    <Input type="number" min="0" value={item.quantity} onChange={(e) => updateOperationItem("inputs", item.id, "quantity", parseFloat(e.target.value) || 0)} className="h-8" />
-                                                </TableCell>
-                                                <TableCell>
                                                     <Button variant="ghost" size="icon" className="h-8 w-8 text-destructive" onClick={() => removeOperationItem("inputs", item.id)}>
                                                         <Trash2 className="h-4 w-4" />
                                                     </Button>
@@ -1037,7 +1164,7 @@ export default function ProductionMasters() {
                                             </TableRow>
                                         );
                                     })}
-                                    {(!formData.inputs?.length) && <TableRow><TableCell colSpan={5} className="text-center text-muted-foreground h-24">No inputs added.</TableCell></TableRow>}
+                                    {(!formData.inputs?.length) && <TableRow><TableCell colSpan={4} className="text-center text-muted-foreground h-24">No inputs added.</TableCell></TableRow>}
                                 </TableBody>
                             </Table>
                         </div>
@@ -1053,7 +1180,6 @@ export default function ProductionMasters() {
                                     <SelectContent>
                                         <SelectItem value="SFG">SFG</SelectItem>
                                         <SelectItem value="FG">FG</SelectItem>
-                                        <SelectItem value="Waste">Waste</SelectItem>
                                     </SelectContent>
                                 </Select>
                             </div>
@@ -1107,7 +1233,6 @@ export default function ProductionMasters() {
                                         <TableHead>Item Details</TableHead>
                                         <TableHead>UOM</TableHead>
                                         <TableHead>Type</TableHead>
-                                        <TableHead className="w-[100px]">Quantity</TableHead>
                                         <TableHead className="w-[50px]"></TableHead>
                                     </TableRow>
                                 </TableHeader>
@@ -1123,9 +1248,6 @@ export default function ProductionMasters() {
                                                 <TableCell>{originalItem?.uom}</TableCell>
                                                 <TableCell><Badge variant="outline">{item.type}</Badge></TableCell>
                                                 <TableCell>
-                                                    <Input type="number" min="0" value={item.quantity} onChange={(e) => updateOperationItem("outputs", item.id, "quantity", parseFloat(e.target.value) || 0)} className="h-8" />
-                                                </TableCell>
-                                                <TableCell>
                                                     <Button variant="ghost" size="icon" className="h-8 w-8 text-destructive" onClick={() => removeOperationItem("outputs", item.id)}>
                                                         <Trash2 className="h-4 w-4" />
                                                     </Button>
@@ -1133,81 +1255,81 @@ export default function ProductionMasters() {
                                             </TableRow>
                                         );
                                     })}
-                                    {(!formData.outputs?.length) && <TableRow><TableCell colSpan={5} className="text-center text-muted-foreground h-24">No outputs added.</TableCell></TableRow>}
+                                    {(!formData.outputs?.length) && <TableRow><TableCell colSpan={4} className="text-center text-muted-foreground h-24">No outputs added.</TableCell></TableRow>}
                                 </TableBody>
                             </Table>
                         </div>
                     </div>
 
                     <div className="space-y-4">
-                        <div className="flex items-center space-x-2">
-                            <input
-                                type="checkbox"
-                                id="is_qc_required"
-                                className="h-4 w-4 rounded border-gray-300 text-primary focus:ring-primary"
-                                checked={formData.is_qc_required || false}
-                                onChange={(e) => setFormData({ ...formData, is_qc_required: e.target.checked })}
-                            />
-                            <Label htmlFor="is_qc_required" className="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70">
-                                Is QC Required?
-                            </Label>
+                        <div className="flex flex-col gap-4">
+                            <div className="flex items-center space-x-2">
+                                <input
+                                    type="checkbox"
+                                    id="is_qc_required_batch_wise"
+                                    className="h-4 w-4 rounded border-gray-300 text-primary focus:ring-primary"
+                                    checked={formData.is_qc_required_batch_wise || false}
+                                    onChange={(e) => setFormData({ ...formData, is_qc_required_batch_wise: e.target.checked })}
+                                />
+                                <Label htmlFor="is_qc_required_batch_wise" className="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70">
+                                    Batchwise tracking
+                                </Label>
+                            </div>
+
+                            <div className="flex items-center space-x-2">
+                                <input
+                                    type="checkbox"
+                                    id="is_qc_required"
+                                    className="h-4 w-4 rounded border-gray-300 text-primary focus:ring-primary"
+                                    checked={formData.is_qc_required || false}
+                                    onChange={(e) => setFormData({ ...formData, is_qc_required: e.target.checked })}
+                                />
+                                <Label htmlFor="is_qc_required" className="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70">
+                                    Is QC Required?
+                                </Label>
+                            </div>
                         </div>
 
                         {formData.is_qc_required && (
-                            <>
-                                <div className="flex items-center space-x-2 mb-4 ml-1">
-                                    <input
-                                        type="checkbox"
-                                        id="is_qc_required_batch_wise"
-                                        className="h-4 w-4 rounded border-gray-300 text-primary focus:ring-primary"
-                                        checked={formData.is_qc_required_batch_wise || false}
-                                        onChange={(e) => setFormData({ ...formData, is_qc_required_batch_wise: e.target.checked })}
-                                    />
-                                    <Label htmlFor="is_qc_required_batch_wise" className="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70">
-                                        Batchwise tracking
-                                    </Label>
+                            <div className="rounded-lg border p-4 bg-muted/20">
+                                <div className="flex items-center justify-between mb-4">
+                                    <h4 className="font-semibold text-sm">QC Parameters</h4>
+                                    <Button variant="outline" size="sm" onClick={addQCParam}>
+                                        <Plus className="h-3.5 w-3.5 mr-2" />
+                                        Add Parameter
+                                    </Button>
                                 </div>
-
-                                <div className="rounded-lg border p-4 bg-muted/20">
-                                    <div className="flex items-center justify-between mb-4">
-                                        <h4 className="font-semibold text-sm">QC Parameters</h4>
-                                        <Button variant="outline" size="sm" onClick={addQCParam}>
-                                            <Plus className="h-3.5 w-3.5 mr-2" />
-                                            Add Parameter
-                                        </Button>
-                                    </div>
-                                    <div className="space-y-3">
-                                        {(formData.qc_parameters || []).map((param: QCParameter) => (
-                                            <div key={param.id} className="flex gap-3 items-start">
-                                                <div className="flex-1">
-                                                    <Input
-                                                        placeholder="Parameter Name"
-                                                        value={param.name}
-                                                        onChange={(e) => updateQCParam(param.id, "name", e.target.value)}
-                                                        className="h-9"
-                                                    />
-                                                </div>
-                                                <div className="flex-[2]">
-                                                    <Input
-                                                        placeholder="Check Description"
-                                                        value={param.description}
-                                                        onChange={(e) => updateQCParam(param.id, "description", e.target.value)}
-                                                        className="h-9"
-                                                    />
-                                                </div>
-                                                <Button variant="ghost" size="icon" className="h-9 w-9 text-destructive" onClick={() => removeQCParam(param.id)}>
-                                                    <Trash2 className="h-4 w-4" />
-                                                </Button>
+                                <div className="space-y-3">
+                                    {(formData.qc_parameters || []).map((param: QCParameter) => (
+                                        <div key={param.id} className="flex gap-3 items-start">
+                                            <div className="flex-1">
+                                                <Input
+                                                    placeholder="Parameter Name"
+                                                    value={param.name}
+                                                    onChange={(e) => updateQCParam(param.id, "name", e.target.value)}
+                                                    className="h-9"
+                                                />
                                             </div>
-                                        ))}
-                                        {(!formData.qc_parameters?.length) && <div className="text-center text-muted-foreground text-sm py-2">No QC parameters defined.</div>}
-                                    </div>
+                                            <div className="flex-[2]">
+                                                <Input
+                                                    placeholder="Check Description"
+                                                    value={param.description}
+                                                    onChange={(e) => updateQCParam(param.id, "description", e.target.value)}
+                                                    className="h-9"
+                                                />
+                                            </div>
+                                            <Button variant="ghost" size="icon" className="h-9 w-9 text-destructive" onClick={() => removeQCParam(param.id)}>
+                                                <Trash2 className="h-4 w-4" />
+                                            </Button>
+                                        </div>
+                                    ))}
+                                    {(!formData.qc_parameters?.length) && <div className="text-center text-muted-foreground text-sm py-2">No QC parameters defined.</div>}
                                 </div>
+                            </div>
 
-                            </>
                         )}
                     </div>
-                </div>
+                </div >
             );
         }
     };
@@ -1216,7 +1338,7 @@ export default function ProductionMasters() {
 
 
     return (
-        <div className="flex flex-col gap-6 h-full">
+        <div className="flex flex-col gap-6 h-full overflow-hidden">
             <div className="flex flex-col gap-2">
                 <h1 className="text-3xl font-bold tracking-tight">Production Masters</h1>
                 <p className="text-muted-foreground">
@@ -1224,74 +1346,30 @@ export default function ProductionMasters() {
                 </p>
             </div>
 
-            <Tabs defaultValue="basic" value={activeTab} className="w-full flex-1 flex flex-col">
+            <Tabs value={activeTab} onValueChange={(value) => {
+                const masterType = Object.entries(MASTER_SLUGS).find(([_, slug]) => slug === value)?.[0] as MasterType;
+                if (masterType) handleMasterChange(masterType);
+            }} className="w-full flex-1 flex flex-col min-h-0">
                 <div className="border-b border-border">
                     <TabsList className="h-auto w-full justify-start gap-0 bg-transparent p-0 overflow-x-auto">
-                        <TabsTrigger
-                            value="basic"
-                            onClick={() => updateRoute("basic", "Work Centers")}
-                            className="data-[state=active]:bg-transparent data-[state=active]:shadow-none data-[state=active]:border-primary data-[state=active]:text-primary px-4 py-2 text-sm font-medium border-b-2 border-transparent transition-colors rounded-none text-muted-foreground hover:text-foreground hover:border-muted-foreground/30 whitespace-nowrap"
-                        >
-                            Basic
-                        </TabsTrigger>
+                        {MASTER_TYPES.map((type) => (
+                            <TabsTrigger
+                                key={type}
+                                value={MASTER_SLUGS[type]}
+                                onClick={() => handleMasterChange(type)}
+                                className="data-[state=active]:bg-transparent data-[state=active]:shadow-none data-[state=active]:border-primary data-[state=active]:text-primary px-4 py-2 text-sm font-medium border-b-2 border-transparent transition-colors rounded-none text-muted-foreground hover:text-foreground hover:border-muted-foreground/30 whitespace-nowrap"
+                            >
+                                {type}
+                            </TabsTrigger>
+                        ))}
                     </TabsList>
                 </div>
 
-                <TabsContent value="basic" className="m-0 h-full flex flex-col gap-6 mt-6">
+                <div className="flex-1 flex flex-col gap-6 mt-6 overflow-y-auto pr-2 pb-6 custom-scrollbar">
                     {/* Top Control Bar */}
                     <div className="flex flex-col sm:flex-row items-center gap-4 bg-card p-4 rounded-lg border shadow-sm">
 
-                        {/* Master Type Selection */}
-                        <div className="w-full sm:w-1/4">
-                            <Label className="mb-1.5 block text-xs font-medium text-muted-foreground uppercase tracking-wider">
-                                Select Master Type
-                            </Label>
-                            <Popover open={open} onOpenChange={setOpen}>
-                                <PopoverTrigger asChild>
-                                    <Button
-                                        variant="outline"
-                                        role="combobox"
-                                        aria-expanded={open}
-                                        className="w-full justify-between h-10 font-medium"
-                                    >
-                                        {selectedMaster}
-                                        <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
-                                    </Button>
-                                </PopoverTrigger>
-                                <PopoverContent
-                                    className="p-0"
-                                    style={{ width: "var(--radix-popover-trigger-width)" }}
-                                    align="start"
-                                >
-                                    <Command>
-                                        <CommandInputBorderless placeholder="Search master type..." />
-                                        <CommandList>
-                                            <CommandEmpty>No master type found.</CommandEmpty>
-                                            <CommandGroup>
-                                                {MASTER_TYPES.map((type) => (
-                                                    <CommandItem
-                                                        key={type}
-                                                        value={type}
-                                                        onSelect={(currentValue) => {
-                                                            const selected = MASTER_TYPES.find(t => t.toLowerCase() === currentValue.toLowerCase());
-                                                            if (selected) handleMasterChange(selected);
-                                                        }}
-                                                    >
-                                                        <Check
-                                                            className={cn(
-                                                                "mr-2 h-4 w-4",
-                                                                selectedMaster === type ? "opacity-100" : "opacity-0"
-                                                            )}
-                                                        />
-                                                        {type}
-                                                    </CommandItem>
-                                                ))}
-                                            </CommandGroup>
-                                        </CommandList>
-                                    </Command>
-                                </PopoverContent>
-                            </Popover>
-                        </div>
+
 
                         {/* Status Filter */}
                         <div className="w-full sm:w-1/6">
@@ -1327,7 +1405,8 @@ export default function ProductionMasters() {
                         <div className="w-full sm:w-auto ml-auto mt-auto pt-5">
                             <Button onClick={handleAddClick} className="w-full sm:w-auto">
                                 <Plus className="mr-2 h-4 w-4" />
-                                Add {selectedMaster === "Work Centers" ? "Work Center" : "Record"}
+                                {selectedMaster === "Work Centers" ? "Add Work Center" :
+                                    selectedMaster === "Operations" ? "Add Operation" : "Add Record"}
                             </Button>
                         </div>
                     </div>
@@ -1342,42 +1421,39 @@ export default function ProductionMasters() {
                                 {renderTable()}
                             </div>
 
-                            {/* Pagination */}
-                            <div className="flex justify-between items-center px-1 mt-4">
-                                <div className="text-sm text-muted-foreground">
-                                    Showing {currentData.length === 0 ? 0 : (currentPage - 1) * itemsPerPage + 1} to {Math.min(currentPage * itemsPerPage, currentData.length)} of {currentData.length} entries
-                                </div>
-                                <div className="flex gap-2">
-                                    <Button
-                                        variant="outline"
-                                        size="sm"
-                                        onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
-                                        disabled={currentPage === 1}
-                                    >
-                                        <ChevronLeft className="h-4 w-4" />
-                                    </Button>
-                                    <Button
-                                        variant="outline"
-                                        size="sm"
-                                        onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
-                                        disabled={currentPage >= totalPages || totalPages === 0}
-                                    >
-                                        <ChevronRight className="h-4 w-4" />
-                                    </Button>
-                                </div>
-                            </div>
+                            <DataTablePagination
+                                currentPage={currentPage}
+                                totalPages={totalPages}
+                                totalItems={currentData.length}
+                                itemsPerPage={itemsPerPage}
+                                onPageChange={setCurrentPage}
+                                onItemsPerPageChange={setItemsPerPage}
+                            />
                         </CardContent>
                     </Card>
-                </TabsContent>
+                </div>
             </Tabs>
 
             {/* Universal Add/Edit Dialog */}
             <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
                 <DialogContent className="sm:max-w-[600px] max-h-[90vh] flex flex-col p-0 gap-0">
                     <DialogHeader className="p-6 pb-2">
-                        <DialogTitle>{editingId ? "Edit" : "Add New"} {selectedMaster === "Work Centers" ? "Work Center" : "Record"}</DialogTitle>
+                        <DialogTitle>
+                            {editingId ? "Edit" : "Add New"}{" "}
+                            {selectedMaster === "Work Centers"
+                                ? "Work Center"
+                                : selectedMaster === "Machines"
+                                    ? "Machine"
+                                    : "Operation"}
+                        </DialogTitle>
                         <DialogDescription>
-                            Configure the details for this {selectedMaster === "Work Centers" ? "work center" : "record"}.
+                            Configure the details for this{" "}
+                            {selectedMaster === "Work Centers"
+                                ? "work center"
+                                : selectedMaster === "Machines"
+                                    ? "machine"
+                                    : "operation"}
+                            .
                         </DialogDescription>
                     </DialogHeader>
 

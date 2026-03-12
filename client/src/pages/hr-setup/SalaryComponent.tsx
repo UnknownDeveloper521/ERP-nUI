@@ -175,7 +175,7 @@ export default function SalaryComponent() {
   const [isCustomDeduction, setIsCustomDeduction] = useState(false);
   const [isCustomReimbursement, setIsCustomReimbursement] = useState(false);
   const [openDeleteDialog, setOpenDeleteDialog] = useState(false);
-  
+
   // Dropdown states for searchable components
   const [openEarningTypeDropdown, setOpenEarningTypeDropdown] = useState(false);
   const [openDeductionTypeDropdown, setOpenDeductionTypeDropdown] = useState(false);
@@ -395,10 +395,10 @@ export default function SalaryComponent() {
   const handleSave = async () => {
     // Validation
     if (!isFormValid()) {
-      toast({ 
-        title: "Validation Error", 
-        description: "Please fill all required fields.", 
-        variant: "destructive" 
+      toast({
+        title: "Validation Error",
+        description: "Please fill all required fields.",
+        variant: "destructive"
       });
       return;
     }
@@ -412,33 +412,33 @@ export default function SalaryComponent() {
       if (editingId) {
         // Update existing
         setComponents(prev => prev.map(c => c.id === editingId ? { ...c, ...formData } as SalaryComp : c));
-        toast({ 
-          title: "Success", 
-          description: `${activeTab === 'earning' ? 'Earning' : activeTab === 'deduction' ? 'Deduction' : 'Reimbursement'} updated successfully.` 
+        toast({
+          title: "Success",
+          description: `${activeTab === 'earning' ? 'Earning' : activeTab === 'deduction' ? 'Deduction' : 'Reimbursement'} updated successfully.`
         });
       } else {
         // Create New
         const newId = (Math.random() * 10000).toFixed(0);
         const newComponent = { ...formData, id: newId, type: activeTab } as SalaryComp;
         setComponents(prev => [...prev, newComponent]);
-        toast({ 
-          title: "Success", 
-          description: `New ${activeTab} component created successfully.` 
+        toast({
+          title: "Success",
+          description: `New ${activeTab} component created successfully.`
         });
       }
 
       // Close modal and reset form after successful save
       setIsModalOpen(false);
       resetForm();
-      
+
       // Navigate back to list view
       setLocation(`/hr-setup/salary-component/${activeTab}`);
 
     } catch (error) {
-      toast({ 
-        title: "Error", 
-        description: "Failed to save component. Please try again.", 
-        variant: "destructive" 
+      toast({
+        title: "Error",
+        description: "Failed to save component. Please try again.",
+        variant: "destructive"
       });
     } finally {
       setIsSaving(false);
@@ -447,23 +447,23 @@ export default function SalaryComponent() {
 
   const handleDelete = async () => {
     if (!editingId) return;
-    
+
     try {
       // Simulate async operation (replace with actual API call when needed)
       await new Promise(resolve => setTimeout(resolve, 300));
-      
+
       setComponents(prev => prev.filter(c => c.id !== editingId));
       toast({ title: "Success", description: "Component deleted successfully" });
-      
+
       setOpenDeleteDialog(false);
       setIsModalOpen(false);
       resetForm();
       setLocation(`/hr-setup/salary-component/${activeTab}`);
     } catch (error) {
-      toast({ 
-        title: "Error", 
-        description: "Failed to delete component. Please try again.", 
-        variant: "destructive" 
+      toast({
+        title: "Error",
+        description: "Failed to delete component. Please try again.",
+        variant: "destructive"
       });
     }
   };
@@ -646,7 +646,7 @@ export default function SalaryComponent() {
                       <TableCell className="font-medium">{item.code}</TableCell>
                       <TableCell>{item.name}</TableCell>
                       <TableCell>{item.reimbursementType}</TableCell>
-                      <TableCell>₹{item.maxAmount}/mo</TableCell>
+                      <TableCell>USh{item.maxAmount}/mo</TableCell>
                       <TableCell>
                         <Badge className={item.active ? "bg-green-100 text-green-700 hover:bg-green-100" : "bg-red-100 text-red-700 hover:bg-red-100"}>
                           {item.active ? "Active" : "Inactive"}
@@ -733,8 +733,8 @@ export default function SalaryComponent() {
                           className="w-full justify-between h-10 font-normal border-input"
                         >
                           <span className={cn(!formData.earningType && "text-muted-foreground", formData.earningType === "Custom" && "text-blue-600 font-medium")}>
-                            {formData.earningType === "Custom" 
-                              ? "+ New Custom Allowance" 
+                            {formData.earningType === "Custom"
+                              ? "+ New Custom Allowance"
                               : formData.earningType || "Select Type"}
                           </span>
                           <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
@@ -832,8 +832,8 @@ export default function SalaryComponent() {
                         className="w-full justify-between h-10 font-normal border-input"
                       >
                         <span className={cn(!formData.deductionType && "text-muted-foreground", formData.deductionType === "Custom" && "text-blue-600 font-medium")}>
-                          {formData.deductionType === "Custom" 
-                            ? "+ New Custom Deduction" 
+                          {formData.deductionType === "Custom"
+                            ? "+ New Custom Deduction"
                             : formData.deductionType || "Select Type"}
                         </span>
                         <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
@@ -943,8 +943,8 @@ export default function SalaryComponent() {
                           className="w-full justify-between h-10 font-normal border-input"
                         >
                           <span className={cn(!formData.reimbursementType && "text-muted-foreground", formData.reimbursementType === "Custom" && "text-blue-600 font-medium")}>
-                            {formData.reimbursementType === "Custom" 
-                              ? "+ New Custom Reimbursement" 
+                            {formData.reimbursementType === "Custom"
+                              ? "+ New Custom Reimbursement"
                               : formData.reimbursementType || "Select Type"}
                           </span>
                           <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
@@ -1046,8 +1046,8 @@ export default function SalaryComponent() {
                 resetForm();
                 setLocation(`/hr-setup/salary-component/${activeTab}`);
               }}>Cancel</Button>
-              <Button 
-                onClick={handleSave} 
+              <Button
+                onClick={handleSave}
                 disabled={!isFormValid() || isSaving}
               >
                 {isSaving ? 'Saving...' : `Save ${activeTab === 'earning' ? 'Earning' : activeTab === 'deduction' ? 'Deduction' : 'Reimbursement'}`}

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -13,6 +13,7 @@ import {
 } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
 import { ChevronLeft, ChevronRight } from "lucide-react";
+import { DataTablePagination } from "@/components/shared/DataTablePagination";
 import { cn } from "@/lib/utils";
 
 // ============================================================================
@@ -37,11 +38,14 @@ interface LedgerEntry {
 // ============================================================================
 
 const MOCK_LEDGER_ENTRIES: LedgerEntry[] = [
-    { id: 1, date: "2024-02-15", type: "Issue", refNo: "MR-2024-001", itemCode: "RM-STL-001", itemName: "Steel Sheet 2mm", qty: 100, uom: "KG", warehouse: "Main Store", user: "Admin" },
-    { id: 2, date: "2024-02-15", type: "Issue", refNo: "MR-2024-001", itemCode: "RM-ALU-002", itemName: "Aluminum Plate", qty: 30, uom: "KG", warehouse: "Main Store", user: "Admin" },
-    { id: 3, date: "2024-02-16", type: "GRN", refNo: "GRN-2024-101", itemCode: "RM-STL-001", itemName: "Steel Sheet 2mm", qty: 500, uom: "KG", warehouse: "Main Store", user: "Inventory Mgr" },
-    { id: 4, date: "2024-02-17", type: "Issue", refNo: "MR-2024-003", itemCode: "RM-SCR-004", itemName: "Screws M4", qty: 500, uom: "NOS", warehouse: "Production Store", user: "John Doe" },
-    { id: 5, date: "2024-02-18", type: "GRN", refNo: "GRN-2024-102", itemCode: "RM-WLD-003", itemName: "Welding Rods", qty: 100, uom: "PKT", warehouse: "Main Store", user: "Admin" },
+    { id: 1, date: "2024-02-15", type: "Issue", refNo: "MR-2024-001", itemCode: "RM-001", itemName: "Scrap Battery", qty: 150, uom: "KG", warehouse: "Jinja WH", user: "Admin" },
+    { id: 2, date: "2024-02-15", type: "Issue", refNo: "MR-2024-001", itemCode: "RM-002", itemName: "Plastic Pallets", qty: 50, uom: "NOS", warehouse: "Jinja WH", user: "Admin" },
+    { id: 3, date: "2024-02-16", type: "GRN", refNo: "GRN-2024-101", itemCode: "RM-003", itemName: "Acid Type A", qty: 200, uom: "LTR", warehouse: "Jinja WH", user: "Inventory Mgr" },
+    { id: 4, date: "2024-02-17", type: "Issue", refNo: "MR-2024-003", itemCode: "SFG-005", itemName: "Terminals", qty: 500, uom: "NOS", warehouse: "Jinja WH", user: "John Doe" },
+    { id: 5, date: "2024-02-18", type: "GRN", refNo: "GRN-2024-102", itemCode: "SFG-001", itemName: "Purified Lead", qty: 300, uom: "KG", warehouse: "Jinja WH", user: "Admin" },
+    { id: 6, date: "2024-02-19", type: "Issue", refNo: "MR-2024-005", itemCode: "SFG-002", itemName: "Battery Cases", qty: 100, uom: "NOS", warehouse: "Jinja WH", user: "Production Mgr" },
+    { id: 7, date: "2024-02-20", type: "GRN", refNo: "GRN-2024-103", itemCode: "RM-004", itemName: "Acid Type B", qty: 150, uom: "LTR", warehouse: "Jinja WH", user: "Inventory Mgr" },
+    { id: 8, date: "2024-02-21", type: "Issue", refNo: "MR-2024-007", itemCode: "SFG-006", itemName: "Connectors", qty: 300, uom: "NOS", warehouse: "Jinja WH", user: "Admin" },
 ];
 
 const formatDate = (date: Date | string): string => {
@@ -58,10 +62,18 @@ const formatDate = (date: Date | string): string => {
 
 export default function MaterialLedger() {
     const [currentPage, setCurrentPage] = useState(1);
-    const itemsPerPage = 10;
+    // Pagination state - using DataTablePagination component
+    const [itemsPerPage, setItemsPerPage] = useState(10);
 
     const totalPages = Math.ceil(MOCK_LEDGER_ENTRIES.length / itemsPerPage);
     const paginatedLedger = MOCK_LEDGER_ENTRIES.slice((currentPage - 1) * itemsPerPage, currentPage * itemsPerPage);
+
+    // Auto-adjust page when data changes
+    useEffect(() => {
+        if (currentPage > totalPages && totalPages > 0) {
+            setCurrentPage(totalPages);
+        }
+    }, [MOCK_LEDGER_ENTRIES.length, currentPage, totalPages]);
 
     return (
         <div className="flex flex-col gap-6 h-full min-h-0">
@@ -124,30 +136,17 @@ export default function MaterialLedger() {
                         </Table>
                     </div>
 
+                    {/* Pagination - using standardized DataTablePagination component */}
                     {MOCK_LEDGER_ENTRIES.length > 0 && (
-                        <div className="flex justify-between items-center px-1 mt-4">
-                            <div className="text-sm text-muted-foreground">
-                                Showing {(currentPage - 1) * itemsPerPage + 1} to {Math.min(currentPage * itemsPerPage, MOCK_LEDGER_ENTRIES.length)} of {MOCK_LEDGER_ENTRIES.length} entries
-                            </div>
-                            <div className="flex gap-2">
-                                <Button
-                                    variant="outline"
-                                    size="sm"
-                                    onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
-                                    disabled={currentPage === 1}
-                                >
-                                    <ChevronLeft className="h-4 w-4" />
-                                </Button>
-                                <Button
-                                    variant="outline"
-                                    size="sm"
-                                    onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
-                                    disabled={currentPage >= totalPages || totalPages === 0}
-                                >
-                                    <ChevronRight className="h-4 w-4" />
-                                </Button>
-                            </div>
-                        </div>
+                        <DataTablePagination
+                            currentPage={currentPage}
+                            totalPages={totalPages}
+                            totalItems={MOCK_LEDGER_ENTRIES.length}
+                            itemsPerPage={itemsPerPage}
+                            onPageChange={setCurrentPage}
+                            onItemsPerPageChange={setItemsPerPage}
+                            options={[10, 15, 30, 50]}
+                        />
                     )}
                 </CardContent>
             </Card>

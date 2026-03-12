@@ -56,32 +56,22 @@ import { Search, Plus, Edit, ArrowLeft, Trash2, Check, ChevronsUpDown, Info, Che
 import { useToast } from "@/hooks/use-toast";
 import { cn } from "@/lib/utils";
 import { format } from "date-fns";
+import { 
+    getSalaryAssignments, 
+    setSalaryAssignments, 
+    upsertSalaryAssignment, 
+    removeSalaryAssignment,
+    type Assignment,
+    type SalaryComponent,
+    type SalaryRule,
+    type ComputedRow,
+    type CalcMode,
+    type Category,
+    type StructureMode
+} from "@/lib/salaryAssignmentSharedData";
 
 // --- Types ---
-
-type CalcMode = "FLAT" | "PCT_CTC" | "PCT_BASIC" | "REMAINING";
-type Category = "earning" | "deduction";
-type StructureMode = "structure" | "custom";
-
-interface SalaryComponent {
-    code: string;
-    name: string;
-    category: Category;
-}
-
-interface SalaryRule {
-    componentCode: string;
-    name: string;
-    category: Category;
-    calcMode: CalcMode;
-    value: number; // Amount for FLAT, Percentage for PCT
-    isBase: boolean; // True if part of the base structure (read-only in structure mode)
-}
-
-interface ComputedRow extends SalaryRule {
-    monthlyAmount: number;
-    annualAmount: number;
-}
+// Types are now imported from shared data store
 
 interface SalaryStructure {
     id: string;
@@ -98,58 +88,90 @@ interface Employee {
     joiningDate: string;
 }
 
-interface Assignment {
-    id: string;
-    employeeId: string;
-    employeeName: string;
-    employeeCode: string;
-    department: string;
-    designation: string;
-
-    structureMode: StructureMode;
-    structureId?: string; // If mode is structure
-
-    annualCTC: number;
-    monthlyCTC: number;
-    effectiveFrom: string;
-    status: "active" | "inactive";
-
-    earnings: ComputedRow[];
-    deductions: ComputedRow[];
-}
-
 // --- Mock Data ---
 
-// ⚠️ SAFE GUARD: Added ONE mock record to each array to prevent runtime crashes
+// ⚠️ SAFE GUARD: Added mock records to prevent runtime crashes
 // This ensures salary details page never crashes when empty
 // ============================================================================
 const mockEmployees: Employee[] = [
-  { id: "emp-001", code: "EMP001", name: "John Doe", department: "Engineering", designation: "Software Engineer", joiningDate: "2025-01-15" }
+    { id: "emp-001", code: "EMP001", name: "John Doe", department: "Engineering", designation: "Software Engineer", joiningDate: "2025-01-15" },
+    { id: "emp-002", code: "EMP002", name: "Sarah Johnson", department: "Finance", designation: "Manager", joiningDate: "2025-02-01" }
 ];
 const mockDepartments = ["All Departments", "Engineering", "HR", "Finance"];
 const mockDesignations = ["Software Engineer", "Manager", "Team Lead", "HR Manager"];
 
 const mockComponents: { earnings: SalaryComponent[], deductions: SalaryComponent[] } = {
     earnings: [
-      { code: "BASIC", name: "Basic Salary", category: "earning" },
-      { code: "HRA", name: "House Rent Allowance", category: "earning" }
+        { code: "BASIC", name: "Basic Salary", category: "earning" },
+        { code: "HRA", name: "House Rent Allowance", category: "earning" }
     ],
     deductions: [
-      { code: "PF", name: "Provident Fund", category: "deduction" },
-      { code: "TAX", name: "Income Tax", category: "deduction" }
+        { code: "PF", name: "Provident Fund", category: "deduction" },
+        { code: "TAX", name: "Income Tax", category: "deduction" }
     ]
 };
 
 const mockStructures: SalaryStructure[] = [
-  {
-    id: "struct-001",
-    name: "Standard Structure",
-    rules: []
-  }
+    {
+        id: "struct-exec",
+        name: "Executive Standard",
+        rules: [
+            { componentCode: "BASIC", name: "Basic Salary", category: "earning", calcMode: "PCT_CTC", value: 50, isBase: true },
+            { componentCode: "HRA", name: "House Rent Allowance", category: "earning", calcMode: "PCT_BASIC", value: 40, isBase: true },
+            { componentCode: "FIXED", name: "Special Allowance", category: "earning", calcMode: "REMAINING", value: 0, isBase: true }
+        ]
+    },
+    {
+        id: "struct-assoc",
+        name: "Associate Standard",
+        rules: [
+            { componentCode: "BASIC", name: "Basic Salary", category: "earning", calcMode: "PCT_CTC", value: 45, isBase: true },
+            { componentCode: "HRA", name: "House Rent Allowance", category: "earning", calcMode: "PCT_BASIC", value: 30, isBase: true },
+            { componentCode: "FIXED", name: "Special Allowance", category: "earning", calcMode: "REMAINING", value: 0, isBase: true }
+        ]
+    }
 ];
 
-// Initial Assignments Data
-const initialAssignments: Assignment[] = [];
+// Initial Assignments Data - Load from shared store
+const loadAssignmentsFromSharedStore = (): Assignment[] => {
+    const sharedAssignments = getSalaryAssignments();
+    return sharedAssignments.map((shared: Assignment) => ({
+        id: shared.id,
+        employeeId: shared.employeeId,
+        employeeName: shared.employeeName,
+        employeeCode: shared.employeeCode,
+        department: shared.department,
+        designation: shared.designation,
+        structureMode: shared.structureMode,
+        structureId: shared.structureId,
+        annualCTC: shared.annualCTC,
+        monthlyCTC: shared.monthlyCTC,
+        effectiveFrom: shared.effectiveFrom,
+        status: shared.status,
+        earnings: shared.earnings.map((e: ComputedRow) => ({
+            componentCode: e.componentCode,
+            name: e.name,
+            category: "earning" as Category,
+            calcMode: e.calcMode,
+            value: e.value,
+            isBase: e.isBase,
+            monthlyAmount: e.monthlyAmount,
+            annualAmount: e.annualAmount
+        })),
+        deductions: shared.deductions.map((d: ComputedRow) => ({
+            componentCode: d.componentCode,
+            name: d.name,
+            category: "deduction" as Category,
+            calcMode: d.calcMode,
+            value: d.value,
+            isBase: d.isBase,
+            monthlyAmount: d.monthlyAmount,
+            annualAmount: d.monthlyAmount * 12
+        }))
+    }));
+};
+
+const initialAssignments: Assignment[] = loadAssignmentsFromSharedStore();
 
 export default function EmployeeSalaryDetails() {
     // --- Main State ---
@@ -167,6 +189,16 @@ export default function EmployeeSalaryDetails() {
     const [matchNew] = useRoute("/hr-setup/employee-salary/new");
     const [matchEdit, params] = useRoute("/hr-setup/employee-salary/:id");
     const searchString = useSearch();
+
+    // Sync local state with shared store on mount and when view mode changes
+    useEffect(() => {
+        const sharedAssignments = getSalaryAssignments();
+        setAssignments(sharedAssignments);
+    }, [viewMode]);
+
+    // Note: We do NOT sync local assignments back to shared store automatically
+    // The shared store is only updated via upsertSalaryAssignment() and removeSalaryAssignment()
+    // when explicitly saving or deleting assignments
 
 
 
@@ -251,35 +283,25 @@ export default function EmployeeSalaryDetails() {
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [matchNew, matchEdit, params?.id, assignments, viewMode, isEditMode, formState.id]);
 
-    // --- Actions: List View ---
+    // --- Sync Assignments from Shared Store ---
+    useEffect(() => {
+        // Reload assignments from shared store when in list view
+        if (viewMode === "list") {
+            const syncedAssignments = loadAssignmentsFromSharedStore();
+            setAssignments(syncedAssignments);
+        }
+    }, [viewMode]); // Re-run when viewMode changes to "list"
 
     // --- Actions: List View ---
 
-    // Merge mockEmployees with assignments for the main list
-    // This allows us to show ALL employees, even those without assignments.
+    // --- Actions: List View ---
+
+    // Show ONLY employees who have salary assignments
+    // Do not show employees without assignments in the listing
     const allEmployeeAssignments = React.useMemo(() => {
-        return mockEmployees.map(emp => {
-            const assignment = assignments.find(a => a.employeeId === emp.id);
-            if (assignment) return assignment;
-
-            // Return dummy assignment for inactive rows
-            return {
-                id: "new", // Dummy ID logic handled by UI
-                employeeId: emp.id,
-                employeeName: emp.name,
-                employeeCode: emp.code,
-                department: emp.department,
-                designation: emp.designation,
-                structureMode: "structure", // Default
-                annualCTC: 0,
-                monthlyCTC: 0,
-                effectiveFrom: "-",
-                status: "inactive",
-                earnings: [],
-                deductions: []
-            } as Assignment;
-        });
-    }, [mockEmployees, assignments]);
+        // Return only assignments that exist, not all employees
+        return assignments;
+    }, [assignments]);
 
     const filteredAssignments = allEmployeeAssignments
         .filter(a => {
@@ -576,6 +598,15 @@ export default function EmployeeSalaryDetails() {
         if (!isValid) return;
         // Check for remaining calculation before save to ensure it's correct format
 
+        // Get structure name if using a predefined structure
+        let structureName: string | undefined;
+        if (formState.structureMode === "structure" && formState.structureId) {
+            const structure = availableStructures.find(s => s.id === formState.structureId);
+            structureName = structure?.name;
+        } else if (formState.structureMode === "custom") {
+            structureName = "Custom Structure";
+        }
+
         const assignment: Assignment = {
             id: formState.id || `ASG-${Date.now()}`,
             employeeId: formState.employeeId!,
@@ -585,6 +616,7 @@ export default function EmployeeSalaryDetails() {
             designation: formState.designation!,
             structureMode: formState.structureMode || "structure",
             structureId: formState.structureId,
+            structureName: structureName,
             annualCTC: formState.annualCTC!,
             monthlyCTC: monthlyCTC,
             effectiveFrom: formState.effectiveFrom!,
@@ -592,6 +624,9 @@ export default function EmployeeSalaryDetails() {
             earnings: earningsRows,
             deductions: deductionsRows
         };
+
+        // Save to shared data store
+        upsertSalaryAssignment(assignment);
 
         if (isEditMode) {
             setAssignments(prev => prev.map(a => a.id === assignment.id ? assignment : a));
@@ -605,6 +640,10 @@ export default function EmployeeSalaryDetails() {
 
     const handleDelete = () => {
         if (!formState.id) return;
+        
+        // Delete from shared data store
+        removeSalaryAssignment(formState.id);
+        
         setAssignments(prev => prev.filter(a => a.id !== formState.id));
         toast({ title: "Success", description: "Assignment deleted successfully" });
         setOpenDeleteDialog(false);
@@ -718,8 +757,8 @@ export default function EmployeeSalaryDetails() {
                                                 availableStructures.find(s => s.id === a.structureId)?.name || 'Unknown'
                                             }
                                         </TableCell>
-                                        <TableCell className="text-right w-[120px]">₹{a.monthlyCTC.toLocaleString()}</TableCell>
-                                        <TableCell className="text-right w-[120px]">₹{a.annualCTC.toLocaleString()}</TableCell>
+                                        <TableCell className="text-right w-[120px]">USh{a.monthlyCTC.toLocaleString()}</TableCell>
+                                        <TableCell className="text-right w-[120px]">USh{a.annualCTC.toLocaleString()}</TableCell>
                                         <TableCell className="w-[120px]">{a.effectiveFrom}</TableCell>
                                         <TableCell className="w-[100px]">
                                             <Badge className={a.status === 'active' ? "bg-green-100 text-green-700" : "bg-red-100 text-red-700"}>
@@ -776,7 +815,7 @@ export default function EmployeeSalaryDetails() {
     // --- View: Form ---
 
     return (
-        <div className="space-y-6 pb-20">
+        <div className="space-y-6">
             {/* Header */}
             <div className="flex items-center gap-4">
                 <Button variant="ghost" size="icon" onClick={handleBackToList}>
@@ -800,11 +839,11 @@ export default function EmployeeSalaryDetails() {
                         <Label>Department</Label>
                         <Popover open={openDeptCombo} onOpenChange={setOpenDeptCombo}>
                             <PopoverTrigger asChild>
-                                <Button 
-                                    variant="outline" 
-                                    role="combobox" 
-                                    aria-expanded={openDeptCombo} 
-                                    className="w-full justify-between h-10 font-normal border-input" 
+                                <Button
+                                    variant="outline"
+                                    role="combobox"
+                                    aria-expanded={openDeptCombo}
+                                    className="w-full justify-between h-10 font-normal border-input"
                                     disabled={isEditMode}
                                 >
                                     <span className={cn(!formState.department && "text-muted-foreground")}>
@@ -824,12 +863,12 @@ export default function EmployeeSalaryDetails() {
                                                     key={dept}
                                                     value={dept}
                                                     onSelect={(currentValue) => {
-                                                        setFormState(prev => ({ 
-                                                            ...prev, 
-                                                            department: currentValue === formState.department ? "" : currentValue, 
-                                                            employeeId: "", 
-                                                            employeeName: "", 
-                                                            employeeCode: "" 
+                                                        setFormState(prev => ({
+                                                            ...prev,
+                                                            department: currentValue === formState.department ? "" : currentValue,
+                                                            employeeId: "",
+                                                            employeeName: "",
+                                                            employeeCode: ""
                                                         }));
                                                         setOpenDeptCombo(false);
                                                     }}
@@ -851,11 +890,11 @@ export default function EmployeeSalaryDetails() {
                         <Label>Designation</Label>
                         <Popover open={openDesigCombo} onOpenChange={setOpenDesigCombo}>
                             <PopoverTrigger asChild>
-                                <Button 
-                                    variant="outline" 
-                                    role="combobox" 
-                                    aria-expanded={openDesigCombo} 
-                                    className="w-full justify-between h-10 font-normal border-input" 
+                                <Button
+                                    variant="outline"
+                                    role="combobox"
+                                    aria-expanded={openDesigCombo}
+                                    className="w-full justify-between h-10 font-normal border-input"
                                     disabled={isEditMode}
                                 >
                                     <span className={cn(!formState.designation && "text-muted-foreground")}>
@@ -875,12 +914,12 @@ export default function EmployeeSalaryDetails() {
                                                     key={desig}
                                                     value={desig}
                                                     onSelect={(currentValue) => {
-                                                        setFormState(prev => ({ 
-                                                            ...prev, 
-                                                            designation: currentValue === formState.designation ? "" : currentValue, 
-                                                            employeeId: "", 
-                                                            employeeName: "", 
-                                                            employeeCode: "" 
+                                                        setFormState(prev => ({
+                                                            ...prev,
+                                                            designation: currentValue === formState.designation ? "" : currentValue,
+                                                            employeeId: "",
+                                                            employeeName: "",
+                                                            employeeCode: ""
                                                         }));
                                                         setOpenDesigCombo(false);
                                                     }}
@@ -902,11 +941,11 @@ export default function EmployeeSalaryDetails() {
                         <Label>Employee <span className="text-red-500">*</span></Label>
                         <Popover open={openEmpCombo} onOpenChange={setOpenEmpCombo}>
                             <PopoverTrigger asChild>
-                                <Button 
-                                    variant="outline" 
-                                    role="combobox" 
-                                    aria-expanded={openEmpCombo} 
-                                    className="w-full justify-between h-10 font-normal border-input" 
+                                <Button
+                                    variant="outline"
+                                    role="combobox"
+                                    aria-expanded={openEmpCombo}
+                                    className="w-full justify-between h-10 font-normal border-input"
                                     disabled={isEditMode}
                                 >
                                     <span className={cn(!formState.employeeName && "text-muted-foreground")}>
@@ -963,10 +1002,10 @@ export default function EmployeeSalaryDetails() {
                                     className="w-full justify-between h-10 font-normal border-input"
                                 >
                                     <span className={cn(!formState.structureId && formState.structureMode !== 'custom' && "text-muted-foreground")}>
-                                        {formState.structureMode === 'custom' 
-                                            ? '➕ Use Custom Structure' 
-                                            : formState.structureId 
-                                                ? availableStructures.find(s => s.id === formState.structureId)?.name 
+                                        {formState.structureMode === 'custom'
+                                            ? '➕ Use Custom Structure'
+                                            : formState.structureId
+                                                ? availableStructures.find(s => s.id === formState.structureId)?.name
                                                 : 'Select structure'}
                                     </span>
                                     <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
@@ -1056,10 +1095,10 @@ export default function EmployeeSalaryDetails() {
                     <Label className="text-lg font-medium">Annual CTC <span className="text-red-500">*</span></Label>
                     <div className="flex items-center gap-2">
                         <div className="relative">
-                            <span className="absolute left-3 top-2.5 text-muted-foreground">₹</span>
+                            <span className="absolute left-3 top-2.5 text-muted-foreground font-medium">USh</span>
                             <Input
                                 type="number"
-                                className="pl-8 text-lg font-bold w-[200px]"
+                                className="pl-14 text-lg font-bold w-[200px]"
                                 value={formState.annualCTC || ""}
                                 onChange={(e) => setFormState({ ...formState, annualCTC: parseFloat(e.target.value) || 0 })}
                             />
@@ -1068,7 +1107,7 @@ export default function EmployeeSalaryDetails() {
                     </div>
                     {formState.monthlyCTC ? (
                         <p className="text-sm text-muted-foreground bg-muted px-2 py-1 rounded">
-                            Monthly CTC: ₹{formState.monthlyCTC.toLocaleString()}
+                            Monthly CTC: USh{formState.monthlyCTC.toLocaleString()}
                         </p>
                     ) : null}
                 </div>
@@ -1214,7 +1253,7 @@ export default function EmployeeSalaryDetails() {
                                                 <CommandEmpty>No earning component found.</CommandEmpty>
                                                 <CommandGroup>
                                                     {availableComponents.earnings
-                                                        .filter(c => 
+                                                        .filter(c =>
                                                             c.code !== "FIXED" && // Exclude Special Allowance (always present and locked)
                                                             !earningsRows.some(row => row.componentCode === c.code || row.name === c.name)
                                                         )
@@ -1345,11 +1384,11 @@ export default function EmployeeSalaryDetails() {
                             <div className="bg-blue-50/50 border-t p-6 rounded-b-lg">
                                 <div className="flex justify-between items-center mb-2">
                                     <span className="text-muted-foreground font-medium">Gross Monthly Salary</span>
-                                    <span className="font-bold">₹{Math.round(monthlyCTC).toLocaleString()}</span>
+                                    <span className="font-bold">USh{Math.round(monthlyCTC).toLocaleString()}</span>
                                 </div>
                                 <div className="flex justify-between items-center mb-4">
                                     <span className="text-muted-foreground font-medium">Total Deductions</span>
-                                    <span className="font-bold text-red-600">- ₹{Math.round(totalDeductionsMonthly).toLocaleString()}</span>
+                                    <span className="font-bold text-red-600">- USh{Math.round(totalDeductionsMonthly).toLocaleString()}</span>
                                 </div>
                                 <div className="h-px bg-border mb-4"></div>
                                 <div className="flex justify-between items-center">
@@ -1359,10 +1398,10 @@ export default function EmployeeSalaryDetails() {
                                     </div>
                                     <div className="text-right">
                                         <div className={cn("text-2xl font-bold", netPayMonthly < 0 ? "text-red-600" : "text-green-700")}>
-                                            ₹{Math.round(netPayMonthly).toLocaleString()}
+                                            USh{Math.round(netPayMonthly).toLocaleString()}
                                         </div>
                                         <div className="text-sm text-muted-foreground">
-                                            Annual: ₹{Math.round(netPayAnnual).toLocaleString()}
+                                            Annual: USh{Math.round(netPayAnnual).toLocaleString()}
                                         </div>
                                     </div>
                                 </div>

@@ -90,7 +90,30 @@ const mockComponents: SalaryComponent[] = [
   { code: "FIXED", name: "Special Allowance", type: "earning" },
 ];
 
-const initialStructures: SalaryStructure[] = [];
+const initialStructures: SalaryStructure[] = [
+  {
+    id: "struct-exec",
+    name: "Executive Standard",
+    status: "active",
+    createdAt: "2025-01-01",
+    earnings: [
+      { componentCode: "BASIC", name: "Basic", calcMode: "PCT_CTC", value: 50, isLocked: true },
+      { componentCode: "HRA", name: "House Rent Allowance", calcMode: "PCT_BASIC", value: 40 },
+      { componentCode: "FIXED", name: "Special Allowance", calcMode: "REMAINING", value: 0, isLocked: true }
+    ]
+  },
+  {
+    id: "struct-assoc",
+    name: "Associate Standard",
+    status: "active",
+    createdAt: "2025-01-01",
+    earnings: [
+      { componentCode: "BASIC", name: "Basic", calcMode: "PCT_CTC", value: 45, isLocked: true },
+      { componentCode: "HRA", name: "House Rent Allowance", calcMode: "PCT_BASIC", value: 30 },
+      { componentCode: "FIXED", name: "Special Allowance", calcMode: "REMAINING", value: 0, isLocked: true }
+    ]
+  }
+];
 
 // Default rows for new structure
 const defaultEarnings: StructureEarning[] = [
@@ -541,8 +564,8 @@ export default function SalaryStructurePage() {
                     <CommandEmpty>No earning component found.</CommandEmpty>
                     <CommandGroup heading="Available Earnings">
                       {mockComponents
-                        .filter(c => 
-                          c.type === "earning" && 
+                        .filter(c =>
+                          c.type === "earning" &&
                           c.code !== "FIXED" && // Exclude Special Allowance (always present and locked)
                           !formState.earnings.some(fe => fe.componentCode === c.code)
                         )

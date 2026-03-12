@@ -44,6 +44,7 @@ import {
   AlertCircle,
   Info,
   Database,
+  Wrench,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
@@ -123,7 +124,7 @@ const Sidebar = ({ className }: SidebarProps) => {
   // ==========================================================================
   const moduleConfig: { [key: string]: { name: string; icon: any; path: string; subItems?: { name: string; path: string }[] } } = {
     "Dashboard": { name: "Dashboard", icon: LayoutDashboard, path: "/" },
-    "Chat": { name: "Chat", icon: MessageSquare, path: "/chat" },
+
     "HRMS": {
       name: "HRMS & Payroll",
       icon: Users,
@@ -134,18 +135,22 @@ const Sidebar = ({ className }: SidebarProps) => {
         { name: "Attendance", path: "/hrms/attendance" },
         { name: "Leave Management", path: "/hrms/leave-management" },
         { name: "Payroll Management", path: "/hrms/payroll-management" },
-        { name: "Self Service (ESS)", path: "/hrms/ess" },
+        { name: "Worker Payrolls", path: "/hrms/worker-payrolls" },
       ]
     },
-    "Products": { name: "Products & Items", icon: Box, path: "/products" },
+    "Vendors": { name: "Vendors", icon: Box, path: "/vendors" },
+    "Customers": { name: "Customers", icon: Users, path: "/customers" },
     "Inventory": {
       name: "Inventory",
       icon: Package,
       path: "/inventory",
       subItems: [
-        { name: "Dashboard", path: "/inventory" },
+        { name: "Dashboard", path: "/inventory/dashboard" },
         { name: "Materials", path: "/inventory/materials" },
+        { name: "GRN", path: "/inventory/grn" },
+        { name: "Dispatch", path: "/inventory/dispatch" },
         { name: "Material Ledger", path: "/inventory/material-ledger" },
+        { name: "Material Requisitions", path: "/inventory/smr-requests" },
       ]
     },
     "Production": {
@@ -155,28 +160,65 @@ const Sidebar = ({ className }: SidebarProps) => {
       subItems: [
         { name: "BOM", path: "/production/bom" },
         { name: "Production Plan", path: "/production/production-plan" },
-        { name: "Material & Operation", path: "/production/material-operation/mr-request" },
-        { name: "Quality Check", path: "/production/quality-check" },
+        { name: "My Request", path: "/production/my-request" },
+        { name: "Batch Tracking", path: "/production/batch-tracking" },
+        // Removed old Production QC route (moved to Quality Check > Batch QC)
         { name: "Material Release", path: "/production/material-release" },
       ]
     },
-    "Sales": {
-      name: "Sales & Invoicing",
-      icon: ShoppingCart,
-      path: "/sales-invoicing",
+    "QualityCheck": {
+      name: "Quality Check",
+      icon: CheckCircle,
+      path: "/quality-check",
       subItems: [
-        { name: "Dashboard", path: "/sales-invoicing" },
-        { name: "Sales Order", path: "/sales-invoicing/orders" },
-        { name: "Dispatch Note", path: "/sales-invoicing/dispatch" },
-        { name: "Invoice", path: "/sales-invoicing/invoices" },
-        { name: "Purchase Orders", path: "/sales-invoicing/purchases" },
-        { name: "Reports", path: "/sales-invoicing/reports" },
+        { name: "Dashboard", path: "/quality-check/dashboard" },
+        { name: "Batch QC", path: "/quality-check/batch-qc" },
       ]
     },
-    "Purchases": { name: "Purchases & Vendors", icon: CreditCard, path: "/purchases" },
-    "Customers": { name: "Customers (CRM)", icon: UserPlus, path: "/customers" },
-    "Accounting": { name: "Accounting", icon: FileText, path: "/accounting" },
-    "Logistics": { name: "Logistics", icon: Truck, path: "/logistics" },
+    "Sales": {
+      name: "Sales", // Changed: Renamed from "Sales & Invoicing" to "Sales"
+      icon: ShoppingCart,
+      path: "/sales", // Updated: Changed from /sales-invoicing to /sales
+      subItems: [
+        { name: "Dashboard", path: "/sales" }, // Updated: Changed from /sales-invoicing
+        // Removed: Leads submodule
+        { name: "Quotations", path: "/sales/quotations" }, // Updated: Changed from /sales-invoicing/quotations
+        { name: "Sales Order", path: "/sales/orders" }, // Updated: Changed from /sales-invoicing/orders
+        // Removed: Invoicing - moved to Accounting module
+        { name: "Follow Up", path: "/sales/follow-up" }, // Updated: Changed from /sales-invoicing/follow-up
+      ]
+    },
+    "Purchases": {
+      name: "Procurement",
+      icon: CreditCard,
+      path: "/procurement",
+      subItems: [
+        { name: "My MR", path: "/procurement/mr-request" },
+        { name: "MR Execution", path: "/procurement/mr-execution" },
+        { name: "PO", path: "/procurement/po" },
+      ]
+    },
+    "ServiceCenter": {
+      name: "Service Center",
+      icon: Wrench,
+      path: "/service-center",
+      subItems: [
+        { name: "Warranty Service", path: "/service-center/warranty-service" },
+        { name: "Material Requisition", path: "/service-center/smr-request" }, // Updated route path for consistency
+      ]
+    },
+
+
+    "Accounting": {
+      name: "Accounting",
+      icon: FileText,
+      path: "/accounting",
+      subItems: [
+        { name: "Invoicing", path: "/accounting/invoicing" },
+        { name: "Worker Payments", path: "/accounting/worker-payments" },
+        { name: "Pending Payment", path: "/accounting/pending-payment" }
+      ]
+    },
     "System": { name: "Users & Roles", icon: Settings, path: "/settings" },
     "HRSetup": {
       name: "HR Setup",
@@ -187,6 +229,7 @@ const Sidebar = ({ className }: SidebarProps) => {
         { name: "Salary Component", path: "/hr-setup/salary-component" },
         { name: "Salary Structure", path: "/hr-setup/salary-structure" },
         { name: "Pay Period", path: "/hr-setup/pay-period" },
+        { name: "Workers wage Period", path: "/hr-setup/workers-wage-period" },
       ]
     },
     "Masters": {
@@ -194,11 +237,10 @@ const Sidebar = ({ className }: SidebarProps) => {
       icon: Database, // Make sure to import this from lucide-react in the next step 
       path: "/masters",
       subItems: [
-        { name: "HRMS", path: "/masters/hrms" },
-        { name: "Procurement", path: "/masters/procurement/purchase" },
-        { name: "Inventory", path: "/masters/inventory" },
-        { name: "Sales", path: "/masters/sales" },
-        { name: "Production", path: "/masters/production" },
+        { name: "Core", path: "/masters/core/country" },
+        { name: "Procurement", path: "/masters/procurement/items" },
+        { name: "Inventory", path: "/masters/inventory/warehouses" },
+        { name: "Production", path: "/masters/production/work-centers" },
       ]
     },
   };
@@ -210,8 +252,7 @@ const Sidebar = ({ className }: SidebarProps) => {
   // WHY NEEDED: Creates logical grouping in sidebar (Core, Optional, System)
   // KEEP: Essential for sidebar structure
   // ==========================================================================
-  const coreModules = ["Dashboard", "Chat", "HRMS", "Products", "Inventory", "Production", "Sales", "Purchases", "Customers"];
-  const optionalModules = ["Accounting", "Logistics"];
+  const coreModules = ["Dashboard", "Chat", "HRMS", "Vendors", "Customers", "Inventory", "Production", "QualityCheck", "Sales", "Purchases", "ServiceCenter", "Accounting"];
   const systemModules = ["System", "HRSetup", "Masters"];
   // ==========================================================================
   // ROLE-BASED FILTERING
@@ -225,7 +266,6 @@ const Sidebar = ({ className }: SidebarProps) => {
   };
 
   const visibleCoreModules = filterVisibleModules(coreModules);
-  const visibleOptionalModules = filterVisibleModules(optionalModules);
   const visibleSystemModules = filterVisibleModules(systemModules);
 
   // ==========================================================================
@@ -237,7 +277,6 @@ const Sidebar = ({ className }: SidebarProps) => {
   // ==========================================================================
   const menuItems = [
     ...(visibleCoreModules.length > 0 ? [{ title: "Core Modules", items: visibleCoreModules }] : []),
-    ...(visibleOptionalModules.length > 0 ? [{ title: "Optional Modules", items: visibleOptionalModules }] : []),
     ...(visibleSystemModules.length > 0 ? [{
       title: "System", items: [
         ...visibleSystemModules,
@@ -247,7 +286,7 @@ const Sidebar = ({ className }: SidebarProps) => {
   ];
 
   return (
-    <div className={`flex h-full flex-col bg-sidebar text-sidebar-foreground ${className}`}>
+    <div className={`flex h-full w-full min-w-[256px] flex-col bg-sidebar text-sidebar-foreground ${className}`}>
       <div className="flex h-16 items-center border-b border-sidebar-border px-6 bg-sidebar">
         <img
           src="https://tassosconsultancy.com/wp-content/uploads/2025/11/TCS-LOGO-TRACED-PNG.webp"
@@ -404,40 +443,31 @@ export default function MainLayout({ children }: { children: ReactNode }) {
   // NOTE: This is a workaround - ideally should be fixed in CSS
   // ==========================================================================
   React.useEffect(() => {
+    const styledElements = new WeakSet();
+
+    const applyStyles = (input: HTMLInputElement) => {
+      if (styledElements.has(input)) return;
+
+      input.style.caretColor = '#ffffff';
+      input.style.setProperty('caret-color', '#ffffff', 'important');
+      input.style.setProperty('-webkit-caret-color', '#ffffff', 'important');
+      input.style.color = '#ffffff';
+      input.style.setProperty('color', '#ffffff', 'important');
+
+      styledElements.add(input);
+    };
+
     const forceWhiteCaret = () => {
       const searchInputs = document.querySelectorAll('input[type="search"], input[placeholder*="Search"]');
       searchInputs.forEach((input: any) => {
-        if (input) {
-          input.style.caretColor = '#ffffff';
-          input.style.setProperty('caret-color', '#ffffff', 'important');
-          input.style.setProperty('-webkit-caret-color', '#ffffff', 'important');
-          input.style.color = '#ffffff';
-          input.style.setProperty('color', '#ffffff', 'important');
-
-          // Add event listeners to maintain white caret
-          input.addEventListener('focus', () => {
-            input.style.caretColor = '#ffffff';
-            input.style.setProperty('caret-color', '#ffffff', 'important');
-            input.style.setProperty('-webkit-caret-color', '#ffffff', 'important');
-          });
-
-          input.addEventListener('click', () => {
-            input.style.caretColor = '#ffffff';
-            input.style.setProperty('caret-color', '#ffffff', 'important');
-            input.style.setProperty('-webkit-caret-color', '#ffffff', 'important');
-          });
-
-          input.addEventListener('input', () => {
-            input.style.caretColor = '#ffffff';
-            input.style.setProperty('caret-color', '#ffffff', 'important');
-            input.style.setProperty('-webkit-caret-color', '#ffffff', 'important');
-          });
+        if (input instanceof HTMLInputElement) {
+          applyStyles(input);
         }
       });
     };
 
-    // Run immediately and with delays to catch dynamically loaded inputs
     forceWhiteCaret();
+    const observer = new MutationObserver(forceWhiteCaret);
 
     // Run after a delay to catch dynamically loaded inputs
     setTimeout(forceWhiteCaret, 100);
@@ -445,7 +475,6 @@ export default function MainLayout({ children }: { children: ReactNode }) {
     setTimeout(forceWhiteCaret, 1000);
 
     // Set up observer for new inputs
-    const observer = new MutationObserver(forceWhiteCaret);
     if (document.body) {
       observer.observe(document.body, { childList: true, subtree: true });
     }
@@ -499,15 +528,26 @@ export default function MainLayout({ children }: { children: ReactNode }) {
   const modules = [
     { name: "Dashboard", path: "/" },
     { name: "HRMS", path: "/hrms" },
-    { name: "Products", path: "/products" },
+    { name: "Worker Payrolls", path: "/hrms/worker-payrolls" },
+    { name: "Vendors", path: "/vendors" },
     { name: "Inventory", path: "/inventory" },
-    { name: "Sales", path: "/sales" },
+    { name: "BOM", path: "/production/bom" },
+    { name: "Sales", path: "/sales" }, // Updated: Changed from /sales-invoicing
+    // Removed: Leads module
+    { name: "Quotations", path: "/sales/quotations" }, // Updated: Changed from /sales-invoicing/quotations
+    { name: "Sales Order", path: "/sales/orders" }, // Updated: Changed from /sales-invoicing/orders
+    { name: "Follow Up", path: "/sales/follow-up" }, // Updated: Changed from /sales-invoicing/follow-up
+    { name: "Invoicing", path: "/accounting/invoicing" }, // Moved: Invoicing to Accounting
+    { name: "Pending Payment", path: "/accounting/pending-payment" }, // Pending Payment in Accounting
     { name: "Purchases", path: "/purchases" },
-    { name: "Customers", path: "/customers" },
-    { name: "CRM", path: "/crm" },
     { name: "Accounting", path: "/accounting" },
-    { name: "Logistics", path: "/logistics" },
+    { name: "Worker Payments", path: "/accounting/worker-payments" },
     { name: "Performance", path: "/performance" },
+    { name: "Employee Salary Details", path: "/hr-setup/employee-salary" },
+    { name: "Salary Component", path: "/hr-setup/salary-component" },
+    { name: "Salary Structure", path: "/hr-setup/salary-structure" },
+    { name: "Pay Period", path: "/hr-setup/pay-period" },
+    { name: "Workers wage Period", path: "/hr-setup/workers-wage-period" },
     { name: "Settings", path: "/settings" },
     { name: "My Account", path: "/my-account" },
   ];
@@ -783,9 +823,11 @@ export default function MainLayout({ children }: { children: ReactNode }) {
              KEEP: Essential for page content rendering
              ================================================================== */}
         <main className="page-content flex-1 overflow-hidden bg-muted/30 p-6 flex flex-col min-h-0">
-          <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
-            {children}
-          </div>
+          <ScrollArea className="flex-1">
+            <div className="flex flex-col">
+              {children}
+            </div>
+          </ScrollArea>
         </main>
 
         {/* ==================================================================

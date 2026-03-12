@@ -1,381 +1,625 @@
-import { useState } from "react";
-import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
-import { Button } from "@/components/ui/button";
+import * as React from "react";
+import { useState, useEffect } from "react";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
 import { Input } from "@/components/ui/input";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { Badge } from "@/components/ui/badge";
-import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, DialogFooter } from "@/components/ui/dialog";
+import { Button } from "@/components/ui/button";
+import { Textarea } from "@/components/ui/textarea";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Plus, Search, Pencil, Trash2, X } from "lucide-react";
+import { DataTablePagination } from "@/components/shared/DataTablePagination";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
-import { Search, Plus, MoreHorizontal, Phone, Mail, MapPin, Pencil, Trash2, Eye } from "lucide-react";
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { useToast } from "@/hooks/use-toast";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Badge } from "@/components/ui/badge";
+import { mockStates, mockCities } from "@/lib/masterMockData";
 
-// Mock Data
-const initialCustomers = [
-  { id: 1, name: "Acme Corp", contact: "John Doe", email: "john@acme.com", phone: "+1 555-0123", status: "Active", type: "Enterprise", location: "New York, USA" },
-  { id: 2, name: "Global Tech", contact: "Jane Smith", email: "jane@globaltech.com", phone: "+1 555-0124", status: "Active", type: "SMB", location: "London, UK" },
-  { id: 3, name: "Stark Ind", contact: "Tony Stark", email: "tony@stark.com", phone: "+1 555-0125", status: "Inactive", type: "Enterprise", location: "California, USA" },
-  { id: 4, name: "Wayne Ent", contact: "Bruce Wayne", email: "bruce@wayne.com", phone: "+1 555-0126", status: "Active", type: "Enterprise", location: "Gotham, USA" },
-  { id: 5, name: "Cyberdyne", contact: "Sarah Connor", email: "sarah@cyberdyne.com", phone: "+1 555-0127", status: "Active", type: "Government", location: "San Francisco, USA" },
-];
+// --- Types & Interfaces ---
+
+interface Address {
+  id: number;
+  address_line: string;
+  country: string;
+  state: string;
+  city: string;
+  pincode?: string;
+}
+
+interface CustomerDocument {
+  id: number;
+  name: string;
+  file_name?: string;
+  file?: File | null;
+}
+
+interface Customer {
+  id: number;
+  code: string;
+  name: string;
+  status: "Active" | "Inactive";
+  contact_person: string;
+  mobile: string;
+  email?: string;
+  phone?: string;
+  billing_address: Address;
+  shipping_addresses: Address[];
+  documents: CustomerDocument[];
+  tax_reg_no?: string;
+  payment_terms: string;
+  currency?: string;
+  notes?: string;
+  created_at?: string;
+  created_by?: string;
+  updated_at?: string;
+  updated_by?: string;
+}
+
+// --- Mock Data ---
+
+const initialCustomers: Customer[] = Array.from({ length: 5 }).map((_, index) => ({
+  id: index + 1,
+  code: `C${(index + 1).toString().padStart(3, '0')}`,
+  name: index % 2 === 0 ? `Customer ${index + 1} Ltd` : `Enterprise ${index + 1} Corp`,
+  status: index % 10 === 0 ? "Inactive" : "Active",
+  contact_person: index % 2 === 0 ? `Alice ${index + 1}` : `Bob ${index + 1}`,
+  mobile: `98765${(index + 10000).toString().slice(-5)}`,
+  email: `customer${index + 1}@example.com`,
+  billing_address: {
+    id: index + 1,
+    address_line: `${100 + index} Industrial Area`,
+    country: "India",
+    state: "Gujarat",
+    city: "Ahmedabad",
+    pincode: "380001"
+  },
+  shipping_addresses: [
+    {
+      id: index + 100,
+      address_line: `${500 + index} Warehouse St`,
+      country: "India",
+      state: "Maharashtra",
+      city: "Mumbai",
+      pincode: "400001"
+    }
+  ],
+  documents: [],
+  tax_reg_no: `GSTIN${index + 10000}`,
+  payment_terms: index % 3 === 0 ? "Net 30" : "Net 15",
+  currency: "ush",
+  created_at: "2024-01-01",
+  created_by: "Admin"
+}));
+
+const PAYMENT_TERMS_OPTIONS = ["Net 30", "Net 15", "Advance", "COD", "Due on Receipt"];
+
+const StatusBadge = ({ status }: { status: "Active" | "Inactive" }) => {
+  return (
+    <Badge variant={status === "Active" ? "default" : "secondary"}>
+      {status}
+    </Badge>
+  );
+};
+
+const SectionHeader = ({ title }: { title: string }) => (
+  <div className="flex items-center gap-2 pb-2 mb-4 border-b">
+    <h3 className="font-semibold text-sm text-primary">{title}</h3>
+  </div>
+);
 
 export default function Customers() {
   const { toast } = useToast();
-  const [customers, setCustomers] = useState(initialCustomers);
-  const [searchQuery, setSearchQuery] = useState("");
-  
-  // Dialog states
-  const [isAddDialogOpen, setIsAddDialogOpen] = useState(false);
-  const [isEditDialogOpen, setIsEditDialogOpen] = useState(false);
-  const [isViewDialogOpen, setIsViewDialogOpen] = useState(false);
-  
-  // Customer states
-  const [newCustomer, setNewCustomer] = useState({ name: "", contact: "", email: "", phone: "", type: "SMB" });
-  const [selectedCustomer, setSelectedCustomer] = useState<any>(null);
+  const [searchTerm, setSearchTerm] = useState("");
+  const [customers, setCustomers] = useState<Customer[]>(initialCustomers);
+  const [currentPage, setCurrentPage] = useState(1);
+  const [itemsPerPage, setItemsPerPage] = useState(10);
+  const [filterStatus, setFilterStatus] = useState<string>("All");
 
-  const filteredCustomers = customers.filter(c => 
-    c.name.toLowerCase().includes(searchQuery.toLowerCase()) || 
-    c.contact.toLowerCase().includes(searchQuery.toLowerCase()) ||
-    c.email.toLowerCase().includes(searchQuery.toLowerCase())
-  );
+  const [isDialogOpen, setIsDialogOpen] = useState(false);
+  const [editingId, setEditingId] = useState<number | null>(null);
+  const [formData, setFormData] = useState<Partial<Customer>>({});
 
-  const handleAddCustomer = () => {
-    const id = customers.length + 1;
-    setCustomers([...customers, { ...newCustomer, id, status: "Active", location: "Unknown" }]);
-    setIsAddDialogOpen(false);
-    setNewCustomer({ name: "", contact: "", email: "", phone: "", type: "SMB" });
-    
-    toast({
-      title: "Customer Added",
-      description: `${newCustomer.name} has been successfully added.`,
+  const filteredCustomers = customers.filter((c) => {
+    const searchLower = searchTerm.toLowerCase();
+    const matchesSearch =
+      c.name?.toLowerCase().includes(searchLower) ||
+      c.code?.toLowerCase().includes(searchLower) ||
+      c.contact_person?.toLowerCase().includes(searchLower) ||
+      c.billing_address?.city?.toLowerCase().includes(searchLower);
+
+    const matchesStatus = filterStatus === "All" || c.status === filterStatus;
+
+    return matchesSearch && matchesStatus;
+  });
+
+  const totalPages = Math.ceil(filteredCustomers.length / itemsPerPage);
+  const paginatedCustomers = filteredCustomers.slice((currentPage - 1) * itemsPerPage, currentPage * itemsPerPage);
+
+  const handleAddClick = () => {
+    setEditingId(null);
+    setFormData({
+      status: "Active",
+      payment_terms: "Net 30",
+      currency: "ush",
+      billing_address: { id: Date.now(), address_line: "", country: "India", state: "", city: "" },
+      shipping_addresses: [{ id: Date.now() + 1, address_line: "", country: "India", state: "", city: "" }],
+      documents: []
     });
+    setIsDialogOpen(true);
   };
 
-  const handleDeleteCustomer = (id: number) => {
-    setCustomers(customers.filter(c => c.id !== id));
-    toast({
-      title: "Customer Deleted",
-      description: "Customer has been removed from the database.",
-      variant: "destructive"
-    });
+  const handleEditClick = (customer: Customer) => {
+    setEditingId(customer.id);
+    const data = { ...customer };
+    if (!data.shipping_addresses || data.shipping_addresses.length === 0) {
+      data.shipping_addresses = [{ id: Date.now(), address_line: "", country: "India", state: "", city: "" }];
+    }
+    if (!data.billing_address) {
+      data.billing_address = { id: Date.now() + 1, address_line: "", country: "India", state: "", city: "" };
+    }
+    if (!data.documents) {
+      data.documents = [];
+    }
+    setFormData(data);
+    setIsDialogOpen(true);
   };
 
-  const handleEditClick = (customer: any) => {
-    setSelectedCustomer({...customer});
-    setIsEditDialogOpen(true);
+  const handleDeleteClick = (id: number) => {
+    if (confirm("Are you sure? This action cannot be undone.")) {
+      setCustomers(prev => prev.filter(c => c.id !== id));
+      toast({ title: "Deleted", description: "Customer deleted successfully." });
+    }
   };
 
-  const handleViewClick = (customer: any) => {
-    setSelectedCustomer(customer);
-    setIsViewDialogOpen(true);
+  const handleSave = () => {
+    const now = new Date().toISOString().split('T')[0];
+    const user = "Admin User";
+
+    if (!formData.code || !formData.name || !formData.status || !formData.contact_person || !formData.mobile) {
+      toast({ variant: "destructive", title: "Validation Error", description: "Please fill all required fields." });
+      return;
+    }
+
+    if (!formData.billing_address?.address_line || !formData.billing_address?.country || !formData.billing_address?.state || !formData.billing_address?.city) {
+      toast({ variant: "destructive", title: "Validation Error", description: "Please complete the Billing Address." });
+      return;
+    }
+
+    if (formData.shipping_addresses?.some(a => !a.address_line || !a.country || !a.state || !a.city)) {
+      toast({ variant: "destructive", title: "Validation Error", description: "Please complete all fields in shipping address blocks." });
+      return;
+    }
+
+    if (customers.some(c => c.id !== editingId && c.code.toLowerCase() === formData.code?.toLowerCase())) {
+      toast({ variant: "destructive", title: "Validation Error", description: "Customer Code must be unique." });
+      return;
+    }
+
+    if (editingId) {
+      setCustomers(prev => prev.map(item => item.id === editingId ? { ...item, ...formData, updated_at: now, updated_by: user } as Customer : item));
+      toast({ title: "Updated", description: "Customer updated successfully" });
+    } else {
+      const newId = Math.max(...customers.map(c => c.id), 0) + 1;
+      const newItem = { ...formData, id: newId, created_at: now, created_by: user } as Customer;
+      setCustomers(prev => [...prev, newItem]);
+      toast({ title: "Created", description: "Customer created successfully" });
+    }
+    setIsDialogOpen(false);
   };
 
-  const handleUpdateCustomer = () => {
-    setCustomers(customers.map(c => c.id === selectedCustomer.id ? selectedCustomer : c));
-    setIsEditDialogOpen(false);
-    setSelectedCustomer(null);
-    toast({
-      title: "Customer Updated",
-      description: `${selectedCustomer.name} has been successfully updated.`,
-    });
+  const handleBillingAddressChange = (field: keyof Address, value: string) => {
+    setFormData(prev => ({
+      ...prev,
+      billing_address: { ...prev.billing_address!, [field]: value }
+    }));
+  };
+
+  const handleShippingAddressChange = (id: number, field: keyof Address, value: string) => {
+    setFormData(prev => ({
+      ...prev,
+      shipping_addresses: prev.shipping_addresses!.map(a => a.id === id ? { ...a, [field]: value } : a)
+    }));
+  };
+
+  const handleAddShippingAddress = () => {
+    setFormData(prev => ({
+      ...prev,
+      shipping_addresses: [...(prev.shipping_addresses || []), { id: Date.now(), address_line: "", country: "India", state: "", city: "" }]
+    }));
+  };
+
+  const handleRemoveShippingAddress = (id: number) => {
+    setFormData(prev => ({
+      ...prev,
+      shipping_addresses: prev.shipping_addresses!.filter(a => a.id !== id)
+    }));
   };
 
   return (
-    <div className="flex flex-col gap-6">
-      <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
-        <div className="flex flex-col gap-2">
-          <h1 className="text-3xl font-bold tracking-tight text-foreground">Customer Management</h1>
-          <p className="text-muted-foreground">Manage your client relationships and contacts.</p>
+    <div className="h-full flex flex-col gap-6">
+      <div className="flex flex-col gap-1">
+        <h1 className="text-3xl font-bold tracking-tight">Customers Master</h1>
+        <p className="text-muted-foreground text-sm">Manage your customers, their locations, and billing details.</p>
+      </div>
+
+      <div className="flex flex-col sm:flex-row items-end gap-4 bg-card p-4 rounded-lg border shadow-sm">
+        <div className="w-full sm:flex-1">
+          <Label className="mb-1.5 block text-[10px] font-bold text-muted-foreground uppercase tracking-wider">
+            Search
+          </Label>
+          <div className="relative">
+            <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
+            <Input
+              placeholder="Search by code, name, contact or city..."
+              className="pl-9 h-10"
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
+            />
+          </div>
         </div>
-        
-        {/* Add Customer Dialog */}
-        <Dialog open={isAddDialogOpen} onOpenChange={setIsAddDialogOpen}>
-          <DialogTrigger asChild>
-            <Button className="gap-2">
-              <Plus className="h-4 w-4" /> Add Customer
-            </Button>
-          </DialogTrigger>
-          <DialogContent>
-            <DialogHeader>
-              <DialogTitle>Add New Customer</DialogTitle>
-            </DialogHeader>
-            <div className="grid gap-4 py-4">
-              <div className="grid grid-cols-4 items-center gap-4">
-                <Label htmlFor="name" className="text-right">Company</Label>
-                <Input id="name" value={newCustomer.name} onChange={e => setNewCustomer({...newCustomer, name: e.target.value})} className="col-span-3" />
+        <div className="w-full sm:w-48">
+          <Label className="mb-1.5 block text-[10px] font-bold text-muted-foreground uppercase tracking-wider">
+            Status
+          </Label>
+          <Select value={filterStatus} onValueChange={setFilterStatus}>
+            <SelectTrigger className="h-10">
+              <SelectValue placeholder="All Status" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="All">All Status</SelectItem>
+              <SelectItem value="Active">Active</SelectItem>
+              <SelectItem value="Inactive">Inactive</SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
+        <Button onClick={handleAddClick} className="h-10">
+          <Plus className="h-4 w-4 mr-2" /> Add New Customer
+        </Button>
+      </div>
+
+      <Card>
+        <CardContent className="pt-6">
+          <div className="rounded-md border">
+            <Table>
+              <TableHeader>
+                <TableRow className="bg-muted/50">
+                  <TableHead className="w-[120px]">Code</TableHead>
+                  <TableHead>Customer Name</TableHead>
+                  <TableHead>Contact Person</TableHead>
+                  <TableHead>Mobile</TableHead>
+                  <TableHead>City</TableHead>
+                  <TableHead>Status</TableHead>
+                  <TableHead className="text-right">Actions</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {paginatedCustomers.length === 0 ? (
+                  <TableRow>
+                    <TableCell colSpan={7} className="h-32 text-center text-muted-foreground italic">
+                      No customers found matching your search.
+                    </TableCell>
+                  </TableRow>
+                ) : (
+                  paginatedCustomers.map((customer) => (
+                    <TableRow key={customer.id} className="hover:bg-muted/30 transition-colors">
+                      <TableCell className="font-mono text-sm font-medium">{customer.code}</TableCell>
+                      <TableCell className="font-medium text-sm">{customer.name}</TableCell>
+                      <TableCell className="text-sm">{customer.contact_person}</TableCell>
+                      <TableCell className="text-sm">{customer.mobile}</TableCell>
+                      <TableCell className="text-sm">{customer.billing_address.city}</TableCell>
+                      <TableCell>
+                        <StatusBadge status={customer.status} />
+                      </TableCell>
+                      <TableCell className="text-right">
+                        <div className="flex justify-end gap-1">
+                          <Button variant="ghost" size="icon" className="h-8 w-8 hover:bg-muted" title="Edit" onClick={() => handleEditClick(customer)}>
+                            <Pencil className="h-4 w-4" />
+                          </Button>
+                          <Button variant="ghost" size="icon" className="h-8 w-8 text-destructive hover:bg-destructive/10" title="Delete" onClick={() => handleDeleteClick(customer.id)}>
+                            <Trash2 className="h-4 w-4" />
+                          </Button>
+                        </div>
+                      </TableCell>
+                    </TableRow>
+                  ))
+                )}
+              </TableBody>
+            </Table>
+          </div>
+
+          <DataTablePagination
+            currentPage={currentPage}
+            totalPages={totalPages}
+            totalItems={filteredCustomers.length}
+            itemsPerPage={itemsPerPage}
+            onPageChange={setCurrentPage}
+            onItemsPerPageChange={setItemsPerPage}
+            options={[10, 15, 30, 50]}
+          />
+        </CardContent>
+      </Card>
+
+      <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
+        <DialogContent className="sm:max-w-[800px] max-h-[90vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>{editingId ? "Edit Customer" : "Create New Customer"}</DialogTitle>
+            <DialogDescription>
+              Enter customer details, contact information and locations.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="grid gap-6 py-4">
+            <SectionHeader title="Basic Info" />
+            <div className="grid grid-cols-2 gap-4">
+              <div className="space-y-2">
+                <Label className="text-xs font-semibold">Customer Code *</Label>
+                <Input
+                  value={formData.code || ""}
+                  onChange={(e) => setFormData({ ...formData, code: e.target.value.toUpperCase() })}
+                  className="h-9"
+                />
               </div>
-              <div className="grid grid-cols-4 items-center gap-4">
-                <Label htmlFor="contact" className="text-right">Contact</Label>
-                <Input id="contact" value={newCustomer.contact} onChange={e => setNewCustomer({...newCustomer, contact: e.target.value})} className="col-span-3" />
+              <div className="space-y-2">
+                <Label className="text-xs font-semibold">Customer Name *</Label>
+                <Input
+                  value={formData.name || ""}
+                  onChange={(e) => setFormData({ ...formData, name: e.target.value })}
+                  className="h-9"
+                />
               </div>
-              <div className="grid grid-cols-4 items-center gap-4">
-                <Label htmlFor="email" className="text-right">Email</Label>
-                <Input id="email" value={newCustomer.email} onChange={e => setNewCustomer({...newCustomer, email: e.target.value})} className="col-span-3" />
+              <div className="space-y-2">
+                <Label className="text-xs font-semibold">Status *</Label>
+                <Select value={formData.status || ""} onValueChange={(val: any) => setFormData({ ...formData, status: val })}>
+                  <SelectTrigger className="h-9"><SelectValue placeholder="Select Status" /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="Active">Active</SelectItem>
+                    <SelectItem value="Inactive">Inactive</SelectItem>
+                  </SelectContent>
+                </Select>
               </div>
-               <div className="grid grid-cols-4 items-center gap-4">
-                <Label htmlFor="phone" className="text-right">Phone</Label>
-                <Input id="phone" value={newCustomer.phone} onChange={e => setNewCustomer({...newCustomer, phone: e.target.value})} className="col-span-3" />
+              <div className="space-y-2">
+                <Label className="text-xs font-semibold">Tax Reg No</Label>
+                <Input
+                  value={formData.tax_reg_no || ""}
+                  onChange={(e) => setFormData({ ...formData, tax_reg_no: e.target.value })}
+                  className="h-9"
+                />
               </div>
-              <div className="grid grid-cols-4 items-center gap-4">
-                <Label htmlFor="type" className="text-right">Type</Label>
-                <Select 
-                  value={newCustomer.type} 
-                  onValueChange={(value) => setNewCustomer({...newCustomer, type: value})}
+              <div className="space-y-2">
+                <Label className="text-xs font-semibold">Payment Terms</Label>
+                <Select
+                  value={formData.payment_terms || ""}
+                  onValueChange={(val) => setFormData({ ...formData, payment_terms: val })}
                 >
-                  <SelectTrigger className="col-span-3">
-                    <SelectValue placeholder="Select type" />
+                  <SelectTrigger className="h-9">
+                    <SelectValue placeholder="Select Payment Terms" />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="SMB">SMB</SelectItem>
-                    <SelectItem value="Enterprise">Enterprise</SelectItem>
-                    <SelectItem value="Government">Government</SelectItem>
+                    {PAYMENT_TERMS_OPTIONS.map((option) => (
+                      <SelectItem key={option} value={option}>
+                        {option}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-2">
+                <Label className="text-xs font-semibold">Currency</Label>
+                <Select value={formData.currency || ""} onValueChange={(val) => setFormData({ ...formData, currency: val })}>
+                  <SelectTrigger className="h-9"><SelectValue placeholder="Select Currency" /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="ush">ush</SelectItem>
+                    <SelectItem value="INR">INR</SelectItem>
+                    <SelectItem value="USD">USD</SelectItem>
                   </SelectContent>
                 </Select>
               </div>
             </div>
-            <DialogFooter>
-              <Button onClick={handleAddCustomer}>Save Customer</Button>
-            </DialogFooter>
-          </DialogContent>
-        </Dialog>
 
-        {/* Edit Customer Dialog */}
-        <Dialog open={isEditDialogOpen} onOpenChange={setIsEditDialogOpen}>
-          <DialogContent>
-            <DialogHeader>
-              <DialogTitle>Edit Customer</DialogTitle>
-            </DialogHeader>
-            {selectedCustomer && (
-              <div className="grid gap-4 py-4">
-                <div className="grid grid-cols-4 items-center gap-4">
-                  <Label htmlFor="edit-name" className="text-right">Company</Label>
-                  <Input id="edit-name" value={selectedCustomer.name} onChange={e => setSelectedCustomer({...selectedCustomer, name: e.target.value})} className="col-span-3" />
+            <SectionHeader title="Primary Contact" />
+            <div className="grid grid-cols-2 gap-4">
+              <div className="space-y-2">
+                <Label className="text-xs font-semibold">Contact Person *</Label>
+                <Input
+                  value={formData.contact_person || ""}
+                  onChange={(e) => setFormData({ ...formData, contact_person: e.target.value })}
+                  className="h-9"
+                />
+              </div>
+              <div className="space-y-2">
+                <Label className="text-xs font-semibold">Mobile *</Label>
+                <Input
+                  value={formData.mobile || ""}
+                  onChange={(e) => setFormData({ ...formData, mobile: e.target.value })}
+                  className="h-9"
+                />
+              </div>
+              <div className="space-y-2">
+                <Label className="text-xs font-semibold">Email</Label>
+                <Input
+                  value={formData.email || ""}
+                  onChange={(e) => setFormData({ ...formData, email: e.target.value })}
+                  className="h-9"
+                />
+              </div>
+            </div>
+
+            <SectionHeader title="Billing Address" />
+            <div className="p-4 rounded-md border bg-muted/20">
+              <div className="grid grid-cols-2 gap-4">
+                <div className="col-span-2 space-y-2">
+                  <Label className="text-[10px] font-bold uppercase text-muted-foreground">Address Line *</Label>
+                  <Input
+                    value={formData.billing_address?.address_line || ""}
+                    onChange={(e) => handleBillingAddressChange("address_line", e.target.value)}
+                    className="h-9"
+                  />
                 </div>
-                <div className="grid grid-cols-4 items-center gap-4">
-                  <Label htmlFor="edit-contact" className="text-right">Contact</Label>
-                  <Input id="edit-contact" value={selectedCustomer.contact} onChange={e => setSelectedCustomer({...selectedCustomer, contact: e.target.value})} className="col-span-3" />
-                </div>
-                <div className="grid grid-cols-4 items-center gap-4">
-                  <Label htmlFor="edit-email" className="text-right">Email</Label>
-                  <Input id="edit-email" value={selectedCustomer.email} onChange={e => setSelectedCustomer({...selectedCustomer, email: e.target.value})} className="col-span-3" />
-                </div>
-                 <div className="grid grid-cols-4 items-center gap-4">
-                  <Label htmlFor="edit-phone" className="text-right">Phone</Label>
-                  <Input id="edit-phone" value={selectedCustomer.phone} onChange={e => setSelectedCustomer({...selectedCustomer, phone: e.target.value})} className="col-span-3" />
-                </div>
-                <div className="grid grid-cols-4 items-center gap-4">
-                  <Label htmlFor="edit-type" className="text-right">Type</Label>
-                  <Select 
-                    value={selectedCustomer.type} 
-                    onValueChange={(value) => setSelectedCustomer({...selectedCustomer, type: value})}
+                <div className="space-y-2">
+                  <Label className="text-[10px] font-bold uppercase text-muted-foreground">State *</Label>
+                  <Select
+                    value={formData.billing_address?.state || ""}
+                    onValueChange={(val) => {
+                      handleBillingAddressChange("state", val);
+                      handleBillingAddressChange("city", ""); // Reset city when state changes
+                    }}
                   >
-                    <SelectTrigger className="col-span-3">
-                      <SelectValue placeholder="Select type" />
+                    <SelectTrigger className="h-9">
+                      <SelectValue placeholder="Select State" />
                     </SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="SMB">SMB</SelectItem>
-                      <SelectItem value="Enterprise">Enterprise</SelectItem>
-                      <SelectItem value="Government">Government</SelectItem>
+                      {mockStates.filter(s => s.status === "Active").map((state) => (
+                        <SelectItem key={state.id} value={state.name}>
+                          {state.name}
+                        </SelectItem>
+                      ))}
                     </SelectContent>
                   </Select>
                 </div>
-                <div className="grid grid-cols-4 items-center gap-4">
-                  <Label htmlFor="edit-status" className="text-right">Status</Label>
-                  <Select 
-                    value={selectedCustomer.status} 
-                    onValueChange={(value) => setSelectedCustomer({...selectedCustomer, status: value})}
+                <div className="space-y-2">
+                  <Label className="text-[10px] font-bold uppercase text-muted-foreground">City *</Label>
+                  <Select
+                    value={formData.billing_address?.city || ""}
+                    onValueChange={(val) => handleBillingAddressChange("city", val)}
+                    disabled={!formData.billing_address?.state}
                   >
-                    <SelectTrigger className="col-span-3">
-                      <SelectValue placeholder="Select status" />
+                    <SelectTrigger className="h-9">
+                      <SelectValue placeholder={formData.billing_address?.state ? "Select City" : "Select State First"} />
                     </SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="Active">Active</SelectItem>
-                      <SelectItem value="Inactive">Inactive</SelectItem>
+                      {mockCities
+                        .filter((c) => c.state === formData.billing_address?.state && c.status === "Active")
+                        .map((city) => (
+                          <SelectItem key={city.id} value={city.name}>
+                            {city.name}
+                          </SelectItem>
+                        ))}
                     </SelectContent>
                   </Select>
                 </div>
               </div>
-            )}
-            <DialogFooter>
-              <Button onClick={handleUpdateCustomer}>Save Changes</Button>
-            </DialogFooter>
-          </DialogContent>
-        </Dialog>
+            </div>
 
-        {/* View Details Dialog */}
-        <Dialog open={isViewDialogOpen} onOpenChange={setIsViewDialogOpen}>
-          <DialogContent>
-            <DialogHeader>
-              <DialogTitle>Customer Details</DialogTitle>
-            </DialogHeader>
-            {selectedCustomer && (
-              <div className="flex flex-col gap-6 py-4">
-                <div className="flex items-center gap-4">
-                  <Avatar className="h-16 w-16">
-                    <AvatarFallback className="text-lg">{selectedCustomer.name.substring(0, 2).toUpperCase()}</AvatarFallback>
-                  </Avatar>
-                  <div>
-                    <h3 className="text-xl font-bold">{selectedCustomer.name}</h3>
-                    <Badge variant={selectedCustomer.status === "Active" ? "default" : "secondary"} className="mt-1">
-                      {selectedCustomer.status}
-                    </Badge>
+            <div className="flex items-center justify-between mt-4">
+              <SectionHeader title="Shipping Locations" />
+              <Button
+                variant="outline"
+                size="sm"
+                type="button"
+                className="h-8 text-xs mb-4"
+                onClick={handleAddShippingAddress}
+              >
+                <Plus className="h-3 w-3 mr-1" /> Add Shipping Location
+              </Button>
+            </div>
+
+            <div className="space-y-4">
+              {formData.shipping_addresses?.map((addr, idx) => (
+                <div key={addr.id} className="p-4 rounded-md border bg-muted/20 relative">
+                  {formData.shipping_addresses!.length > 1 && (
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="h-6 w-6 absolute top-2 right-2 text-destructive"
+                      onClick={() => handleRemoveShippingAddress(addr.id)}
+                    >
+                      <X className="h-4 w-4" />
+                    </Button>
+                  )}
+                  <div className="grid grid-cols-2 gap-4">
+                    <div className="col-span-2 space-y-2">
+                      <Label className="text-[10px] font-bold uppercase text-muted-foreground">Address Line {idx + 1} *</Label>
+                      <Input
+                        value={addr.address_line}
+                        onChange={(e) => handleShippingAddressChange(addr.id, "address_line", e.target.value)}
+                        className="h-9"
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <Label className="text-[10px] font-bold uppercase text-muted-foreground">State *</Label>
+                      <Select
+                        value={addr.state || ""}
+                        onValueChange={(val) => {
+                          handleShippingAddressChange(addr.id, "state", val);
+                          handleShippingAddressChange(addr.id, "city", ""); // Reset city when state changes
+                        }}
+                      >
+                        <SelectTrigger className="h-9">
+                          <SelectValue placeholder="Select State" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {mockStates.filter(s => s.status === "Active").map((state) => (
+                            <SelectItem key={state.id} value={state.name}>
+                              {state.name}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <div className="space-y-2">
+                      <Label className="text-[10px] font-bold uppercase text-muted-foreground">City *</Label>
+                      <Select
+                        value={addr.city || ""}
+                        onValueChange={(val) => handleShippingAddressChange(addr.id, "city", val)}
+                        disabled={!addr.state}
+                      >
+                        <SelectTrigger className="h-9">
+                          <SelectValue placeholder={addr.state ? "Select City" : "Select State First"} />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {mockCities
+                            .filter((c) => c.state === addr.state && c.status === "Active")
+                            .map((city) => (
+                              <SelectItem key={city.id} value={city.name}>
+                                {city.name}
+                              </SelectItem>
+                            ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
                   </div>
                 </div>
-                
-                <div className="grid grid-cols-2 gap-4">
-                  <Card>
-                    <CardHeader className="pb-2">
-                      <CardTitle className="text-sm font-medium text-muted-foreground">Contact Person</CardTitle>
-                    </CardHeader>
-                    <CardContent>
-                      <p className="font-medium">{selectedCustomer.contact}</p>
-                    </CardContent>
-                  </Card>
-                  <Card>
-                    <CardHeader className="pb-2">
-                      <CardTitle className="text-sm font-medium text-muted-foreground">Customer Type</CardTitle>
-                    </CardHeader>
-                    <CardContent>
-                      <p className="font-medium">{selectedCustomer.type}</p>
-                    </CardContent>
-                  </Card>
-                </div>
+              ))}
+            </div>
 
-                <div className="space-y-3">
-                  <div className="flex items-center gap-3 text-sm">
-                    <Mail className="h-4 w-4 text-muted-foreground" />
-                    <span>{selectedCustomer.email}</span>
-                  </div>
-                  <div className="flex items-center gap-3 text-sm">
-                    <Phone className="h-4 w-4 text-muted-foreground" />
-                    <span>{selectedCustomer.phone}</span>
-                  </div>
-                  <div className="flex items-center gap-3 text-sm">
-                    <MapPin className="h-4 w-4 text-muted-foreground" />
-                    <span>{selectedCustomer.location}</span>
-                  </div>
-                </div>
-              </div>
-            )}
-          </DialogContent>
-        </Dialog>
-
-      </div>
-
-      <div className="grid gap-6 md:grid-cols-3">
-        <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-medium">Total Customers</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold">{customers.length}</div>
-            <p className="text-xs text-muted-foreground">+2 from last month</p>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-medium">Active Accounts</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold">{customers.filter(c => c.status === "Active").length}</div>
-            <p className="text-xs text-muted-foreground">98% retention rate</p>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-medium">New Leads</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold">12</div>
-            <p className="text-xs text-muted-foreground">In the pipeline</p>
-          </CardContent>
-        </Card>
-      </div>
-
-      <Card>
-        <CardHeader>
-          <div className="flex items-center justify-between">
-            <CardTitle>Customer Directory</CardTitle>
-            <div className="relative w-64">
-              <Search className="absolute left-2 top-2.5 h-4 w-4 text-muted-foreground" />
-              <Input 
-                placeholder="Search customers..." 
-                className="pl-8"
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
+            <SectionHeader title="Additional Notes" />
+            <div className="space-y-2">
+              <Textarea
+                value={formData.notes || ""}
+                onChange={(e) => setFormData({ ...formData, notes: e.target.value })}
+                placeholder="Any internal notes..."
+                className="min-h-[100px] resize-none"
               />
             </div>
           </div>
-        </CardHeader>
-        <CardContent>
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>Company / Contact</TableHead>
-                <TableHead>Status</TableHead>
-                <TableHead>Type</TableHead>
-                <TableHead>Contact Info</TableHead>
-                <TableHead className="text-right">Actions</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {filteredCustomers.map((customer) => (
-                <TableRow key={customer.id}>
-                  <TableCell>
-                    <div className="flex items-center gap-3">
-                      <Avatar className="h-9 w-9">
-                        <AvatarFallback>{customer.name.substring(0, 2).toUpperCase()}</AvatarFallback>
-                      </Avatar>
-                      <div className="flex flex-col">
-                        <span className="font-medium">{customer.name}</span>
-                        <span className="text-xs text-muted-foreground">{customer.contact}</span>
-                      </div>
-                    </div>
-                  </TableCell>
-                  <TableCell>
-                    <Badge variant={customer.status === "Active" ? "default" : "secondary"}>
-                      {customer.status}
-                    </Badge>
-                  </TableCell>
-                  <TableCell>{customer.type}</TableCell>
-                  <TableCell>
-                    <div className="flex flex-col text-sm text-muted-foreground">
-                      <div className="flex items-center gap-1">
-                        <Mail className="h-3 w-3" /> {customer.email}
-                      </div>
-                      <div className="flex items-center gap-1">
-                        <Phone className="h-3 w-3" /> {customer.phone}
-                      </div>
-                    </div>
-                  </TableCell>
-                  <TableCell className="text-right">
-                    <DropdownMenu>
-                      <DropdownMenuTrigger asChild>
-                        <Button variant="ghost" size="icon">
-                          <MoreHorizontal className="h-4 w-4" />
-                        </Button>
-                      </DropdownMenuTrigger>
-                      <DropdownMenuContent align="end">
-                        <DropdownMenuItem onClick={() => handleViewClick(customer)}>
-                          <Eye className="mr-2 h-4 w-4" /> View Details
-                        </DropdownMenuItem>
-                        <DropdownMenuItem onClick={() => handleEditClick(customer)}>
-                          <Pencil className="mr-2 h-4 w-4" /> Edit
-                        </DropdownMenuItem>
-                        <DropdownMenuItem className="text-destructive" onClick={() => handleDeleteCustomer(customer.id)}>
-                          <Trash2 className="mr-2 h-4 w-4" /> Delete
-                        </DropdownMenuItem>
-                      </DropdownMenuContent>
-                    </DropdownMenu>
-                  </TableCell>
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
-        </CardContent>
-      </Card>
+
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setIsDialogOpen(false)}>Cancel</Button>
+            <Button onClick={handleSave} className="bg-primary hover:bg-primary/90">
+              {editingId ? "Update Customer" : "Create Customer"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
