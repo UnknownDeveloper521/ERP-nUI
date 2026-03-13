@@ -11,11 +11,25 @@ console.log("🔄 Build v3 - Using env variables");
 export const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
 // Helper functions
-export const signUpWithEmail = async (email: string, password: string) => {
-  return supabase.auth.signUp({ email, password });
+export const signUpWithEmail = async (email: string, password: string, username?: string) => {
+  return supabase.auth.signUp({ 
+    email, 
+    password,
+    options: {
+      data: {
+        username: username || email.split('@')[0],
+      }
+    }
+  });
 };
 
 export const signInWithEmail = async (email: string, password: string) => {
+  return supabase.auth.signInWithPassword({ email, password });
+};
+
+export const signInCompanyWithEmail = async (email: string, password: string) => {
+  // Supabase doesn't have a built-in "company login" distinction by default in signInWithPassword
+  // but we can treat it similarly or add metadata-based logic if needed later.
   return supabase.auth.signInWithPassword({ email, password });
 };
 

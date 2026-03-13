@@ -6,7 +6,7 @@ import {
   signOut,
   signUpWithEmail,
   signInCompanyWithEmail
-} from './customAuth';
+} from './supabase';
 
 // --- Types ---
 
