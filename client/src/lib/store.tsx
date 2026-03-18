@@ -4,9 +4,8 @@ import {
   onAuthStateChange,
   signInWithEmail,
   signOut,
-  signUpWithEmail,
-  signInCompanyWithEmail
-} from './customAuth';
+  signUpWithEmail
+} from './supabase';
 
 // --- Types ---
 
