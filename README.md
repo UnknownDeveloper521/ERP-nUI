@@ -1,6 +1,7 @@
 # ERP-v1
 
-Internal ERP system with a Vite + React + TypeScript frontend, an Express + TypeScript backend, Supabase Auth + Postgres for persistence, and a Socket.IO powered **Internal Chat** module..
+Internal ERP system with a Vite + React + TypeScript frontend, an Express + TypeScript backend, Supabase Auth + Postgres for persistence, and a Socket.IO powered **Internal Chat** module.
+
 
 ## Tech Stack
 
