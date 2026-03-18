@@ -61,7 +61,7 @@ import {
     type InvoiceItem as MockInvoiceItem,
     type InvoiceTerm as MockInvoiceTerm
 } from "@/lib/mockInvoices";
-import { getSalesOrders, updateSalesOrder, changeSOStatus } from "@/lib/mockSalesOrders";
+import { getSalesOrders, updateSalesOrder, changeSOStatus, checkAndMoveToDispatchPending } from "@/lib/mockSalesOrders";
 
 // ============================================================================
 // HELPER FUNCTIONS
@@ -117,91 +117,111 @@ type InvoiceData = MockInvoiceData;
 
 // CRITICAL: For Invoice Pending status, derive from Sales Orders directly
 // This ensures Sales and Accounting always show the same Invoice Pending records
+// NEW LOGIC: Create one entry per payment term
 const getInvoicePendingFromSalesOrders = (): InvoiceData[] => {
     const salesOrders = getSalesOrders().filter(so => so.status === "Invoice Pending");
     
-    return salesOrders.map(so => {
+    const invoiceEntries: InvoiceData[] = [];
+
+    salesOrders.forEach(so => {
         const subtotal = so.items.reduce((sum, item) => sum + item.price, 0);
         
-        // Calculate discount amount
+        // Calculate discount amount for the WHOLE SO to determine taxable amount
         const discountValue = so.discountValue || 0;
         const discountType = so.discountType || "%";
-        const discountAmount = discountType === "%" 
+        const totalDiscountAmount = discountType === "%" 
             ? (subtotal * discountValue) / 100 
             : discountValue;
         
-        // Calculate tax on (subtotal - discount)
-        const taxableAmount = subtotal - discountAmount;
+        const taxableAmount = subtotal - totalDiscountAmount;
         
         // FIX: Map tax from both old (taxPercentage) and new (taxValue/taxType) fields
         // Priority: taxValue/taxType (new) > taxPercentage (old/deprecated)
         let taxPercentage = 0;
-        let tax = 0;
+        let totalTax = 0;
         
         if (so.taxType && so.taxValue !== undefined) {
             // New tax fields exist - use them
             if (so.taxType === "%") {
                 taxPercentage = so.taxValue;
-                tax = (taxableAmount * so.taxValue) / 100;
+                totalTax = (taxableAmount * so.taxValue) / 100;
             } else {
                 // Fixed amount tax
-                tax = so.taxValue;
+                totalTax = so.taxValue;
                 taxPercentage = taxableAmount > 0 ? (so.taxValue / taxableAmount) * 100 : 0;
             }
         } else if (so.taxPercentage !== undefined) {
             // Fallback to old taxPercentage field
             taxPercentage = so.taxPercentage;
-            tax = (taxableAmount * so.taxPercentage) / 100;
+            totalTax = (taxableAmount * so.taxPercentage) / 100;
         }
         
         // Grand Total = Subtotal - Discount + Tax
-        const grandTotal = subtotal - discountAmount + tax;
-        
-        return {
-            id: so.id, // Use SO id for Invoice Pending stage
-            invoiceNumber: `INV-${so.soNumber.split('-').slice(1).join('-')}`,
-            invoiceDate: new Date().toISOString().split('T')[0],
-            dueDate: "",
-            soNumber: so.soNumber,
-            soDate: so.soDate,
-            customerName: so.customerName,
-            contactPerson: so.contactPerson,
-            mobileNo: so.mobileNo,
-            shippingAddress: so.shippingAddress,
-            billingAddress: so.billingAddress,
-            deliveryDate: so.deliveryDate,
-            currency: so.currency,
-            remarks: so.remarks,
-            // Map discount fields from SO
-            discountValue: discountValue,
-            discountType: discountType,
-            discountAmount: discountAmount,
-            // Tax fields
-            taxPercentage: taxPercentage,
-            tax: tax,
-            // Totals
-            subtotal: subtotal,
-            grandTotal: grandTotal,
-            status: "Invoice Pending" as InvoiceStatus,
-            terms: so.terms.map(t => ({
-                id: t.id,
-                percentage: t.percentage,
-                termType: t.termType,
-                date: t.date,
-                days: t.days,
-                note: t.note
-            })),
-            items: so.items.map(i => ({
-                id: i.id,
-                itemCode: i.itemCode,
-                itemName: i.itemName,
-                uom: i.uom,
-                orderedQty: i.orderedQty,
-                rate: i.rate,
-                price: i.price
-            }))
-        };
+        const grandTotal = subtotal - totalDiscountAmount + totalTax;
+
+        // Iterate through each term and create a separate entry if it's not generated
+        so.terms.forEach(term => {
+            if (!term.isGenerated) {
+                // Calculate prorated amounts based on term value/percentage
+                const termValue = term.value || term.percentage || 0;
+                
+                // Assuming term value is a percentage of the total for prorating
+                // Calculate based on the percentage of the grand total
+                const termPercentage = term.percentage || term.value; // For backward compatibility
+                const proratedSubtotal = (subtotal * termPercentage) / 100;
+                const proratedDiscount = (totalDiscountAmount * termPercentage) / 100;
+                const proratedTax = (totalTax * termPercentage) / 100;
+                const proratedGrandTotal = (grandTotal * termPercentage) / 100;
+
+                invoiceEntries.push({
+                    id: parseInt(`${so.id}${term.id}`), // Unique ID for table rendering
+                    invoiceNumber: "-", // Explicitly "-" before generation
+                    invoiceDate: "-",   // Explicitly "-" before generation
+                    dueDate: term.date || "",
+                    soNumber: so.soNumber,
+                    soDate: so.soDate,
+                    termId: term.id, // KEEPING TRACK OF WHICH TERM THIS IS
+                    customerName: so.customerName,
+                    contactPerson: so.contactPerson,
+                    mobileNo: so.mobileNo,
+                    shippingAddress: so.shippingAddress,
+                    billingAddress: so.billingAddress,
+                    deliveryDate: so.deliveryDate,
+                    currency: so.currency,
+                    remarks: so.remarks,
+                    // Map ALL fields, but amounts are prorated
+                    discountValue: discountValue,
+                    discountType: discountType,
+                    discountAmount: proratedDiscount,
+                    taxPercentage: taxPercentage,
+                    tax: proratedTax,
+                    subtotal: proratedSubtotal,
+                    grandTotal: proratedGrandTotal,
+                    status: "Invoice Pending" as InvoiceStatus,
+                    // THIS IS THE CRITICAL PART: Only show THIS specific term!
+                    terms: [{
+                        id: term.id,
+                        percentage: term.percentage,
+                        termType: term.termType,
+                        date: term.date,
+                        days: term.days,
+                        note: term.note
+                    }],
+                    items: so.items.map(i => ({
+                        id: i.id,
+                        itemCode: i.itemCode,
+                        itemName: i.itemName,
+                        uom: i.uom,
+                        orderedQty: i.orderedQty,
+                        rate: i.rate,
+                        price: (i.price * termPercentage) / 100 // Prorate item price too for display
+                    }))
+                });
+            }
+        });
     });
+
+    return invoiceEntries;
 };
 
 // Get all invoices: Invoice Pending from SOs + Invoiced/Paid from invoice store
@@ -421,15 +441,7 @@ const Invoicing = () => {
         setActiveInvoice({ ...activeInvoice, terms: activeInvoice.terms.filter(t => t.id !== termId) });
     };
 
-    // Calculate totals with discount
-    const calculateTotals = (items: InvoiceItem[], taxPercentage: number = 0, discountValue: number = 0, discountType: "%" | "Amount" = "%") => {
-        const subtotal = items.reduce((sum, item) => sum + item.price, 0);
-        const discountAmount = discountType === "%" ? (subtotal * discountValue) / 100 : discountValue;
-        const taxableAmount = subtotal - discountAmount;
-        const totalTax = (taxableAmount * taxPercentage) / 100;
-        const grandTotal = subtotal - discountAmount + totalTax;
-        return { subtotal, discountAmount, totalTax, grandTotal };
-    };
+    // Calculate totals function removed, using pre-calculated values from invoice data instead
 
     // Save invoice (only for Invoice Pending status)
     const handleSaveInvoice = () => {
@@ -445,16 +457,7 @@ const Invoicing = () => {
             return;
         }
 
-        // Validation: Total percentage must equal 100%
-        const totalPercentage = activeInvoice.terms.reduce((sum, term) => sum + term.percentage, 0);
-        if (totalPercentage !== 100) {
-            toast({
-                title: "Validation Error",
-                description: "Total payment percentage must equal 100%.",
-                variant: "destructive"
-            });
-            return;
-        }
+
 
         // Validation: Check for zero percentage terms
         const hasZeroPercentage = activeInvoice.terms.some(term => term.percentage === 0);
@@ -469,21 +472,29 @@ const Invoicing = () => {
 
         // For Invoice Pending, save changes back to the Sales Order
         const so = getSalesOrders().find(s => s.soNumber === activeInvoice.soNumber);
-        if (so) {
+        if (so && activeInvoice.terms.length > 0 && activeInvoice.termId) {
+            
+            // Find the specific term to update
+            const updatedTerms = so.terms.map(t => {
+                 if (t.id === activeInvoice.termId) {
+                     return {
+                        ...t,
+                        percentage: activeInvoice.terms[0].percentage,
+                        value: activeInvoice.terms[0].percentage, // Sync value with percentage
+                        termType: activeInvoice.terms[0].termType as any,
+                        date: activeInvoice.terms[0].date || "",
+                        days: activeInvoice.terms[0].days,
+                        note: activeInvoice.terms[0].note
+                     };
+                 }
+                 return t;
+            });
+
             updateSalesOrder(so.id, {
                 remarks: activeInvoice.remarks,
                 taxValue: activeInvoice.taxPercentage, // Update taxValue (new field)
                 taxPercentage: activeInvoice.taxPercentage, // Keep for backward compatibility
-                terms: activeInvoice.terms.map(t => ({
-                    id: t.id,
-                    valueType: "%" as const,
-                    value: t.percentage,
-                    percentage: t.percentage,
-                    termType: t.termType as any,
-                    date: t.date || "",
-                    days: t.days,
-                    note: t.note
-                }))
+                terms: updatedTerms
             });
         }
 
@@ -511,16 +522,7 @@ const Invoicing = () => {
             return;
         }
 
-        // Validation: Total percentage must equal 100%
-        const totalPercentage = activeInvoice.terms.reduce((sum, term) => sum + term.percentage, 0);
-        if (totalPercentage !== 100) {
-            toast({
-                title: "Validation Error",
-                description: "Total payment percentage must equal 100% before generating invoice.",
-                variant: "destructive"
-            });
-            return;
-        }
+
 
         // Validation: Check for zero percentage terms
         const hasZeroPercentage = activeInvoice.terms.some(term => term.percentage === 0);
@@ -543,96 +545,118 @@ const Invoicing = () => {
             return;
         }
 
-        // Find the SO and move it to Dispatch Pending
-        const so = getSalesOrders().find(s => s.soNumber === activeInvoice.soNumber);
-        if (so) {
-            // Update SO status to Dispatch Pending
-            updateSalesOrder(so.id, {
-                status: "Dispatch Pending",
-                taxValue: activeInvoice.taxPercentage, // Update taxValue (new field)
-                taxPercentage: activeInvoice.taxPercentage, // Keep for backward compatibility
-                terms: activeInvoice.terms.map(t => ({
-                    id: t.id,
-                    valueType: "%" as const,
-                    value: t.percentage,
-                    percentage: t.percentage,
-                    termType: t.termType as any,
-                    date: t.date || "",
-                    days: t.days,
-                    note: t.note
-                }))
-            });
-            
-            console.log('[INVOICING] SO moved to Dispatch Pending:', {
-                soNumber: so.soNumber,
-                newStatus: "Dispatch Pending"
-            });
-        }
+        const generatedInvoiceDate = new Date().toISOString().split('T')[0];
+        let generatedInvoiceNumber = "";
 
-        // Calculate due dates for payment terms before creating invoice
-        const termsWithDueDates = activeInvoice.terms.map(term => {
+        // Find the SO and update the specific term
+        const so = getSalesOrders().find(s => s.soNumber === activeInvoice.soNumber);
+        if (so && activeInvoice.terms.length > 0 && activeInvoice.termId) {
+            const termIndex = so.terms.findIndex(t => t.id === activeInvoice.termId) + 1;
+            const soNumSuffix = activeInvoice.soNumber.split('-').slice(1).join('-');
+            generatedInvoiceNumber = `INV-${soNumSuffix}${so.terms.length > 1 ? `-${termIndex}` : ''}`;
+
+            // Calculate due date
+            const term = activeInvoice.terms[0];
             let calculatedDate = term.date || "";
             
             if (term.termType === "Days" && term.days && !term.date) {
                 // Calculate due date: Invoice Date + days
-                const invoiceDate = new Date(activeInvoice.invoiceDate);
-                const dueDate = new Date(invoiceDate);
-                dueDate.setDate(dueDate.getDate() + term.days);
-                calculatedDate = dueDate.toISOString().split('T')[0];
+                const invoiceDateObj = new Date(generatedInvoiceDate);
+                const dueDateObj = new Date(invoiceDateObj);
+                dueDateObj.setDate(dueDateObj.getDate() + term.days);
+                calculatedDate = dueDateObj.toISOString().split('T')[0];
             } else if (term.termType === "Advance" && !term.date) {
                 // Advance terms due on invoice date
-                calculatedDate = activeInvoice.invoiceDate;
+                calculatedDate = generatedInvoiceDate;
             } else if ((term.termType === "Delivery" || term.termType === "On Delivery") && !term.date && activeInvoice.deliveryDate) {
                 // Delivery terms due on delivery date
                 calculatedDate = activeInvoice.deliveryDate;
             }
+
+            // Update the specific term in the SO
+            const updatedTerms = so.terms.map(t => {
+                 if (t.id === activeInvoice.termId) {
+                     return {
+                        ...t,
+                        percentage: term.percentage,
+                        value: term.percentage, // Sync value with percentage
+                        termType: term.termType as any,
+                        date: calculatedDate,
+                        days: term.days,
+                        note: term.note,
+                        isGenerated: true,
+                        invoiceNo: generatedInvoiceNumber,
+                        invoiceDate: generatedInvoiceDate
+                     };
+                 }
+                 return t;
+            });
+
+            updateSalesOrder(so.id, {
+                taxValue: activeInvoice.taxPercentage, // Update taxValue (new field)
+                taxPercentage: activeInvoice.taxPercentage, // Keep for backward compatibility
+                terms: updatedTerms
+            });
             
-            return {
-                ...term,
-                date: calculatedDate
-            };
-        });
+            // Check if all terms are generated and move to Dispatch Pending if so
+            const updatedSO = checkAndMoveToDispatchPending(so.id);
+            if (updatedSO && updatedSO.status === "Dispatch Pending") {
+                console.log('[INVOICING] All terms generated. SO moved to Dispatch Pending:', {
+                    soNumber: so.soNumber
+                });
+            }
+            
+            // Create actual invoice record with status "Invoiced"
+            const newInvoice = createInvoice({
+                invoiceNumber: generatedInvoiceNumber,
+                invoiceDate: generatedInvoiceDate,
+                termId: activeInvoice.termId,
+                dueDate: calculatedDate || "",
+                soNumber: activeInvoice.soNumber,
+                soDate: activeInvoice.soDate,
+                customerName: activeInvoice.customerName,
+                contactPerson: activeInvoice.contactPerson,
+                mobileNo: activeInvoice.mobileNo,
+                shippingAddress: activeInvoice.shippingAddress,
+                billingAddress: activeInvoice.billingAddress,
+                deliveryDate: activeInvoice.deliveryDate,
+                currency: activeInvoice.currency,
+                remarks: activeInvoice.remarks,
+                // Discount fields
+                discountValue: activeInvoice.discountValue || 0,
+                discountType: activeInvoice.discountType || "%",
+                discountAmount: activeInvoice.discountAmount || 0,
+                // Tax and totals
+                taxPercentage: activeInvoice.taxPercentage,
+                subtotal: activeInvoice.subtotal,
+                tax: activeInvoice.tax,
+                grandTotal: activeInvoice.grandTotal,
+                status: "Invoiced",
+                terms: [{
+                    ...term,
+                    date: calculatedDate
+                }],
+                items: activeInvoice.items
+            });
 
-        // Create actual invoice record with status "Invoiced"
-        const newInvoice = createInvoice({
-            invoiceNumber: activeInvoice.invoiceNumber,
-            invoiceDate: activeInvoice.invoiceDate,
-            dueDate: activeInvoice.dueDate || "",
-            soNumber: activeInvoice.soNumber,
-            soDate: activeInvoice.soDate,
-            customerName: activeInvoice.customerName,
-            contactPerson: activeInvoice.contactPerson,
-            mobileNo: activeInvoice.mobileNo,
-            shippingAddress: activeInvoice.shippingAddress,
-            billingAddress: activeInvoice.billingAddress,
-            deliveryDate: activeInvoice.deliveryDate,
-            currency: activeInvoice.currency,
-            remarks: activeInvoice.remarks,
-            // Discount fields
-            discountValue: activeInvoice.discountValue || 0,
-            discountType: activeInvoice.discountType || "%",
-            discountAmount: activeInvoice.discountAmount || 0,
-            // Tax and totals
-            taxPercentage: activeInvoice.taxPercentage,
-            subtotal: activeInvoice.subtotal,
-            tax: activeInvoice.tax,
-            grandTotal: activeInvoice.grandTotal,
-            status: "Invoiced",
-            terms: termsWithDueDates,
-            items: activeInvoice.items
-        });
+            refreshInvoices();
 
-        refreshInvoices();
+            toast({
+                title: "Invoice Generated",
+                description: `Invoice ${generatedInvoiceNumber} has been generated successfully for this payment term. Downloading PDF...`
+            });
 
-        toast({
-            title: "Invoice Generated",
-            description: `Invoice ${activeInvoice.invoiceNumber} has been generated successfully. Sales Order moved to Dispatch Pending. Downloading PDF...`
-        });
+            // Trigger PDF download with the new invoice data
+            handleDownloadInvoice(newInvoice);
 
-        // Trigger PDF download with the new invoice data
-        handleDownloadInvoice(newInvoice);
-
-        handleCloseEdit();
+            handleCloseEdit();
+        } else {
+             toast({
+                title: "Error",
+                description: "Sales order or term data mismatch.",
+                variant: "destructive"
+            });
+        }
     };
 
     return (
@@ -681,6 +705,7 @@ const Invoicing = () => {
                                     <TableHead className="font-semibold text-xs uppercase tracking-wider">Invoice Date</TableHead>
                                     <TableHead className="font-semibold text-xs uppercase tracking-wider">SO No</TableHead>
                                     <TableHead className="font-semibold text-xs uppercase tracking-wider">Customer</TableHead>
+                                    <TableHead className="font-semibold text-xs uppercase tracking-wider">Term Type</TableHead>
                                     <TableHead className="font-semibold text-xs uppercase tracking-wider text-right">Invoice Amount</TableHead>
                                     <TableHead className="font-semibold text-xs uppercase tracking-wider text-center">Status</TableHead>
                                     <TableHead className="text-center w-[100px]">Actions</TableHead>
@@ -695,23 +720,33 @@ const Invoicing = () => {
                                     </TableRow>
                                 ) : (
                                     paginatedData.map((invoice) => {
-                                        const { grandTotal } = calculateTotals(invoice.items, invoice.taxPercentage, invoice.discountValue || 0, invoice.discountType || "%");
                                         return (
                                             <TableRow key={invoice.id} className="hover:bg-muted/30 transition-colors border-b last:border-none">
-                                                <TableCell className="py-4 font-mono font-medium">{invoice.invoiceNumber}</TableCell>
+                                                <TableCell className="py-4 font-mono font-medium">
+                                                    <div className="flex flex-col">
+                                                        <span>{invoice.invoiceNumber}</span>
+                                                        {invoice.terms && invoice.terms.length > 0 && invoice.terms[0].isGenerated ? (
+                                                            <div className="flex flex-col">
+                                                                <span className="text-xs text-muted-foreground">Generated: {invoice.terms[0].invoiceNo}</span>
+                                                                <span className="text-xs text-muted-foreground">{safeFormatDate(invoice.terms[0].invoiceDate, "MMM dd, yyyy")}</span>
+                                                            </div>
+                                                        ) : null}
+                                                    </div>
+                                                </TableCell>
                                                 <TableCell className="py-4 text-sm font-medium text-slate-600">
                                                     {safeFormatDate(invoice.invoiceDate)}
                                                 </TableCell>
                                                 <TableCell className="py-4 font-mono font-medium">{invoice.soNumber}</TableCell>
                                                 <TableCell className="py-4 text-sm font-bold">{invoice.customerName}</TableCell>
-                                                <TableCell className="py-4 text-right text-sm font-bold text-green-600">USh {grandTotal.toFixed(2)}</TableCell>
+                                                <TableCell className="py-4 text-sm font-medium">{invoice.terms && invoice.terms.length > 0 ? invoice.terms[0].termType : "-"}</TableCell>
+                                                <TableCell className="py-4 text-right text-sm font-bold text-green-600">USh {(invoice.grandTotal || 0).toFixed(2)}</TableCell>
                                                 <TableCell className="py-4 text-center">
                                                     {getInvoiceStatusBadge(invoice.status)}
                                                 </TableCell>
                                                 <TableCell className="py-4 text-center">
                                                     <TableActionButtons
                                                         onView={() => handleViewInvoice(invoice)}
-                                                        onEdit={invoice.status === "Invoice Pending" ? () => handleEditInvoice(invoice) : undefined}
+                                                        onEdit={invoice.status === "Invoice Pending" && (!invoice.terms || invoice.terms.length === 0 || !invoice.terms[0].isGenerated) ? () => handleEditInvoice(invoice) : undefined}
                                                     />
                                                 </TableCell>
                                             </TableRow>
@@ -850,15 +885,21 @@ const Invoicing = () => {
                                                     }
                                                 } else if (term.termType === "Days" && term.days) {
                                                     // Calculate due date: Invoice Date + days
-                                                    const invoiceDate = new Date(activeInvoice.invoiceDate);
-                                                    const dueDate = new Date(invoiceDate);
-                                                    dueDate.setDate(dueDate.getDate() + term.days);
-                                                    termDescription += ` within ${term.days} days – Due on ${format(dueDate, "dd-MM-yyyy")}`;
+                                                    if (activeInvoice.invoiceDate && activeInvoice.invoiceDate !== "-") {
+                                                        const invoiceDate = new Date(activeInvoice.invoiceDate);
+                                                        const dueDate = new Date(invoiceDate);
+                                                        dueDate.setDate(dueDate.getDate() + term.days);
+                                                        termDescription += ` within ${term.days} days – Due on ${format(dueDate, "dd-MM-yyyy")}`;
+                                                    } else {
+                                                        termDescription += ` within ${term.days} days – Due on Invoice generation`;
+                                                    }
                                                 } else if (term.termType === "Advance") {
                                                     if (term.date) {
                                                         termDescription += ` – Due on ${format(new Date(term.date), "dd-MM-yyyy")}`;
-                                                    } else {
+                                                    } else if (activeInvoice.invoiceDate && activeInvoice.invoiceDate !== "-") {
                                                         termDescription += ` – Due on ${format(new Date(activeInvoice.invoiceDate), "dd-MM-yyyy")} (Invoice Date)`;
+                                                    } else {
+                                                        termDescription += ` – Due on Invoice generation`;
                                                     }
                                                 } else if (term.date) {
                                                     termDescription += ` – Due on ${format(new Date(term.date), "dd-MM-yyyy")}`;
@@ -909,19 +950,19 @@ const Invoicing = () => {
                                         <div className="w-80 border border-slate-300 rounded-lg p-4 bg-slate-50">
                                             <div className="flex justify-between text-xs mb-2">
                                                 <span className="text-slate-600 font-medium">Subtotal:</span>
-                                                <span className="font-bold text-slate-900">USh {calculateTotals(activeInvoice.items, activeInvoice.taxPercentage, activeInvoice.discountValue || 0, activeInvoice.discountType || "%").subtotal.toFixed(2)}</span>
+                                                <span className="font-bold text-slate-900">USh {(activeInvoice.subtotal || 0).toFixed(2)}</span>
                                             </div>
                                             <div className="flex justify-between text-xs mb-2">
                                                 <span className="text-slate-600 font-medium">Discount ({activeInvoice.discountType === "%" ? `${activeInvoice.discountValue || 0}%` : "Amount"}):</span>
-                                                <span className="font-bold text-red-600">-USh {calculateTotals(activeInvoice.items, activeInvoice.taxPercentage, activeInvoice.discountValue || 0, activeInvoice.discountType || "%").discountAmount.toFixed(2)}</span>
+                                                <span className="font-bold text-red-600">-USh {(activeInvoice.discountAmount || 0).toFixed(2)}</span>
                                             </div>
                                             <div className="flex justify-between text-xs mb-2">
                                                 <span className="text-slate-600 font-medium">Tax ({activeInvoice.taxPercentage}%):</span>
-                                                <span className="font-bold text-slate-900">USh {calculateTotals(activeInvoice.items, activeInvoice.taxPercentage, activeInvoice.discountValue || 0, activeInvoice.discountType || "%").totalTax.toFixed(2)}</span>
+                                                <span className="font-bold text-slate-900">USh {(activeInvoice.tax || 0).toFixed(2)}</span>
                                             </div>
                                             <div className="flex justify-between text-sm border-t-2 border-slate-300 pt-2 mt-2">
                                                 <span className="font-bold text-slate-900">Grand Total:</span>
-                                                <span className="font-bold text-slate-900 text-lg">USh {calculateTotals(activeInvoice.items, activeInvoice.taxPercentage, activeInvoice.discountValue || 0, activeInvoice.discountType || "%").grandTotal.toFixed(2)}</span>
+                                                <span className="font-bold text-slate-900 text-lg">USh {(activeInvoice.grandTotal || 0).toFixed(2)}</span>
                                             </div>
                                         </div>
                                     </div>
@@ -941,12 +982,14 @@ const Invoicing = () => {
                         <Button variant="outline" onClick={handleCloseView}>
                             Close
                         </Button>
-                        <Button 
-                            onClick={() => handleDownloadInvoice(activeInvoice || undefined)} 
-                            className="bg-blue-600 hover:bg-blue-700"
-                        >
-                            <Download className="mr-2 h-4 w-4" /> Download PDF
-                        </Button>
+                        {activeInvoice?.status !== "Invoice Pending" && (
+                            <Button 
+                                onClick={() => handleDownloadInvoice(activeInvoice || undefined)} 
+                                className="bg-blue-600 hover:bg-blue-700"
+                            >
+                                <Download className="mr-2 h-4 w-4" /> Download PDF
+                            </Button>
+                        )}
                     </div>
                 </DialogContent>
             </Dialog>
@@ -1037,17 +1080,21 @@ const Invoicing = () => {
                                             </TableRow>
                                         </TableHeader>
                                         <TableBody>
-                                            {activeInvoice.terms.map((term) => {
-                                                // FIX: Calculate and show actual due dates
+                                            {/* Display only the single active term */}
+                                            {activeInvoice.terms.filter(term => term.id === activeInvoice.termId).map((term) => {
                                                 let dueCondition = "";
                                                 if (term.termType === "Advance") {
-                                                    dueCondition = `On Invoice Date (${format(new Date(activeInvoice.invoiceDate), "dd-MM-yyyy")})`;
+                                                    const dateStr = activeInvoice.invoiceDate && activeInvoice.invoiceDate !== "-" ? format(new Date(activeInvoice.invoiceDate), "dd-MM-yyyy") : "Pending";
+                                                    dueCondition = `On Invoice Date (${dateStr})`;
                                                 } else if (term.termType === "Days" && term.days) {
-                                                    // Calculate due date: Invoice Date + days
-                                                    const invoiceDate = new Date(activeInvoice.invoiceDate);
-                                                    const dueDate = new Date(invoiceDate);
-                                                    dueDate.setDate(dueDate.getDate() + term.days);
-                                                    dueCondition = `${term.days} days – Due on ${format(dueDate, "dd-MM-yyyy")}`;
+                                                    if (activeInvoice.invoiceDate && activeInvoice.invoiceDate !== "-") {
+                                                        const invoiceDate = new Date(activeInvoice.invoiceDate);
+                                                        const dueDate = new Date(invoiceDate);
+                                                        dueDate.setDate(dueDate.getDate() + term.days);
+                                                        dueCondition = `${term.days} days – Due on ${format(dueDate, "dd-MM-yyyy")}`;
+                                                    } else {
+                                                        dueCondition = `${term.days} days – Due on Invoice generation`;
+                                                    }
                                                 } else if (term.termType === "Delivery" || term.termType === "On Delivery") {
                                                     if (activeInvoice.deliveryDate) {
                                                         dueCondition = `On Delivery (${format(new Date(activeInvoice.deliveryDate), "dd-MM-yyyy")})`;
@@ -1131,22 +1178,22 @@ const Invoicing = () => {
                                 <div className="w-80 space-y-2 p-4 bg-muted/30 rounded-lg border">
                                     <div className="flex justify-between text-sm">
                                         <span className="font-medium text-muted-foreground">Subtotal:</span>
-                                        <span className="font-bold">USh {calculateTotals(activeInvoice.items, activeInvoice.taxPercentage || 0, activeInvoice.discountValue || 0, activeInvoice.discountType || "%").subtotal.toFixed(2)}</span>
+                                        <span className="font-bold">USh {(activeInvoice.subtotal || 0).toFixed(2)}</span>
                                     </div>
                                     <div className="flex justify-between text-sm">
                                         <span className="font-medium text-muted-foreground">Discount ({activeInvoice.discountType === "%" ? `${activeInvoice.discountValue || 0}%` : "Amount"}):</span>
-                                        <span className="font-bold text-red-600">-USh {calculateTotals(activeInvoice.items, activeInvoice.taxPercentage || 0, activeInvoice.discountValue || 0, activeInvoice.discountType || "%").discountAmount.toFixed(2)}</span>
+                                        <span className="font-bold text-red-600">-USh {(activeInvoice.discountAmount || 0).toFixed(2)}</span>
                                     </div>
                                     <div className="flex justify-between items-center text-sm">
                                         <span className="font-medium text-muted-foreground">Tax:</span>
                                         <div className="flex items-center gap-2">
-                                            <span className="font-medium">{activeInvoice.taxPercentage || 0}%</span>
-                                            <span className="font-bold text-green-600">+USh {calculateTotals(activeInvoice.items, activeInvoice.taxPercentage || 0, activeInvoice.discountValue || 0, activeInvoice.discountType || "%").totalTax.toFixed(2)}</span>
+                                            <span className="font-medium text-right col-span-1">{activeInvoice.taxPercentage || 0}%</span>
+                                            <span className="font-bold text-green-600">+USh {(activeInvoice.tax || 0).toFixed(2)}</span>
                                         </div>
                                     </div>
                                     <div className="flex justify-between text-lg border-t pt-2">
                                         <span className="font-bold">Grand Total:</span>
-                                        <span className="font-bold text-primary">USh {calculateTotals(activeInvoice.items, activeInvoice.taxPercentage || 0, activeInvoice.discountValue || 0, activeInvoice.discountType || "%").grandTotal.toFixed(2)}</span>
+                                        <span className="font-bold text-primary">USh {(activeInvoice.grandTotal || 0).toFixed(2)}</span>
                                     </div>
                                 </div>
                             </div>
@@ -1172,13 +1219,15 @@ const Invoicing = () => {
 
                     {/* Dialog Footer - Buttons based on status */}
                     <DialogFooter className="p-6 border-t mt-auto gap-2">
-                        <Button
-                            onClick={() => handleDownloadInvoice(activeInvoice || undefined)}
-                            variant="outline"
-                            className="mr-auto"
-                        >
-                            <Download className="mr-2 h-4 w-4" /> Invoice
-                        </Button>
+                        {activeInvoice?.status !== "Invoice Pending" && (
+                            <Button
+                                onClick={() => handleDownloadInvoice(activeInvoice || undefined)}
+                                variant="outline"
+                                className="mr-auto"
+                            >
+                                <Download className="mr-2 h-4 w-4" /> Invoice
+                            </Button>
+                        )}
                         <Button variant="outline" onClick={handleCloseEdit}>Close</Button>
                         {activeInvoice?.status === "Invoice Pending" && (
                             <>

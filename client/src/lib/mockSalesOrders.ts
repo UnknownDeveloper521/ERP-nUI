@@ -22,6 +22,9 @@ export interface PaymentTerm {
     date: string;
     days?: number;
     note?: string;
+    isGenerated?: boolean; // Indicates if this term has been generated as an invoice
+    invoiceNo?: string;    // The generated invoice number for this term
+    invoiceDate?: string;  // The generated invoice date for this term
 }
 
 export interface DispatchEntry {
@@ -124,9 +127,9 @@ const DEFAULT_SALES_ORDERS: SOData[] = [
         currency: "UGX",
         remarks: "Urgent order - expedited shipping required",
         terms: [
-            { id: 1, value: 40, percentage: 40, termType: "Advance", date: "2026-03-06", note: "40% advance payment" },
-            { id: 2, value: 30, percentage: 30, termType: "Days", date: "", days: 30, note: "30% within 30 days from invoice" },
-            { id: 3, value: 30, percentage: 30, termType: "Delivery", date: "", note: "30% on delivery" }
+            { id: 1, value: 40, percentage: 40, termType: "Advance", date: "2026-03-06", note: "40% advance payment", isGenerated: false },
+            { id: 2, value: 30, percentage: 30, termType: "Days", date: "", days: 30, note: "30% within 30 days from invoice", isGenerated: false },
+            { id: 3, value: 30, percentage: 30, termType: "Delivery", date: "", note: "30% on delivery", isGenerated: false }
         ],
         items: [
             { id: 1, itemCode: mockFinishedGoods[2].id, itemName: mockFinishedGoods[2].name, uom: "PCS", orderedQty: 15, dispatchedQty: 0, rate: 850.00, price: 12750.00 },
@@ -138,7 +141,7 @@ const DEFAULT_SALES_ORDERS: SOData[] = [
         taxType: "%",
         taxValue: 18,
         taxPercentage: 18,
-        status: "Draft",
+        status: "Invoice Pending",
         invoiceDueAmount: 0,
         paymentStatus: "Pending"
     },
@@ -223,6 +226,18 @@ export const deleteSalesOrder = (id: number): boolean => {
 
 export const changeSOStatus = (id: number, status: SOStatus): SOData | null => {
     return updateSalesOrder(id, { status });
+};
+
+// Check if all terms are generated, then move to Dispatch Pending
+export const checkAndMoveToDispatchPending = (soId: number): SOData | null => {
+    const so = mockSalesOrders.find(s => s.id === soId);
+    if (!so) return null;
+
+    const allGenerated = so.terms.every(t => t.isGenerated);
+    if (allGenerated && so.status !== "Dispatch Pending" && so.status !== "Dispatched" && so.status !== "Closed SO") {
+        return updateSalesOrder(soId, { status: "Dispatch Pending" });
+    }
+    return so;
 };
 
 // Close Sales Order - Only allowed when status is Dispatched and payment is completed

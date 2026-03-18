@@ -943,17 +943,7 @@ const SalesOrder = () => {
         });
     };
 
-    // Process to Invoice (Invoice Pending → Dispatch Pending) - removed localStorage - using mock store
-    const handleProcessToInvoice = () => {
-        if (!activeSO || activeSO.status !== "Invoice Pending") return;
-        changeSOStatus(activeSO.id, "Dispatch Pending");
-        setSalesOrders(getSalesOrders()); // Refresh list
-        setIsSODialogOpen(false);
-        toast({
-            title: "Processed to Invoice",
-            description: `Sales Order ${activeSO.soNumber} is now in Dispatch Pending status.`
-        });
-    };
+    // Process to Invoice removed, as this logic is now handled in Invoicing.tsx
 
     // Close SO (only allowed when status = Dispatched and payment completed)
     const handleCloseSO = (so?: SOData) => {

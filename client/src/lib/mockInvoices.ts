@@ -16,11 +16,15 @@ export interface InvoiceItem {
 
 export interface InvoiceTerm {
     id: number;
-    percentage: number;
+    value?: number;
+    percentage: number; // Deprecated: kept for backward compatibility
     termType: string;
-    date?: string;
+    date: string;
     days?: number;
     note?: string;
+    isGenerated?: boolean;
+    invoiceNo?: string;
+    invoiceDate?: string;
 }
 
 export interface InvoiceData {
@@ -30,6 +34,7 @@ export interface InvoiceData {
     dueDate?: string;
     soNumber: string;
     soDate: string;
+    termId?: number; // Added to link the invoice entry to a specific payment term
     customerId?: string; // Changed to string to match mockCustomers[i].id
     customerName: string;
     contactPerson: string;
