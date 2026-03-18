@@ -12,7 +12,7 @@ import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Plus, Search, Pencil, Trash2, ChevronsUpDown, Check, Package, Sliders, X } from "lucide-react";
+import { Plus, Search, Trash2, ChevronsUpDown, Check, Package, Sliders, X } from "lucide-react";
 import {
     Dialog,
     DialogContent,
@@ -21,6 +21,16 @@ import {
     DialogHeader,
     DialogTitle,
 } from "@/components/ui/dialog";
+import {
+    AlertDialog,
+    AlertDialogAction,
+    AlertDialogCancel,
+    AlertDialogContent,
+    AlertDialogDescription,
+    AlertDialogFooter,
+    AlertDialogHeader,
+    AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { Label } from "@/components/ui/label";
 import {
     Select,
@@ -48,6 +58,8 @@ import {
 } from "@/components/ui/popover";
 import { cn } from "@/lib/utils";
 import { DataTablePagination } from "@/components/shared/DataTablePagination";
+import { TableActionButtons } from "@/components/shared/TableActionButtons";
+import { AppListToolbar } from "@/components/shared/AppListToolbar";
 import { allMockMaterials } from "@/lib/masterMockData";
 
 // --- Types & Interfaces ---
@@ -242,6 +254,8 @@ export default function ProcurementMasters() {
     const [items, setItems] = useState<Item[]>(initialItems);
 
     const [isDialogOpen, setIsDialogOpen] = useState(false);
+    const [isDeleteAlertOpen, setIsDeleteAlertOpen] = useState(false);
+    const [itemToDeleteID, setItemToDeleteID] = useState<number | null>(null);
     const [editingId, setEditingId] = useState<number | null>(null);
     const [formData, setFormData] = useState<any>({}); // Using any for hybrid form data
 
@@ -376,16 +390,23 @@ export default function ProcurementMasters() {
     };
 
     const handleDeleteClick = (id: number) => {
-        if (confirm("Are you sure? This action cannot be undone.")) {
-            if (selectedMaster === "Material Threshold") {
-                setMaterialMasters(prev => prev.map(item =>
-                    item.id === id ? { ...item, threshold_configured: false, upper_limit: 0, lower_limit: 0, upper_users: [], lower_users: [], remarks: "" } : item
-                ));
-            } else {
-                setItems(prev => prev.filter(item => item.id !== id));
-            }
-            toast({ title: "Deleted", description: "Record deleted successfully." });
+        setItemToDeleteID(id);
+        setIsDeleteAlertOpen(true);
+    };
+
+    const confirmDelete = () => {
+        if (itemToDeleteID === null) return;
+
+        if (selectedMaster === "Material Threshold") {
+            setMaterialMasters(prev => prev.map(item =>
+                item.id === itemToDeleteID ? { ...item, threshold_configured: false, upper_limit: 0, lower_limit: 0, upper_users: [], lower_users: [], remarks: "" } : item
+            ));
+        } else {
+            setItems(prev => prev.filter(item => item.id !== itemToDeleteID));
         }
+        toast({ title: "Deleted", description: "Record deleted successfully." });
+        setIsDeleteAlertOpen(false);
+        setItemToDeleteID(null);
     };
 
     const handleSave = () => {
@@ -455,7 +476,7 @@ export default function ProcurementMasters() {
                             <TableHead className="w-[100px]">Type</TableHead>
                             <TableHead className="w-[150px] text-center">Upper Limit</TableHead>
                             <TableHead className="w-[150px] text-center">Lower Limit</TableHead>
-                            <TableHead className="w-[100px] text-right">Actions</TableHead>
+                            <TableHead className="w-[100px] text-center">Actions</TableHead>
                         </TableRow>
                     </TableHeader>
                     <TableBody>
@@ -491,15 +512,11 @@ export default function ProcurementMasters() {
                                             <span className="text-muted-foreground text-sm">-</span>
                                         )}
                                     </TableCell>
-                                    <TableCell className="text-right">
-                                        <div className="flex justify-end gap-1">
-                                            <Button variant="ghost" size="icon" className="h-7 w-7 hover:bg-muted" onClick={() => handleEditClick(item)}>
-                                                <Pencil className="h-4 w-4" />
-                                            </Button>
-                                            <Button variant="ghost" size="icon" className="h-7 w-7 text-destructive hover:bg-destructive/10" onClick={() => handleDeleteClick(item.id)}>
-                                                <Trash2 className="h-4 w-4" />
-                                            </Button>
-                                        </div>
+                                    <TableCell className="text-center">
+                                        <TableActionButtons
+                                            onEdit={() => handleEditClick(item)}
+                                            onDelete={() => handleDeleteClick(item.id)}
+                                        />
                                     </TableCell>
                                 </TableRow>
                             ))
@@ -517,7 +534,7 @@ export default function ProcurementMasters() {
                             <TableHead>Item Name</TableHead>
                             <TableHead>Type</TableHead>
                             <TableHead>UOM</TableHead>
-                            <TableHead className="text-right">Actions</TableHead>
+                            <TableHead className="w-[100px] text-center">Actions</TableHead>
                         </TableRow>
                     </TableHeader>
                     <TableBody>
@@ -534,15 +551,11 @@ export default function ProcurementMasters() {
                                     <TableCell>{item.name}</TableCell>
                                     <TableCell>{item.type}</TableCell>
                                     <TableCell>{item.uom}</TableCell>
-                                    <TableCell className="text-right">
-                                        <div className="flex justify-end gap-2">
-                                            <Button variant="ghost" size="icon" className="h-8 w-8 hover:bg-muted" onClick={() => handleEditClick(item)}>
-                                                <Pencil className="h-4 w-4" />
-                                            </Button>
-                                            <Button variant="ghost" size="icon" className="h-8 w-8 text-destructive hover:bg-destructive/10" onClick={() => handleDeleteClick(item.id)}>
-                                                <Trash2 className="h-4 w-4" />
-                                            </Button>
-                                        </div>
+                                    <TableCell className="text-center">
+                                        <TableActionButtons
+                                            onEdit={() => handleEditClick(item)}
+                                            onDelete={() => handleDeleteClick(item.id)}
+                                        />
                                     </TableCell>
                                 </TableRow>
                             ))
@@ -670,77 +683,44 @@ export default function ProcurementMasters() {
                 </div>
 
                 <div className="flex-1 flex flex-col gap-6 mt-6 overflow-y-auto pr-2 pb-6 custom-scrollbar">
-                    {/* Top Control Bar */}
-                    <div className="flex flex-col sm:flex-row items-center gap-4 bg-card p-4 rounded-lg border shadow-sm">
-
-
-                        {/* Filters */}
-                        <div className="w-full sm:w-1/6">
-                            {selectedMaster === "Material Threshold" ? (
-                                <>
-                                    <Label className="mb-1.5 block text-xs font-medium text-muted-foreground uppercase tracking-wider">Type</Label>
-                                    <Select value={filterType} onValueChange={setFilterType}>
-                                        <SelectTrigger className="h-10"><SelectValue /></SelectTrigger>
-                                        <SelectContent>
-                                            <SelectItem value="All">All Types</SelectItem>
-                                            <SelectItem value="RM">RM</SelectItem>
-                                            <SelectItem value="SFG">SFG</SelectItem>
-                                            <SelectItem value="FG">FG</SelectItem>
-                                            <SelectItem value="Consumables">Consumables</SelectItem>
-                                        </SelectContent>
-                                    </Select>
-                                </>
-                            ) : (
-                                <>
-                                    <Label className="mb-1.5 block text-xs font-medium text-muted-foreground uppercase tracking-wider">Type</Label>
-                                    <Select value={filterType} onValueChange={setFilterType}>
-                                        <SelectTrigger className="h-10"><SelectValue /></SelectTrigger>
-                                        <SelectContent>
-                                            <SelectItem value="All">All Types</SelectItem>
-                                            <SelectItem value="RM">RM</SelectItem>
-                                            <SelectItem value="SFG">SFG</SelectItem>
-                                            <SelectItem value="FG">FG</SelectItem>
-                                            <SelectItem value="Consumables">Consumables</SelectItem>
-                                        </SelectContent>
-                                    </Select>
-                                </>
-                            )}
-                        </div>
-                        <div className="w-full sm:w-1/4">
-                            <Label className="mb-1.5 block text-xs font-medium text-muted-foreground uppercase tracking-wider">Search</Label>
-                            <div className="relative">
-                                <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
-                                <Input
-                                    placeholder={`Search ${selectedMaster.toLowerCase()}...`}
-                                    className="pl-9 h-10"
-                                    value={searchTerm}
-                                    onChange={(e) => setSearchTerm(e.target.value)}
-                                />
-                            </div>
-                        </div>
-
-                        <div className="w-full sm:w-auto ml-auto mt-auto pt-5 flex gap-2">
-                            {selectedMaster === "Material Threshold" && (
-                                <Button
-                                    onClick={() => {
-                                        setEditingId(null);
-                                        setThresholdFormData({ materialId: null, type: "RM", upperLimit: 0, upperSelectedUsers: [], lowerLimit: 0, lowerSelectedUsers: [], remarks: "" });
-                                        setIsThresholdDialogOpen(true);
-                                    }}
-                                    className="w-full sm:w-auto bg-blue-600 hover:bg-blue-700 text-white border-transparent"
-                                >
-                                    <Plus className="mr-2 h-4 w-4" />
-                                    Create Threshold
-                                </Button>
-                            )}
-                            {selectedMaster !== "Material Threshold" && (
-                                <Button onClick={handleAddClick} className="w-full sm:w-auto">
-                                    <Plus className="mr-2 h-4 w-4" />
-                                    Add Item
-                                </Button>
-                            )}
-                        </div>
-                    </div>
+                    <AppListToolbar
+                        search={{
+                            placeholder: `Search ${selectedMaster.toLowerCase()}...`,
+                            value: searchTerm,
+                            onChange: setSearchTerm
+                        }}
+                        filters={[
+                            {
+                                type: "select" as const,
+                                label: "Type",
+                                value: filterType,
+                                onChange: setFilterType,
+                                options: [
+                                    { label: "All Types", value: "All" },
+                                    { label: "RM", value: "RM" },
+                                    { label: "SFG", value: "SFG" },
+                                    { label: "FG", value: "FG" },
+                                    { label: "Consumables", value: "Consumables" }
+                                ],
+                                searchable: true
+                            }
+                        ]}
+                        actions={[
+                            ...(selectedMaster === "Material Threshold" ? [{
+                                label: "Create Threshold",
+                                icon: <Plus className="mr-2 h-4 w-4" />,
+                                onClick: () => {
+                                    setEditingId(null);
+                                    setThresholdFormData({ materialId: null, type: "RM", upperLimit: 0, upperSelectedUsers: [], lowerLimit: 0, lowerSelectedUsers: [], remarks: "" });
+                                    setIsThresholdDialogOpen(true);
+                                }
+                            }] : [{
+                                label: "Create Item",
+                                icon: <Plus className="mr-2 h-4 w-4" />,
+                                onClick: handleAddClick
+                            }])
+                        ]}
+                    />
 
                     {/* Main Table Content */}
                     <Card>
@@ -769,7 +749,7 @@ export default function ProcurementMasters() {
             <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
                 <DialogContent className="sm:max-w-[700px] max-h-[90vh] flex flex-col p-0 gap-0">
                     <DialogHeader className="p-6 pb-2">
-                        <DialogTitle>{editingId ? "Edit" : "Add New"} Item</DialogTitle>
+                        <DialogTitle>{editingId ? "Edit" : "Create"} Item</DialogTitle>
                         <DialogDescription>
                             Configure the details for this item entry.
                         </DialogDescription>
@@ -798,11 +778,28 @@ export default function ProcurementMasters() {
                 </DialogContent>
             </Dialog>
 
+            <AlertDialog open={isDeleteAlertOpen} onOpenChange={setIsDeleteAlertOpen}>
+                <AlertDialogContent>
+                    <AlertDialogHeader>
+                        <AlertDialogTitle>Delete Record</AlertDialogTitle>
+                        <AlertDialogDescription>
+                            Are you sure you want to delete this record? This action cannot be undone.
+                        </AlertDialogDescription>
+                    </AlertDialogHeader>
+                    <AlertDialogFooter>
+                        <AlertDialogCancel>Cancel</AlertDialogCancel>
+                        <AlertDialogAction onClick={confirmDelete} className="bg-destructive text-destructive-foreground hover:bg-destructive/90">
+                            Delete
+                        </AlertDialogAction>
+                    </AlertDialogFooter>
+                </AlertDialogContent>
+            </AlertDialog>
+
             {/* Threshold Creation Dialog */}
             <Dialog open={isThresholdDialogOpen} onOpenChange={setIsThresholdDialogOpen}>
                 <DialogContent className="sm:max-w-[700px]">
                     <DialogHeader>
-                        <DialogTitle>{editingId ? "Edit Threshold Range" : "Create Threshold Range"}</DialogTitle>
+                        <DialogTitle>{editingId ? "Edit Threshold" : "Create Threshold"}</DialogTitle>
                         <DialogDescription>
                             Configure upper and lower notification limits with assigned users.
                         </DialogDescription>

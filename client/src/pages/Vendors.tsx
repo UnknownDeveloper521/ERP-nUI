@@ -11,8 +11,9 @@ import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Plus, Search, Pencil, Trash2, Package, X, ChevronLeft, ChevronRight } from "lucide-react";
+import { Plus, Search, Trash2, Package, X, ChevronLeft, ChevronRight, Edit } from "lucide-react";
 import { DataTablePagination } from "@/components/shared/DataTablePagination";
+import { TableActionButtons } from "@/components/shared/TableActionButtons";
 import {
     Dialog,
     DialogContent,
@@ -23,6 +24,8 @@ import {
 } from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
 import { useToast } from "@/hooks/use-toast";
+import { AppListToolbar } from "@/components/shared/AppListToolbar";
+import { SearchableSelect } from "@/components/shared/SearchableSelect";
 import {
     Popover,
     PopoverContent,
@@ -46,6 +49,16 @@ import {
     SelectTrigger,
     SelectValue,
 } from "@/components/ui/select";
+import {
+    AlertDialog,
+    AlertDialogAction,
+    AlertDialogCancel,
+    AlertDialogContent,
+    AlertDialogDescription,
+    AlertDialogFooter,
+    AlertDialogHeader,
+    AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 
 const PAYMENT_TERMS_OPTIONS = [
     "Net 30",
@@ -176,6 +189,8 @@ export default function Vendors() {
     const [selectedItemId, setSelectedItemId] = useState<string>("");
     const [isComboboxOpen, setIsComboboxOpen] = useState(false);
     const [vendorItemErrors, setVendorItemErrors] = useState<Record<string, string>>({});
+    const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false);
+    const [vendorToDelete, setVendorToDelete] = useState<number | null>(null);
 
     const filteredVendors = vendors.filter((v) => {
         const searchLower = searchTerm.toLowerCase();
@@ -226,9 +241,17 @@ export default function Vendors() {
     };
 
     const handleDeleteClick = (id: number) => {
-        if (confirm("Are you sure? This action cannot be undone.")) {
-            setVendors(prev => prev.filter(v => v.id !== id));
+        setVendorToDelete(id);
+        setIsDeleteDialogOpen(true);
+    };
+
+    const confirmDelete = () => {
+        if (vendorToDelete !== null) {
+            setVendors(prev => prev.filter(v => v.id !== vendorToDelete));
             toast({ title: "Deleted", description: "Vendor deleted successfully." });
+            setVendorToDelete(null);
+            setIsDeleteDialogOpen(false);
+            setIsDialogOpen(false);
         }
     };
 
@@ -290,26 +313,21 @@ export default function Vendors() {
                 <p className="text-muted-foreground text-sm">Manage your suppliers, their locations, and supplied items.</p>
             </div>
 
-            {/* Top Filters / Actions - styled similar to BOM2 */}
-            <div className="flex flex-col sm:flex-row items-end gap-4 bg-card p-4 rounded-lg border shadow-sm">
-                <div className="w-full sm:flex-1">
-                    <Label className="mb-1.5 block text-[10px] font-bold text-muted-foreground uppercase tracking-wider">
-                        Search
-                    </Label>
-                    <div className="relative">
-                        <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
-                        <Input
-                            placeholder="Search by vendor name, code or city..."
-                            className="pl-9 h-10"
-                            value={searchTerm}
-                            onChange={(e) => setSearchTerm(e.target.value)}
-                        />
-                    </div>
-                </div>
-                <Button onClick={handleAddClick} className="h-10">
-                    <Plus className="h-4 w-4 mr-2" /> Add New Vendor
-                </Button>
-            </div>
+            <AppListToolbar
+                search={{
+                    value: searchTerm,
+                    onChange: setSearchTerm,
+                    placeholder: "Search by vendor name, code or city..."
+                }}
+                actions={[
+                    {
+                        label: 'Add New Vendor',
+                        icon: <Plus className="h-4 w-4 mr-2" />,
+                        onClick: handleAddClick,
+                        variant: 'default'
+                    }
+                ]}
+            />
 
             <Card>
                 <CardContent className="pt-6">
@@ -321,15 +339,14 @@ export default function Vendors() {
                                     <TableHead>Vendor Name</TableHead>
                                     <TableHead>Contact Person</TableHead>
                                     <TableHead>Mobile</TableHead>
-                                    <TableHead>Locations</TableHead>
                                     <TableHead>Payment Terms</TableHead>
-                                    <TableHead className="text-right">Actions</TableHead>
+                                    <TableHead className="text-center w-[100px]">Actions</TableHead>
                                 </TableRow>
                             </TableHeader>
                             <TableBody>
                                 {paginatedVendors.length === 0 ? (
                                     <TableRow>
-                                        <TableCell colSpan={7} className="h-32 text-center text-muted-foreground italic">
+                                        <TableCell colSpan={6} className="h-32 text-center text-muted-foreground italic">
                                             No vendors found matching your search.
                                         </TableCell>
                                     </TableRow>
@@ -340,24 +357,32 @@ export default function Vendors() {
                                             <TableCell className="font-medium text-sm">{vendor.name}</TableCell>
                                             <TableCell className="text-sm">{vendor.contact_person}</TableCell>
                                             <TableCell className="text-sm">{vendor.mobile}</TableCell>
-                                            <TableCell className="text-xs text-muted-foreground">
-                                                {vendor.addresses?.length > 0
-                                                    ? `${vendor.addresses[0].city}${vendor.addresses.length > 1 ? ` (+${vendor.addresses.length - 1})` : ""}`
-                                                    : "-"}
-                                            </TableCell>
                                             <TableCell className="text-sm">{vendor.payment_terms}</TableCell>
-                                            <TableCell className="text-right">
-                                                <div className="flex justify-end gap-1">
-                                                    <Button variant="ghost" size="icon" className="h-8 w-8 text-blue-600 hover:text-blue-700 hover:bg-blue-50" title="Supplied Items" onClick={() => handleVendorItemsClick(vendor)}>
-                                                        <Package className="h-4 w-4" />
-                                                    </Button>
-                                                    <Button variant="ghost" size="icon" className="h-8 w-8 hover:bg-muted" title="Edit" onClick={() => handleEditClick(vendor)}>
-                                                        <Pencil className="h-4 w-4" />
-                                                    </Button>
-                                                    <Button variant="ghost" size="icon" className="h-8 w-8 text-destructive hover:bg-destructive/10" title="Delete" onClick={() => handleDeleteClick(vendor.id)}>
-                                                        <Trash2 className="h-4 w-4" />
-                                                    </Button>
-                                                </div>
+                                             <TableCell className="text-center">
+                                                <TableActionButtons
+                                                    customActions={
+                                                        <>
+                                                            <Button 
+                                                                variant="ghost" 
+                                                                size="icon" 
+                                                                className="h-8 w-8 text-blue-600 hover:text-blue-700 hover:bg-blue-50" 
+                                                                title="Supplied Items" 
+                                                                onClick={() => handleVendorItemsClick(vendor)}
+                                                            >
+                                                                <Package className="h-4 w-4" />
+                                                            </Button>
+                                                            <Button 
+                                                                variant="ghost" 
+                                                                size="icon" 
+                                                                className="h-8 w-8 text-muted-foreground hover:text-primary" 
+                                                                onClick={() => handleEditClick(vendor)}
+                                                                title="Edit"
+                                                            >
+                                                                <Edit className="h-4 w-4" />
+                                                            </Button>
+                                                        </>
+                                                    }
+                                                />
                                             </TableCell>
                                         </TableRow>
                                     ))
@@ -557,11 +582,22 @@ export default function Vendors() {
                         </div>
                     </div>
 
-                    <DialogFooter>
-                        <Button variant="outline" onClick={() => setIsDialogOpen(false)}>Cancel</Button>
-                        <Button onClick={handleSave} className="bg-primary hover:bg-primary/90">
-                            {editingId ? "Update Vendor" : "Create Vendor"}
-                        </Button>
+                    <DialogFooter className={cn(editingId ? "sm:justify-between" : "sm:justify-end")}>
+                        {editingId && (
+                            <Button
+                                variant="destructive"
+                                onClick={() => handleDeleteClick(editingId)}
+                            >
+                                <Trash2 className="h-4 w-4 mr-2" />
+                                Delete
+                            </Button>
+                        )}
+                        <div className="flex gap-2">
+                            <Button variant="outline" onClick={() => setIsDialogOpen(false)}>Cancel</Button>
+                            <Button onClick={handleSave} className="bg-primary hover:bg-primary/90">
+                                {editingId ? "Update Vendor" : "Create Vendor"}
+                            </Button>
+                        </div>
                     </DialogFooter>
                 </DialogContent>
             </Dialog>
@@ -716,6 +752,25 @@ export default function Vendors() {
                     </DialogFooter>
                 </DialogContent>
             </Dialog>
+            <AlertDialog open={isDeleteDialogOpen} onOpenChange={setIsDeleteDialogOpen}>
+                <AlertDialogContent>
+                    <AlertDialogHeader>
+                        <AlertDialogTitle>Delete Vendor</AlertDialogTitle>
+                        <AlertDialogDescription>
+                            Are you sure you want to delete this vendor? This action cannot be undone.
+                        </AlertDialogDescription>
+                    </AlertDialogHeader>
+                    <AlertDialogFooter>
+                        <AlertDialogCancel onClick={() => setVendorToDelete(null)}>Cancel</AlertDialogCancel>
+                        <AlertDialogAction
+                            onClick={confirmDelete}
+                            className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                        >
+                            Delete
+                        </AlertDialogAction>
+                    </AlertDialogFooter>
+                </AlertDialogContent>
+            </AlertDialog>
         </div>
     );
 }

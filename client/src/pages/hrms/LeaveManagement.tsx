@@ -11,10 +11,14 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from "@/components/ui/alert-dialog";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Command, CommandInputBorderless, CommandList, CommandEmpty, CommandGroup, CommandItem } from "@/components/ui/command";
-import { Plus, Calendar as CalendarIcon, ChevronLeft, ChevronRight, Eye, Edit, ChevronsUpDown, Check, ChevronDown, X, Trash2 } from "lucide-react";
+import { Plus, Calendar as CalendarIcon, ChevronLeft, ChevronRight, Edit, ChevronsUpDown, Check, ChevronDown, X, Trash2, Search } from "lucide-react";
+import { AppListToolbar } from "@/components/shared/AppListToolbar";
+import { SearchableSelect } from "@/components/shared/SearchableSelect";
 import { DataTablePagination } from "@/components/shared/DataTablePagination";
+import { TableActionButtons } from "@/components/shared/TableActionButtons";
 import { format, parse } from "date-fns";
 import { cn } from "@/lib/utils";
 import { useToast } from "@/hooks/use-toast";
@@ -23,100 +27,23 @@ import ImprovedLeaveCalendar from "@/components/hrms/ImprovedLeaveCalendar";
 // Tabs configuration - Only 3 tabs: Dashboard, Leave Entry, Calendar
 const tabsConfig = [
   { id: "leave-entry", label: "Leave Entry", roles: ["ADMIN", "HR"] },
-  { id: "calendar", label: "Calendar", roles: ["ADMIN", "HR", "EMPLOYEE"] },
-  { id: "holidays", label: "Holidays", roles: ["ADMIN", "HR", "EMPLOYEE"] }
+  { id: "calendar", label: "Calendar", roles: ["ADMIN", "HR", "EMPLOYEE"] }
 ];
 
-// --- Reusable Searchable Combobox Component ---
-interface SearchableSelectProps {
-  label: string;
-  value?: string;
-  options: string[];
-  onChange: (val: string) => void;
-  required?: boolean;
-  disabled?: boolean;
-}
-
-function SearchableSelect({
-  label,
-  value,
-  options,
-  onChange,
-  required = false,
-  disabled = false,
-}: SearchableSelectProps) {
-  const [open, setOpen] = useState(false);
-
-  return (
-    <div className="space-y-2">
-      <Label>
-        {label} {required && <span className="text-red-500">*</span>}
-      </Label>
-      <Popover open={open} onOpenChange={setOpen}>
-        <PopoverTrigger asChild>
-          <Button
-            variant="outline"
-            role="combobox"
-            aria-expanded={open}
-            className="w-full justify-between h-10 font-normal border-input"
-            disabled={disabled}
-          >
-            <span className={cn(!value && "text-muted-foreground")}>
-              {value || `Select ${label}`}
-            </span>
-            <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
-          </Button>
-        </PopoverTrigger>
-        <PopoverContent className="w-[var(--radix-popover-trigger-width)] p-0" align="start">
-          <Command>
-            <CommandInputBorderless placeholder={`Search ${label.toLowerCase()}...`} className="h-9" />
-            <CommandList className="max-h-[200px] overflow-y-auto">
-              <CommandEmpty>No results found.</CommandEmpty>
-              <CommandGroup>
-                {options.map((item) => (
-                  <CommandItem
-                    key={item}
-                    value={item}
-                    onSelect={() => {
-                      onChange(item);
-                      setOpen(false);
-                    }}
-                    className="cursor-pointer"
-                  >
-                    <Check
-                      className={cn(
-                        "mr-2 h-4 w-4",
-                        value === item ? "opacity-100" : "opacity-0"
-                      )}
-                    />
-                    {item}
-                  </CommandItem>
-                ))}
-              </CommandGroup>
-            </CommandList>
-          </Command>
-        </PopoverContent>
-      </Popover>
-    </div>
-  );
-}
-
-// Date Picker Component - Same as Attendance page
-function DatePicker({ date, setDate, disabled = false, minDate }: {
-  date?: Date,
-  setDate: (d?: Date) => void,
-  disabled?: boolean,
-  minDate?: Date
-}) {
+function FormDatePicker({ date, setDate, disabled = false }: { date?: Date, setDate: (d?: Date) => void, disabled?: boolean }) {
   const [isOpen, setIsOpen] = useState(false);
   const [viewMode, setViewMode] = useState<"day" | "month" | "year">("day");
   const [visibleDate, setVisibleDate] = useState(() => date || new Date());
 
-  const monthNames = ["January", "February", "March", "April", "May", "June",
-    "July", "August", "September", "October", "November", "December"];
+  const monthNames = [
+    "January", "February", "March", "April", "May", "June",
+    "July", "August", "September", "October", "November", "December"
+  ];
 
-  const monthNamesShort = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
-    "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+  const monthNamesShort = [
+    "Jan", "Feb", "Mar", "Apr", "May", "Jun",
+    "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"
+  ];
 
   const formatDisplayDate = (date: Date | undefined) => {
     if (!date) return "Pick a date";
@@ -128,18 +55,6 @@ function DatePicker({ date, setDate, disabled = false, minDate }: {
   };
 
   const handleDateSelect = (selectedDate: Date) => {
-    const selected = new Date(selectedDate);
-    selected.setHours(0, 0, 0, 0);
-
-    // Check if date is before minDate
-    if (minDate) {
-      const minimum = new Date(minDate);
-      minimum.setHours(0, 0, 0, 0);
-      if (selected < minimum) {
-        return; // Don't select dates before minDate
-      }
-    }
-
     setDate(selectedDate);
     setIsOpen(false);
     setViewMode("day");
@@ -169,60 +84,40 @@ function DatePicker({ date, setDate, disabled = false, minDate }: {
     const lastDay = new Date(year, month + 1, 0);
     const daysInMonth = lastDay.getDate();
     const startingDayOfWeek = firstDay.getDay();
+
     const days = [];
-    const today = new Date();
 
-    // Set minimum date
-    let minimumDate: Date | null = null;
-    if (minDate) {
-      minimumDate = new Date(minDate);
-      minimumDate.setHours(0, 0, 0, 0);
-    }
-
-    // Previous month's trailing days
     const prevMonth = new Date(year, month - 1, 0);
     for (let i = startingDayOfWeek - 1; i >= 0; i--) {
-      const dayDate = new Date(year, month - 1, prevMonth.getDate() - i);
-      dayDate.setHours(0, 0, 0, 0);
-      const isPast = minimumDate ? dayDate < minimumDate : false;
       days.push({
-        date: dayDate,
+        date: new Date(year, month - 1, prevMonth.getDate() - i),
         isCurrentMonth: false,
         isToday: false,
-        isSelected: false,
-        isPast
+        isSelected: false
       });
     }
 
-    // Current month days
     for (let day = 1; day <= daysInMonth; day++) {
       const currentDate = new Date(year, month, day);
-      currentDate.setHours(0, 0, 0, 0);
-      const isToday = new Date().toDateString() === currentDate.toDateString();
+      const today = new Date();
+      const isToday = currentDate.toDateString() === today.toDateString();
       const isSelected = date && currentDate.toDateString() === date.toDateString();
-      const isPast = minimumDate ? currentDate < minimumDate : false;
 
       days.push({
         date: currentDate,
         isCurrentMonth: true,
         isToday,
-        isSelected,
-        isPast
+        isSelected
       });
     }
 
-    // Next month's leading days
     const remainingDays = 42 - days.length;
     for (let day = 1; day <= remainingDays; day++) {
-      const dayDate = new Date(year, month + 1, day);
-      dayDate.setHours(0, 0, 0, 0);
-      const isPast = minimumDate ? dayDate < minimumDate : false;
       days.push({
-        date: dayDate,
+        date: new Date(year, month + 1, day),
         isCurrentMonth: false,
         isToday: false,
-        isSelected: false,
-        isPast
+        isSelected: false
       });
     }
 
@@ -288,16 +183,14 @@ function DatePicker({ date, setDate, disabled = false, minDate }: {
               key={index}
               variant="ghost"
               size="icon"
-              disabled={day.isPast}
               className={cn(
                 "h-8 w-8 text-sm font-normal",
                 !day.isCurrentMonth && "text-muted-foreground opacity-50",
                 day.isToday && "bg-accent text-accent-foreground font-semibold",
                 day.isSelected && "bg-primary text-primary-foreground font-semibold",
-                day.isCurrentMonth && !day.isPast && "hover:bg-accent hover:text-accent-foreground",
-                day.isPast && "opacity-30 cursor-not-allowed text-muted-foreground"
+                day.isCurrentMonth && "hover:bg-accent hover:text-accent-foreground"
               )}
-              onClick={() => !day.isPast && handleDateSelect(day.date)}
+              onClick={() => handleDateSelect(day.date)}
             >
               {day.date.getDate()}
             </Button>
@@ -408,7 +301,7 @@ function DatePicker({ date, setDate, disabled = false, minDate }: {
           variant="outline"
           disabled={disabled}
           className={cn(
-            "w-full justify-start text-left font-normal flex h-10 rounded-md border border-input px-3 py-2 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50 hover:bg-white",
+            "w-full justify-start text-left font-normal flex h-9 rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50 hover:bg-transparent",
             !date && "text-muted-foreground"
           )}
         >
@@ -424,6 +317,7 @@ function DatePicker({ date, setDate, disabled = false, minDate }: {
     </Popover>
   );
 }
+
 
 export default function LeaveManagement() {
   const { toast } = useToast();
@@ -453,23 +347,6 @@ export default function LeaveManagement() {
   const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false);
   const [leaveToDelete, setLeaveToDelete] = useState<string | null>(null);
 
-  // Holiday State - Dates in YYYY-MM-DD format
-  const [holidays, setHolidays] = useState([
-    { id: "hol_001", holidayName: "New Year's Day", holidayDate: "2026-01-01", day: "Thursday", status: "Active" },
-    { id: "hol_002", holidayName: "Republic Day", holidayDate: "2026-01-26", day: "Monday", status: "Active" },
-    { id: "hol_003", holidayName: "Independence Day", holidayDate: "2026-08-15", day: "Saturday", status: "Active" },
-    { id: "hol_004", holidayName: "Gandhi Jayanti", holidayDate: "2026-10-02", day: "Friday", status: "Active" },
-    { id: "hol_005", holidayName: "Diwali", holidayDate: "2026-11-01", day: "Sunday", status: "Active" }
-  ]);
-  const [isHolidayModalOpen, setIsHolidayModalOpen] = useState(false);
-  const [editingHoliday, setEditingHoliday] = useState<any>(null);
-  const [holidayFormData, setHolidayFormData] = useState({
-    holidayName: "",
-    holidayDate: undefined as Date | undefined,
-    status: "Active"
-  });
-  const [holidaySearchQuery, setHolidaySearchQuery] = useState("");
-
   // Leave Entry Tab State - Filters
   const [searchQuery, setSearchQuery] = useState("");
   const [dateRangeFrom, setDateRangeFrom] = useState<Date | undefined>(undefined);
@@ -483,7 +360,8 @@ export default function LeaveManagement() {
   // Define the leave application type
   type LeaveApplication = {
     id: string;
-    employee: string;
+    employeeCode: string;
+    employeeName: string;
     leaveType: string;
     fromDate: string;
     toDate: string;
@@ -496,7 +374,8 @@ export default function LeaveManagement() {
   const [leaveApplications, setLeaveApplications] = useState<LeaveApplication[]>([
     {
       id: "leave_001",
-      employee: "John Doe",
+      employeeCode: "EMP001",
+      employeeName: "John Doe",
       leaveType: "Paid Leave",
       fromDate: "2026-03-10",
       toDate: "2026-03-12",
@@ -505,7 +384,8 @@ export default function LeaveManagement() {
     },
     {
       id: "leave_002",
-      employee: "Jane Smith",
+      employeeCode: "EMP002",
+      employeeName: "Jane Smith",
       leaveType: "Sick Leave",
       fromDate: "2026-03-15",
       toDate: "2026-03-16",
@@ -516,22 +396,7 @@ export default function LeaveManagement() {
 
   // Configuration
   const leaveTypeOptions = ['Paid Leave', 'Sick Leave', 'Casual Leave', 'Annual Leave', 'Unpaid Leave'];
-  const employeeOptions = ['John Doe', 'Jane Smith', 'Mike Johnson', 'Sarah Williams', 'David Brown'];
-
-  // Get upcoming holidays from the live state
-  const upcomingHolidays = holidays
-    .filter(h => h.status === "Active")
-    .filter(h => {
-      const holidayDate = new Date(h.holidayDate);
-      const today = new Date(new Date().setHours(0, 0, 0, 0));
-      return holidayDate >= today;
-    })
-    .sort((a, b) => {
-      const dateA = new Date(a.holidayDate);
-      const dateB = new Date(b.holidayDate);
-      return dateA.getTime() - dateB.getTime();
-    })
-    .slice(0, 5);
+  const employeeOptions = ['EMP001 - John Doe', 'EMP002 - Jane Smith', 'EMP003 - Mike Johnson', 'EMP004 - Sarah Williams', 'EMP005 - David Brown'];
 
   // Set initial tab based on URL
   useEffect(() => {
@@ -539,8 +404,6 @@ export default function LeaveManagement() {
       setActiveTab('leave-entry');
     } else if (location === '/hrms/leave-management/calendar') {
       setActiveTab('calendar');
-    } else if (location === '/hrms/leave-management/holidays') {
-      setActiveTab('holidays');
     } else if (location === '/hrms/leave-management') {
       setLocation('/hrms/leave-management/leave-entry');
     } else {
@@ -680,7 +543,8 @@ export default function LeaveManagement() {
     } else {
       const newLeave: LeaveApplication = {
         id: `leave_${Date.now()}`,
-        employee: formData.employee,
+        employeeCode: formData.employee.split(" - ")[0] || "",
+        employeeName: formData.employee.split(" - ")[1] || formData.employee,
         leaveType: formData.leaveType,
         fromDate: formData.fromDate ? format(formData.fromDate, 'yyyy-MM-dd') : '',
         toDate: formData.toDate ? format(formData.toDate, 'yyyy-MM-dd') : '',
@@ -709,7 +573,7 @@ export default function LeaveManagement() {
   const handleEditLeave = (application: LeaveApplication) => {
     setEditingLeave(application);
     setFormData({
-      employee: application.employee,
+      employee: `${application.employeeCode} - ${application.employeeName}`,
       leaveType: application.leaveType,
       fromDate: new Date(application.fromDate),
       toDate: new Date(application.toDate),
@@ -744,7 +608,8 @@ export default function LeaveManagement() {
   // Filter applications
   const filteredApplications = leaveApplications.filter(app => {
     const searchMatch = searchQuery === "" ||
-      app.employee.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      (app.employeeCode && app.employeeCode.toLowerCase().includes(searchQuery.toLowerCase())) ||
+      (app.employeeName && app.employeeName.toLowerCase().includes(searchQuery.toLowerCase())) ||
       app.leaveType.toLowerCase().includes(searchQuery.toLowerCase());
 
     const dateMatch = (() => {
@@ -872,7 +737,7 @@ export default function LeaveManagement() {
   const getEmployeeLeaveForDate = (employeeName: string, date: Date) => {
     const dateStr = format(date, 'yyyy-MM-dd');
     return leaveApplications.find(app => {
-      if (app.employee !== employeeName) return false;
+      if (`${app.employeeCode} - ${app.employeeName}` !== employeeName && app.employeeName !== employeeName) return false;
       const fromDate = new Date(app.fromDate);
       const toDate = new Date(app.toDate);
       const checkDate = new Date(dateStr);
@@ -913,7 +778,7 @@ export default function LeaveManagement() {
 
     // Get all leaves for an employee
     const getEmployeeLeavesForMonth = (employeeName: string) => {
-      return leaveApplications.filter(app => app.employee === employeeName);
+      return leaveApplications.filter(app => `${app.employeeCode} - ${app.employeeName}` === employeeName || app.employeeName === employeeName);
     };
 
     // Check if a date is within a leave range
@@ -1096,7 +961,7 @@ export default function LeaveManagement() {
           >
             <div className="space-y-3 text-sm">
               <div className="font-bold text-base border-b pb-2 text-gray-900">
-                {hoveredLeave.leave.employee}
+                {`${hoveredLeave.leave.employeeCode} - ${hoveredLeave.leave.employeeName}`}
               </div>
               <div className="grid grid-cols-2 gap-3">
                 <span className="text-gray-600 font-medium">Leave Type:</span>
@@ -1241,11 +1106,9 @@ export default function LeaveManagement() {
 
   return (
     <div className="space-y-6 h-full flex flex-col">
-      <div className="flex justify-between items-center shrink-0">
-        <div>
-          <h1 className="text-2xl font-bold tracking-tight">Leave Management</h1>
-          <p className="text-muted-foreground">Manage employee leave requests and holidays.</p>
-        </div>
+      <div className="flex flex-col gap-1">
+        <h1 className="text-3xl font-bold tracking-tight">Leave Management</h1>
+        <p className="text-muted-foreground text-sm">Manage employee leave requests and holidays.</p>
       </div>
 
       <Tabs value={activeTab} onValueChange={handleTabChange} className="flex-1 flex flex-col min-h-0">
@@ -1266,115 +1129,109 @@ export default function LeaveManagement() {
 
         {/* Leave Entry Tab */}
         <TabsContent value="leave-entry" className="flex-1 space-y-6 mt-6">
-          <Card>
-            <CardContent className="p-4">
-              <div className="flex items-end gap-4">
-                <div className="w-64 space-y-2">
-                  <Label>Search</Label>
-                  <Input
-                    placeholder="Search by name, type..."
-                    value={searchQuery}
-                    onChange={(e) => setSearchQuery(e.target.value)}
-                  />
-                </div>
-                <div className="w-48 space-y-2">
-                  <Label>From Date</Label>
-                  <div className="flex gap-2">
-                    <div className="flex-1">
-                      <DatePicker date={dateRangeFrom} setDate={setDateRangeFrom} />
-                    </div>
-                    {dateRangeFrom && (
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        onClick={() => setDateRangeFrom(undefined)}
-                        className="h-10 w-10 shrink-0"
-                        title="Clear from date"
-                      >
-                        <X className="h-4 w-4" />
-                      </Button>
-                    )}
-                  </div>
-                </div>
-                <div className="w-48 space-y-2">
-                  <Label>To Date</Label>
-                  <div className="flex gap-2">
-                    <div className="flex-1">
-                      <DatePicker date={dateRangeTo} setDate={setDateRangeTo} />
-                    </div>
-                    {dateRangeTo && (
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        onClick={() => setDateRangeTo(undefined)}
-                        className="h-10 w-10 shrink-0"
-                        title="Clear to date"
-                      >
-                        <X className="h-4 w-4" />
-                      </Button>
-                    )}
-                  </div>
-                </div>
-                <Button onClick={() => setIsAddEditModalOpen(true)} className="h-10 ml-auto">
-                  <Plus className="mr-2 h-4 w-4" /> Add Leave
-                </Button>
-              </div>
-            </CardContent>
-          </Card>
+          <AppListToolbar
+            search={{
+              value: searchQuery,
+              onChange: setSearchQuery,
+              placeholder: "Search by name, type..."
+            }}
+            filters={[
+              {
+                type: 'date',
+                label: 'From Date',
+                value: dateRangeFrom ? format(dateRangeFrom, "yyyy-MM-dd") : "",
+                onChange: (val) => {
+                  if (val) {
+                    setDateRangeFrom(new Date(val));
+                  } else {
+                    setDateRangeFrom(undefined);
+                  }
+                }
+              },
+              {
+                type: 'date',
+                label: 'To Date',
+                value: dateRangeTo ? format(dateRangeTo, "yyyy-MM-dd") : "",
+                onChange: (val) => {
+                  if (val) {
+                    setDateRangeTo(new Date(val));
+                  } else {
+                    setDateRangeTo(undefined);
+                  }
+                }
+              }
+            ]}
+            actions={[
+              {
+                label: 'Add Leave',
+                icon: <Plus className="h-4 w-4" />,
+                onClick: () => setIsAddEditModalOpen(true),
+                variant: 'default'
+              }
+            ]}
+          />
 
-          <Card>
-            <CardContent className="p-0">
-              <div className="grid grid-cols-6 gap-4 p-4 bg-muted/40 font-medium text-sm text-muted-foreground border-b">
-                <div>Employee</div>
-                <div>Leave Type</div>
-                <div>From Date</div>
-                <div>To Date</div>
-                <div>Paid Leave</div>
-                <div className="text-right">Actions</div>
+          <Card className="shadow-sm">
+            <CardContent className="pt-6">
+              <div className="rounded-md border mb-4">
+                <Table>
+                  <TableHeader>
+                    <TableRow className="bg-muted/50">
+                      <TableHead>Employee Code</TableHead>
+                      <TableHead>Employee Name</TableHead>
+                      <TableHead>Leave Type</TableHead>
+                      <TableHead>From Date</TableHead>
+                      <TableHead>To Date</TableHead>
+                      <TableHead>Paid Leave</TableHead>
+                      <TableHead className="text-center">Actions</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {paginatedLeaveEntries.length === 0 ? (
+                      <TableRow>
+                        <TableCell colSpan={6} className="h-48 text-center text-muted-foreground italic">
+                          <div className="flex flex-col items-center justify-center">
+                            <CalendarIcon className="mx-auto h-12 w-12 mb-4 opacity-50" />
+                            <p className="text-lg font-medium mb-2">No leave entries found</p>
+                            <p className="text-sm">Click "Add Leave" to create a new entry</p>
+                          </div>
+                        </TableCell>
+                      </TableRow>
+                    ) : (
+                      paginatedLeaveEntries.map((application) => (
+                        <TableRow key={application.id} className="hover:bg-muted/30 transition-colors">
+                          <TableCell className="font-medium">{application.employeeCode}</TableCell>
+                          <TableCell>{application.employeeName}</TableCell>
+                          <TableCell>{application.leaveType}</TableCell>
+                          <TableCell>{formatDateTime(application.fromDate)}</TableCell>
+                          <TableCell>{formatDateTime(application.toDate)}</TableCell>
+                          <TableCell>
+                            <Badge variant={application.paidLeave ? "default" : "secondary"}>
+                              {application.paidLeave ? "Yes" : "No"}
+                            </Badge>
+                          </TableCell>
+                          <TableCell>
+                            <TableActionButtons
+                              onView={() => handleViewLeave(application)}
+                              onEdit={() => handleEditLeave(application)}
+                            />
+                          </TableCell>
+                        </TableRow>
+                      ))
+                    )}
+                  </TableBody>
+                </Table>
               </div>
-              <div className="space-y-0">
-                {paginatedLeaveEntries.length === 0 ? (
-                  <div className="text-center py-12 text-muted-foreground">
-                    <CalendarIcon className="mx-auto h-12 w-12 mb-4 opacity-50" />
-                    <p className="text-lg font-medium mb-2">No leave entries found</p>
-                    <p className="text-sm">Click "Add Leave" to create a new entry</p>
-                  </div>
-                ) : (
-                  paginatedLeaveEntries.map((application) => (
-                    <div key={application.id} className="grid grid-cols-6 gap-4 p-4 border-b hover:bg-muted/20 transition-colors">
-                      <div className="text-sm">{application.employee}</div>
-                      <div className="text-sm">{application.leaveType}</div>
-                      <div className="text-sm">{formatDateTime(application.fromDate)}</div>
-                      <div className="text-sm">{formatDateTime(application.toDate)}</div>
-                      <div className="text-sm">
-                        <Badge variant={application.paidLeave ? "default" : "secondary"}>
-                          {application.paidLeave ? "Yes" : "No"}
-                        </Badge>
-                      </div>
-                      <div className="flex gap-2 justify-end">
-                        <Button variant="ghost" size="sm" onClick={() => handleViewLeave(application)}>
-                          <Eye className="h-4 w-4" />
-                        </Button>
-                        <Button variant="ghost" size="sm" onClick={() => handleEditLeave(application)}>
-                          <Edit className="h-4 w-4" />
-                        </Button>
-                      </div>
-                    </div>
-                  ))
-                )}
-              </div>
-              {/* Pagination - using standardized DataTablePagination component */}
-              <div className="px-4 py-3 border-t bg-gray-50/50">
-                <DataTablePagination
-                  currentPage={leaveEntryCurrentPage}
-                  totalPages={leaveEntryTotalPages}
-                  totalItems={filteredApplications.length}
-                  itemsPerPage={itemsPerPage}
-                  onPageChange={setLeaveEntryCurrentPage}
-                  onItemsPerPageChange={setItemsPerPage}
-                  options={[10, 15, 30, 50]}
-                />
-              </div>
+
+              <DataTablePagination
+                currentPage={leaveEntryCurrentPage}
+                totalPages={leaveEntryTotalPages}
+                totalItems={filteredApplications.length}
+                itemsPerPage={itemsPerPage}
+                onPageChange={setLeaveEntryCurrentPage}
+                onItemsPerPageChange={setItemsPerPage}
+                options={[10, 15, 30, 50]}
+              />
             </CardContent>
           </Card>
         </TabsContent>
@@ -1429,90 +1286,6 @@ export default function LeaveManagement() {
             </Card>
           </div>
         </TabsContent>
-
-        {/* Holidays Tab */}
-        <TabsContent value="holidays" className="flex-1 space-y-6 mt-6">
-          <Card>
-            <CardContent className="p-4">
-              <div className="flex items-end gap-4">
-                <div className="w-64 space-y-2">
-                  <Label>Search</Label>
-                  <Input
-                    placeholder="Search holidays..."
-                    value={holidaySearchQuery}
-                    onChange={(e) => setHolidaySearchQuery(e.target.value)}
-                  />
-                </div>
-                <Button onClick={() => {
-                  setEditingHoliday(null);
-                  setHolidayFormData({ holidayName: "", holidayDate: undefined, status: "Active" });
-                  setIsHolidayModalOpen(true);
-                }} className="h-10 ml-auto">
-                  <Plus className="mr-2 h-4 w-4" /> Add Holiday
-                </Button>
-              </div>
-            </CardContent>
-          </Card>
-
-          <Card>
-            <CardContent className="p-0">
-              <div className="grid grid-cols-4 gap-4 p-4 bg-muted/40 font-medium text-sm text-muted-foreground border-b">
-                <div>Holiday Name</div>
-                <div>Date</div>
-                <div>Status</div>
-                <div className="text-right">Actions</div>
-              </div>
-              <div className="space-y-0">
-                {holidays
-                  .filter(h => h.holidayName.toLowerCase().includes(holidaySearchQuery.toLowerCase()))
-                  .length === 0 ? (
-                  <div className="text-center py-12 text-muted-foreground">
-                    <CalendarIcon className="mx-auto h-12 w-12 mb-4 opacity-50" />
-                    <p className="text-lg font-medium mb-2">No holidays found</p>
-                  </div>
-                ) : (
-                  holidays
-                    .filter(h => h.holidayName.toLowerCase().includes(holidaySearchQuery.toLowerCase()))
-                    .map((holiday) => (
-                      <div key={holiday.id} className="grid grid-cols-4 gap-4 p-4 border-b hover:bg-muted/20 transition-colors items-center">
-                        <div className="text-sm font-medium">{holiday.holidayName}</div>
-                        <div className="text-sm">
-                          <div>{formatDateTime(holiday.holidayDate)}</div>
-                          <div className="text-xs text-muted-foreground">{holiday.day}</div>
-                        </div>
-                        <div className="text-sm">
-                          <Badge variant={holiday.status === "Active" ? "default" : "secondary"} className={holiday.status === "Active" ? "bg-green-100 text-green-800 hover:bg-green-100" : ""}>
-                            {holiday.status}
-                          </Badge>
-                        </div>
-                        <div className="flex gap-2 justify-end">
-                          <Button variant="ghost" size="sm" onClick={() => {
-                            setEditingHoliday(holiday);
-                            setHolidayFormData({
-                              holidayName: holiday.holidayName,
-                              holidayDate: new Date(holiday.holidayDate),
-                              status: holiday.status as "Active" | "Inactive"
-                            });
-                            setIsHolidayModalOpen(true);
-                          }}>
-                            <Edit className="h-4 w-4" />
-                          </Button>
-                          <Button variant="ghost" size="sm" className="text-destructive" onClick={() => {
-                            if (confirm("Are you sure you want to delete this holiday?")) {
-                              setHolidays(prev => prev.filter(h => h.id !== holiday.id));
-                              toast({ title: "Holiday Deleted", description: "The holiday has been removed." });
-                            }
-                          }}>
-                            <Trash2 className="h-4 w-4" />
-                          </Button>
-                        </div>
-                      </div>
-                    ))
-                )}
-              </div>
-            </CardContent>
-          </Card>
-        </TabsContent>
       </Tabs>
 
       {/* Add/Edit Leave Modal */}
@@ -1547,20 +1320,18 @@ export default function LeaveManagement() {
 
               <div className="space-y-2">
                 <Label>From Date <span className="text-red-500">*</span></Label>
-                <DatePicker
+                <FormDatePicker
                   date={formData.fromDate}
                   setDate={(date) => handleInputChange('fromDate', date)}
-                  minDate={new Date()}
                 />
                 {formErrors.fromDate && <p className="text-sm text-red-500">{formErrors.fromDate}</p>}
               </div>
 
               <div className="space-y-2">
                 <Label>To Date <span className="text-red-500">*</span></Label>
-                <DatePicker
+                <FormDatePicker
                   date={formData.toDate}
                   setDate={(date) => handleInputChange('toDate', date)}
-                  minDate={formData.fromDate || new Date()}
                 />
                 {formErrors.toDate && <p className="text-sm text-red-500">{formErrors.toDate}</p>}
               </div>
@@ -1597,20 +1368,52 @@ export default function LeaveManagement() {
                   accept=".pdf,.doc,.docx,.jpg,.jpeg,.png"
                 />
                 {formData.attachment && (
-                  <p className="text-sm text-green-600">File selected: {formData.attachment.name}</p>
+                  <p className="text-sm text-green-600">File selected: {formData.attachment?.name || ''}</p>
                 )}
               </div>
             </div>
           </div>
 
-          <DialogFooter>
-            <Button variant="outline" onClick={handleCancel}>Cancel</Button>
-            <Button
-              onClick={handleSubmit}
-              disabled={!formData.employee || !formData.leaveType || !formData.fromDate || !formData.toDate}
-            >
-              Save
-            </Button>
+          <DialogFooter className="flex justify-between items-center">
+            {editingLeave && (
+              <AlertDialog open={isDeleteDialogOpen} onOpenChange={setIsDeleteDialogOpen}>
+                <AlertDialogTrigger asChild>
+                  <Button
+                    variant="destructive"
+                    onClick={() => handleDeleteLeave(editingLeave.id)}
+                  >
+                    <Trash2 className="mr-2 h-4 w-4" />
+                    Delete
+                  </Button>
+                </AlertDialogTrigger>
+                <AlertDialogContent>
+                  <AlertDialogHeader>
+                    <AlertDialogTitle>Are you sure?</AlertDialogTitle>
+                    <AlertDialogDescription>
+                      Are you sure you want to delete this leave record?
+                    </AlertDialogDescription>
+                  </AlertDialogHeader>
+                  <AlertDialogFooter>
+                    <AlertDialogCancel>Cancel</AlertDialogCancel>
+                    <AlertDialogAction
+                      onClick={confirmDelete}
+                      className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                    >
+                      Delete
+                    </AlertDialogAction>
+                  </AlertDialogFooter>
+                </AlertDialogContent>
+              </AlertDialog>
+            )}
+            <div className="flex gap-2 ml-auto">
+              <Button variant="outline" onClick={handleCancel}>Cancel</Button>
+              <Button
+                onClick={handleSubmit}
+                disabled={!formData.employee || !formData.leaveType || !formData.fromDate || !formData.toDate}
+              >
+                Save
+              </Button>
+            </div>
           </DialogFooter>
         </DialogContent>
       </Dialog>
@@ -1627,8 +1430,12 @@ export default function LeaveManagement() {
             <div className="space-y-6 py-4">
               <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                 <div className="space-y-2">
-                  <Label>Employee</Label>
-                  <Input value={selectedApplication.employee} disabled className="bg-muted" />
+                  <Label>Employee Code</Label>
+                  <Input value={selectedApplication.employeeCode} disabled className="bg-muted" />
+                </div>
+                <div className="space-y-2">
+                  <Label>Employee Name</Label>
+                  <Input value={selectedApplication.employeeName} disabled className="bg-muted" />
                 </div>
                 <div className="space-y-2">
                   <Label>Leave Type</Label>
@@ -1668,118 +1475,12 @@ export default function LeaveManagement() {
             </div>
           )}
 
-          <DialogFooter className="flex justify-between items-center">
-            <AlertDialog open={isDeleteDialogOpen} onOpenChange={setIsDeleteDialogOpen}>
-              <AlertDialogTrigger asChild>
-                <Button
-                  variant="destructive"
-                  className="mr-auto"
-                  onClick={() => selectedApplication && handleDeleteLeave(selectedApplication.id)}
-                >
-                  <Trash2 className="mr-2 h-4 w-4" />
-                  Delete
-                </Button>
-              </AlertDialogTrigger>
-              <AlertDialogContent>
-                <AlertDialogHeader>
-                  <AlertDialogTitle>Are you sure?</AlertDialogTitle>
-                  <AlertDialogDescription>
-                    This action cannot be undone. This will permanently delete the leave entry for {selectedApplication?.employee}.
-                  </AlertDialogDescription>
-                </AlertDialogHeader>
-                <AlertDialogFooter>
-                  <AlertDialogCancel>Cancel</AlertDialogCancel>
-                  <AlertDialogAction
-                    onClick={confirmDelete}
-                    className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
-                  >
-                    Delete
-                  </AlertDialogAction>
-                </AlertDialogFooter>
-              </AlertDialogContent>
-            </AlertDialog>
+          <DialogFooter>
             <Button variant="outline" onClick={() => setIsViewModalOpen(false)}>Close</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
 
-      {/* Holiday Modal */}
-      <Dialog open={isHolidayModalOpen} onOpenChange={setIsHolidayModalOpen}>
-        <DialogContent className="sm:max-w-md">
-          <DialogHeader>
-            <DialogTitle>{editingHoliday ? "Edit Holiday" : "Add Holiday"}</DialogTitle>
-            <DialogDescription>
-              {editingHoliday ? "Update the holiday details" : "Add a new holiday to the calendar"}
-            </DialogDescription>
-          </DialogHeader>
-
-          <div className="space-y-4 py-4">
-            <div className="space-y-2">
-              <Label>Holiday Name <span className="text-red-500">*</span></Label>
-              <Input
-                placeholder="e.g. Christmas Day"
-                value={holidayFormData.holidayName}
-                onChange={(e) => setHolidayFormData(prev => ({ ...prev, holidayName: e.target.value }))}
-              />
-            </div>
-
-            <div className="space-y-2">
-              <Label>Date <span className="text-red-500">*</span></Label>
-              <DatePicker
-                date={holidayFormData.holidayDate}
-                setDate={(date) => setHolidayFormData(prev => ({ ...prev, holidayDate: date }))}
-              />
-            </div>
-
-            <div className="space-y-2">
-              <Label>Status</Label>
-              <Select
-                value={holidayFormData.status}
-                onValueChange={(val: any) => setHolidayFormData(prev => ({ ...prev, status: val }))}
-              >
-                <SelectTrigger>
-                  <SelectValue placeholder="Select Status" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="Active">Active</SelectItem>
-                  <SelectItem value="Inactive">Inactive</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-          </div>
-
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setIsHolidayModalOpen(false)}>Cancel</Button>
-            <Button
-              disabled={!holidayFormData.holidayName || !holidayFormData.holidayDate}
-              onClick={() => {
-                const dayNames = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
-                const newHoliday = {
-                  id: editingHoliday ? editingHoliday.id : `hol_${Date.now()}`,
-                  holidayName: holidayFormData.holidayName,
-                  holidayDate: format(holidayFormData.holidayDate!, 'yyyy-MM-dd'),
-                  day: dayNames[holidayFormData.holidayDate!.getDay()],
-                  status: holidayFormData.status
-                };
-
-                if (editingHoliday) {
-                  setHolidays(prev => prev.map(h => h.id === editingHoliday.id ? newHoliday : h));
-                } else {
-                  setHolidays(prev => [...prev, newHoliday]);
-                }
-
-                setIsHolidayModalOpen(false);
-                toast({
-                  title: editingHoliday ? "Holiday Updated" : "Holiday Added",
-                  description: editingHoliday ? "The holiday has been updated." : "The holiday has been added."
-                });
-              }}
-            >
-              Save
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
     </div>
   );
 }

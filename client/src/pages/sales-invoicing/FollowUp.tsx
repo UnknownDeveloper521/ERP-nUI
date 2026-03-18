@@ -22,7 +22,10 @@ import React, { useState, useEffect } from "react";
 import { useLocation } from "wouter";
 import { format } from "date-fns";
 import { Card, CardContent } from "@/components/ui/card";
-import { Search, Eye, Download, Edit, Plus, CalendarIcon, ChevronLeft, ChevronRight, ChevronDown } from "lucide-react";
+import { Search, Download, Plus, CalendarIcon, ChevronLeft, ChevronRight, ChevronDown, Trash2, X } from "lucide-react";
+import { TableActionButtons } from "@/components/shared/TableActionButtons";
+import { AppListToolbar } from "@/components/shared/AppListToolbar";
+import { SearchableSelect } from "@/components/shared/SearchableSelect";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
@@ -152,10 +155,14 @@ interface FollowUpDisplay extends Omit<InvoiceData, 'status' | 'terms'> {
 // ============================================================================
 const getFollowUpStatusBadge = (status: FollowUpStatus) => {
     switch (status) {
-        case "Upcoming": return <Badge className="bg-blue-500 hover:bg-blue-600">Upcoming</Badge>;
-        case "Overdue": return <Badge className="bg-red-500 hover:bg-red-600">Overdue</Badge>;
-        case "Completed": return <Badge className="bg-green-500 hover:bg-green-600">Completed</Badge>;
-        default: return <Badge variant="outline">{status}</Badge>;
+        case "Upcoming":
+            return <Badge variant="secondary">Upcoming</Badge>;
+        case "Overdue":
+            return <Badge variant="destructive">Overdue</Badge>;
+        case "Completed":
+            return <Badge variant="default" className="bg-green-600 hover:bg-green-700">Completed</Badge>;
+        default:
+            return <Badge variant="outline">{status}</Badge>;
     }
 };
 
@@ -163,7 +170,8 @@ const getFollowUpStatusBadge = (status: FollowUpStatus) => {
 // DATE PICKER COMPONENT
 // ============================================================================
 
-function DatePicker({ date, setDate, disabled = false }: {
+// Local DatePicker for forms/modals to avoid conflict with shared DatePicker
+function LocalFollowUpDatePicker({ date, setDate, disabled = false }: {
     date?: Date,
     setDate: (d?: Date) => void,
     disabled?: boolean
@@ -477,6 +485,7 @@ const SalesFollowUp = () => {
     const [followUpRecords, setFollowUpRecords] = useState<FollowUpDisplay[]>([]);
     const [searchTerm, setSearchTerm] = useState("");
     const [filterStatus, setFilterStatus] = useState<string>("all");
+    const [filterDueDate, setFilterDueDate] = useState<Date | undefined>(undefined);
 
     // Pagination
     const [currentPage, setCurrentPage] = useState(1);
@@ -578,7 +587,7 @@ const SalesFollowUp = () => {
                 }
                 
                 // Convert sales follow-up history to display format
-                const notes: FollowUpNote[] = salesFollowUp.history.map((entry, index) => ({
+                const notes: FollowUpNote[] = salesFollowUp.history.map((entry: any, index: number) => ({
                     id: index + 1,
                     date: entry.followUpDate,
                     note: entry.note
@@ -637,8 +646,10 @@ const SalesFollowUp = () => {
             record.invoiceNumber.toLowerCase().includes(searchTerm.toLowerCase());
         
         const matchesStatus = filterStatus === "all" ? true : record.status === filterStatus;
+        
+        const matchesDueDate = filterDueDate ? record.dueDate === format(filterDueDate, "yyyy-MM-dd") : true;
 
-        return matchesSearch && matchesStatus;
+        return matchesSearch && matchesStatus && matchesDueDate;
     });
 
     // Pagination calculations
@@ -856,64 +867,57 @@ const SalesFollowUp = () => {
 
     return (
         <div className="h-full flex flex-col gap-6 animate-in fade-in duration-500">
-            {/* Header */}
-            <div className="flex flex-col gap-2">
+            <div className="flex items-center justify-between">
                 <h1 className="text-3xl font-bold tracking-tight text-slate-900">Sales Follow Up</h1>
-                <p className="text-muted-foreground">Track and manage follow-ups for invoices with pending payments.</p>
             </div>
 
-            {/* Filter Section */}
-            <div className="flex flex-col sm:flex-row items-end gap-4 bg-card p-4 rounded-xl border shadow-sm">
-                <div className="w-full sm:flex-1">
-                    <Label className="mb-2 block text-[10px] font-bold text-muted-foreground uppercase tracking-wider">Search</Label>
-                    <div className="relative">
-                        <Search className="absolute left-3 top-3 h-4 w-4 text-muted-foreground" />
-                        <Input
-                            placeholder="Search by Customer, Invoice No..."
-                            className="pl-10 h-10 rounded-md border-input bg-background"
-                            value={searchTerm}
-                            onChange={(e) => {
-                                setSearchTerm(e.target.value);
-                                setCurrentPage(1);
-                            }}
-                        />
-                    </div>
-                </div>
-                <div className="w-full sm:w-48">
-                    <Label className="mb-2 block text-[10px] font-bold text-muted-foreground uppercase tracking-wider">Filter By Status</Label>
-                    <Select value={filterStatus} onValueChange={(val) => {
-                        setFilterStatus(val);
-                        setCurrentPage(1);
-                    }}>
-                        <SelectTrigger className="h-10">
-                            <SelectValue placeholder="All Status" />
-                        </SelectTrigger>
-                        <SelectContent>
-                            <SelectItem value="all">All Status</SelectItem>
-                            <SelectItem value="Upcoming">Upcoming</SelectItem>
-                            <SelectItem value="Overdue">Overdue</SelectItem>
-                            <SelectItem value="Completed">Completed</SelectItem>
-                        </SelectContent>
-                    </Select>
-                </div>
-            </div>
+            <AppListToolbar
+                search={{
+                    value: searchTerm,
+                    onChange: setSearchTerm,
+                    placeholder: "Search by Invoice No. or Customer Name"
+                }}
+                filters={[
+                    {
+                        label: "Due Date",
+                        type: "date",
+                        value: filterDueDate,
+                        onChange: (date: Date | undefined) => {
+                            setFilterDueDate(date);
+                            setCurrentPage(1);
+                        },
+                        showClear: true
+                    },
+                    {
+                        label: "Filter By Status",
+                        type: "select",
+                        value: filterStatus,
+                        onChange: (val: string) => {
+                            setFilterStatus(val);
+                            setCurrentPage(1);
+                        },
+                        options: [{ label: "All Status", value: "all" }, "Upcoming", "Overdue", "Completed"],
+                        searchable: true
+                    }
+                ]}
+            />
 
-            {/* Follow Up Table */}
-            <Card className="border shadow-sm overflow-hidden bg-white/50">
-                <CardContent className="p-0">
-                    <div className="rounded-md">
+            {/* Follow Up Table - Matching WarrantyService layout */}
+            <Card>
+                <CardContent className="pt-6">
+                    <div className="rounded-md border">
                         <Table>
                             <TableHeader>
-                                <TableRow className="bg-muted/50">
-                                    <TableHead className="font-bold uppercase text-[11px] tracking-wider py-4 pl-6">Customer Name</TableHead>
-                                    <TableHead className="font-bold uppercase text-[11px] tracking-wider">Invoice No</TableHead>
-                                    <TableHead className="font-bold uppercase text-[11px] tracking-wider text-right">Invoice Amount</TableHead>
-                                    <TableHead className="font-bold uppercase text-[11px] tracking-wider text-right">Due Amount</TableHead>
-                                    <TableHead className="font-bold uppercase text-[11px] tracking-wider">Due Date</TableHead>
-                                    <TableHead className="font-bold uppercase text-[11px] tracking-wider">Last Follow Up</TableHead>
-                                    <TableHead className="font-bold uppercase text-[11px] tracking-wider">Next Follow Up</TableHead>
-                                    <TableHead className="font-bold uppercase text-[11px] tracking-wider text-center">Status</TableHead>
-                                    <TableHead className="text-right font-bold uppercase text-[11px] tracking-wider pr-6">Actions</TableHead>
+                                <TableRow className="bg-muted/50 hover:bg-muted/50">
+                                    <TableHead className="font-semibold text-xs uppercase tracking-wider py-4 pl-6">Customer Name</TableHead>
+                                    <TableHead className="font-semibold text-xs uppercase tracking-wider">Invoice No</TableHead>
+                                    <TableHead className="font-semibold text-xs uppercase tracking-wider text-right">Invoice Amount</TableHead>
+                                    <TableHead className="font-semibold text-xs uppercase tracking-wider text-right">Due Amount</TableHead>
+                                    <TableHead className="font-semibold text-xs uppercase tracking-wider">Due Date</TableHead>
+                                    <TableHead className="font-semibold text-xs uppercase tracking-wider">Last Follow Up</TableHead>
+                                    <TableHead className="font-semibold text-xs uppercase tracking-wider">Next Follow Up</TableHead>
+                                    <TableHead className="font-semibold text-xs uppercase tracking-wider text-center">Status</TableHead>
+                                    <TableHead className="font-semibold text-xs tracking-wider text-center">Actions</TableHead>
                                 </TableRow>
                             </TableHeader>
                             <TableBody>
@@ -925,12 +929,12 @@ const SalesFollowUp = () => {
                                     </TableRow>
                                 ) : (
                                     paginatedData.map((record) => (
-                                        <TableRow key={record.id} className="hover:bg-muted/20 group transition-colors border-b last:border-none">
+                                        <TableRow key={record.id} className="hover:bg-muted/30 transition-colors border-b last:border-none">
                                             <TableCell className="py-4 pl-6 font-bold text-sm text-primary">{record.customerName}</TableCell>
                                             <TableCell className="py-4 text-sm font-medium">
                                                 <button
                                                     onClick={() => handleInvoiceClick(record)}
-                                                    className="text-blue-600 hover:text-blue-800 hover:underline font-medium transition-colors cursor-pointer"
+                                                    className="text-blue-600 hover:text-blue-800 hover:underline font-mono text-xs transition-colors cursor-pointer"
                                                 >
                                                     {record.invoiceNumber}
                                                 </button>
@@ -949,25 +953,11 @@ const SalesFollowUp = () => {
                                             <TableCell className="py-4 text-center">
                                                 {getFollowUpStatusBadge(record.status)}
                                             </TableCell>
-                                            <TableCell className="py-4 text-right pr-6">
-                                                <div className="flex items-center justify-end gap-2">
-                                                    <Button
-                                                        variant="ghost"
-                                                        size="icon"
-                                                        className="h-8 w-8 text-muted-foreground hover:text-primary"
-                                                        onClick={() => handleOpenRecord(record)}
-                                                    >
-                                                        <Eye className="h-4 w-4" />
-                                                    </Button>
-                                                    <Button
-                                                        variant="ghost"
-                                                        size="icon"
-                                                        className="h-8 w-8 text-muted-foreground hover:text-blue-600"
-                                                        onClick={() => handleEditRecord(record)}
-                                                    >
-                                                        <Edit className="h-4 w-4" />
-                                                    </Button>
-                                                </div>
+                                             <TableCell className="py-4 text-center">
+                                                <TableActionButtons
+                                                    onView={() => handleOpenRecord(record)}
+                                                    onEdit={() => handleEditRecord(record)}
+                                                />
                                             </TableCell>
                                         </TableRow>
                                     ))
@@ -977,7 +967,7 @@ const SalesFollowUp = () => {
                     </div>
 
                     {/* Pagination */}
-                    <div className="p-4 border-t">
+                    <div className="px-4 py-2 border-t">
                         <DataTablePagination
                             currentPage={currentPage}
                             totalPages={totalPages}
@@ -1122,7 +1112,7 @@ const SalesFollowUp = () => {
                                                         </tr>
                                                     </thead>
                                                     <tbody>
-                                                        {terms.map((term, index) => (
+                                                        {terms.map((term: any, index: number) => (
                                                             <tr key={term.id} className={index % 2 === 0 ? 'bg-white' : 'bg-slate-50'}>
                                                                 <td className="border border-slate-300 px-3 py-2 text-xs font-medium text-slate-700">{term.termType}</td>
                                                                 <td className="border border-slate-300 px-3 py-2 text-xs text-center text-slate-600">{term.percentage}%</td>
@@ -1145,9 +1135,9 @@ const SalesFollowUp = () => {
                                                         ))}
                                                         <tr className="bg-slate-200 font-bold">
                                                             <td colSpan={3} className="border border-slate-300 px-3 py-2 text-xs text-right text-slate-700">Total:</td>
-                                                            <td className="border border-slate-300 px-3 py-2 text-xs text-right text-slate-900">USh {terms.reduce((sum, t) => sum + t.termAmount, 0).toFixed(2)}</td>
-                                                            <td className="border border-slate-300 px-3 py-2 text-xs text-right text-green-700">USh {terms.reduce((sum, t) => sum + t.paidAmount, 0).toFixed(2)}</td>
-                                                            <td className="border border-slate-300 px-3 py-2 text-xs text-right text-orange-700">USh {terms.reduce((sum, t) => sum + t.dueAmount, 0).toFixed(2)}</td>
+                                                            <td className="border border-slate-300 px-3 py-2 text-xs text-right text-slate-900">USh {terms.reduce((sum: number, t: any) => sum + t.termAmount, 0).toFixed(2)}</td>
+                                                            <td className="border border-slate-300 px-3 py-2 text-xs text-right text-green-700">USh {terms.reduce((sum: number, t: any) => sum + t.paidAmount, 0).toFixed(2)}</td>
+                                                            <td className="border border-slate-300 px-3 py-2 text-xs text-right text-orange-700">USh {terms.reduce((sum: number, t: any) => sum + t.dueAmount, 0).toFixed(2)}</td>
                                                             <td className="border border-slate-300 px-3 py-2"></td>
                                                         </tr>
                                                     </tbody>
@@ -1277,7 +1267,7 @@ const SalesFollowUp = () => {
                                                     </TableRow>
                                                 </TableHeader>
                                                 <TableBody>
-                                                    {terms.map((term, index) => (
+                                                    {terms.map((term: any, index: number) => (
                                                         <TableRow 
                                                             key={term.id} 
                                                             className={index % 2 === 0 ? 'border-b border-slate-200 transition-colors bg-white hover:bg-slate-50' : 'border-b border-slate-200 transition-colors bg-slate-50 hover:bg-slate-100'}
@@ -1315,13 +1305,13 @@ const SalesFollowUp = () => {
                                                             Total:
                                                         </TableCell>
                                                         <TableCell className="text-right font-bold text-slate-900 py-4 px-4 text-base">
-                                                            USh {terms.reduce((sum, t) => sum + t.termAmount, 0).toFixed(2)}
+                                                            USh {terms.reduce((sum: number, t: any) => sum + t.termAmount, 0).toFixed(2)}
                                                         </TableCell>
                                                         <TableCell className="text-right font-bold text-green-700 py-4 px-4 text-base">
-                                                            USh {terms.reduce((sum, t) => sum + t.paidAmount, 0).toFixed(2)}
+                                                            USh {terms.reduce((sum: number, t: any) => sum + t.paidAmount, 0).toFixed(2)}
                                                         </TableCell>
                                                         <TableCell className="text-right font-bold text-orange-700 py-4 px-4 text-base">
-                                                            USh {terms.reduce((sum, t) => sum + t.dueAmount, 0).toFixed(2)}
+                                                            USh {terms.reduce((sum: number, t: any) => sum + t.dueAmount, 0).toFixed(2)}
                                                         </TableCell>
                                                         <TableCell className="py-4 px-4"></TableCell>
                                                     </TableRow>
@@ -1340,7 +1330,7 @@ const SalesFollowUp = () => {
                             ============================================================================ */}
                         <div className="space-y-2">
                             <Label className="text-sm font-bold">Next Follow Up Date</Label>
-                            <DatePicker 
+                            <LocalFollowUpDatePicker 
                                 date={editNextFollowUpDate} 
                                 setDate={setEditNextFollowUpDate}
                             />
@@ -1354,7 +1344,7 @@ const SalesFollowUp = () => {
                         <div className="grid grid-cols-12 gap-6 bg-slate-50 p-6 rounded-2xl border border-slate-100 shadow-inner">
                             <div className="col-span-4">
                                 <Label className="text-xs font-bold text-slate-600 mb-2 block uppercase tracking-wide">Follow Up Date <span className="text-red-500">*</span></Label>
-                                <DatePicker 
+                                <LocalFollowUpDatePicker 
                                     date={editFollowUpDate} 
                                     setDate={setEditFollowUpDate}
                                 />

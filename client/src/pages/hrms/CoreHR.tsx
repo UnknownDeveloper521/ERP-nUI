@@ -30,8 +30,11 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { Checkbox } from "@/components/ui/checkbox";
 import { Command, CommandInput, CommandList, CommandEmpty, CommandGroup, CommandItem, CommandInputBorderless } from "@/components/ui/command";
 import { format, parse } from "date-fns";
-import { CalendarIcon, Plus, Edit, Upload, Trash2, Search, User, Briefcase, FileText, ShieldCheck, FileSpreadsheet, ChevronLeft, ChevronRight, Eye, EyeOff, ChevronDown, ExternalLink, Download, ChevronsUpDown, Check, Copy, Key, Info, CheckCircle2, AlertCircle } from "lucide-react";
+import { CalendarIcon, Plus, Edit, Upload, Trash2, User, Briefcase, FileText, ShieldCheck, FileSpreadsheet, ChevronLeft, ChevronRight, Eye, EyeOff, ChevronDown, ExternalLink, Download, ChevronsUpDown, Check, Copy, Key, Info, CheckCircle2, AlertCircle } from "lucide-react";
+import { TableActionButtons } from "@/components/shared/TableActionButtons";
 import { DataTablePagination } from "@/components/shared/DataTablePagination";
+import { AppListToolbar } from "@/components/shared/AppListToolbar";
+import { SearchableSelect } from "@/components/shared/SearchableSelect";
 import { cn } from "@/lib/utils";
 import { useToast } from "@/hooks/use-toast";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -87,88 +90,6 @@ interface ExtendedEmployee {
     assignedWorkCenters?: string[]; // IDs
     assignedWarehouses?: string[]; // IDs
     assignedOperations?: string[]; // IDs
-}
-
-// --- Reusable Searchable Combobox Component ---
-
-interface SearchableSelectProps {
-    label: string;
-    value?: string;
-    options: string[];
-    onChange: (val: string) => void;
-    required?: boolean;
-    disabled?: boolean;
-}
-
-function SearchableSelect({
-    label,
-    value,
-    options,
-    onChange,
-    required = false,
-    disabled = false,
-}: SearchableSelectProps) {
-    const [open, setOpen] = useState(false);
-
-    // Auto-select if only one option is available
-    useEffect(() => {
-        if (options.length === 1 && !value && !disabled) {
-            onChange(options[0]);
-        }
-    }, [options, value, onChange, disabled]);
-
-    return (
-        <div className="space-y-2">
-            <Label>
-                {label} {required && <span className="text-red-500">*</span>}
-            </Label>
-            <Popover open={open} onOpenChange={setOpen}>
-                <PopoverTrigger asChild>
-                    <Button
-                        variant="outline"
-                        role="combobox"
-                        aria-expanded={open}
-                        className="w-full justify-between h-10 font-normal border-input"
-                        disabled={disabled}
-                    >
-                        <span className={cn(!value && "text-muted-foreground")}>
-                            {value || `Select ${label}`}
-                        </span>
-                        <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
-                    </Button>
-                </PopoverTrigger>
-                <PopoverContent className="w-[var(--radix-popover-trigger-width)] p-0" align="start">
-                    <Command>
-                        <CommandInputBorderless placeholder={`Search ${label.toLowerCase()}...`} className="h-9" />
-                        <CommandList className="max-h-[200px] overflow-y-auto">
-                            <CommandEmpty>No results found.</CommandEmpty>
-                            <CommandGroup>
-                                {options.map((item) => (
-                                    <CommandItem
-                                        key={item}
-                                        value={item}
-                                        onSelect={() => {
-                                            onChange(item);
-                                            setOpen(false);
-                                        }}
-                                        className="cursor-pointer"
-                                    >
-                                        <Check
-                                            className={cn(
-                                                "mr-2 h-4 w-4",
-                                                value === item ? "opacity-100" : "opacity-0"
-                                            )}
-                                        />
-                                        {item}
-                                    </CommandItem>
-                                ))}
-                            </CommandGroup>
-                        </CommandList>
-                    </Command>
-                </PopoverContent>
-            </Popover>
-        </div>
-    );
 }
 
 // --- Master Data Options ---
@@ -1050,13 +971,19 @@ export default function CoreHR() {
         }
     };
 
-    // Derived Logic
-    const filteredEmployees = employees.filter((emp: any) =>
-        emp.firstName.toLowerCase().includes(searchTerm.toLowerCase()) ||
-        emp.lastName.toLowerCase().includes(searchTerm.toLowerCase()) ||
-        emp.email.toLowerCase().includes(searchTerm.toLowerCase()) ||
-        emp.employeeId.toLowerCase().includes(searchTerm.toLowerCase())
-    );
+    const [departmentFilter, setDepartmentFilter] = useState<string>("all");
+
+    const filteredEmployees = employees.filter((emp: any) => {
+        const matchesSearch = emp.firstName.toLowerCase().includes(searchTerm.toLowerCase()) ||
+            emp.lastName.toLowerCase().includes(searchTerm.toLowerCase()) ||
+            emp.email.toLowerCase().includes(searchTerm.toLowerCase()) ||
+            emp.employeeId.toLowerCase().includes(searchTerm.toLowerCase());
+            
+        const matchesDepartment = departmentFilter === "all" || 
+            departments.find(d => d.id === emp.departmentId)?.name === departmentFilter;
+            
+        return matchesSearch && matchesDepartment;
+    });
 
     console.log('Current state:', {
         totalEmployees: employees.length,
@@ -1466,10 +1393,17 @@ export default function CoreHR() {
     }, [viewMode]); // Re-run when view mode changes
 
     const handleAddNew = () => {
+        setIsEditing(true);
         setLocation("/hrms/core-hr/employees/new");
     };
 
+    const handleView = (employee: any) => {
+        setIsEditing(false);
+        setLocation(`/hrms/core-hr/employees/${employee.id}`);
+    };
+
     const handleEdit = (employee: any) => {
+        setIsEditing(true);
         setLocation(`/hrms/core-hr/employees/${employee.id}`);
     };
 
@@ -1703,13 +1637,11 @@ export default function CoreHR() {
     return (
         <div className="space-y-6 h-full flex flex-col">
             {/* Header */}
-            <div className="flex justify-between items-center shrink-0">
-                <div>
-                    <h1 className="text-2xl font-bold tracking-tight">
-                        {viewMode === 'list' ? "Core HR" : (viewMode === 'add' ? "Add New Employee" : "Edit Employee")}
-                    </h1>
-                    <p className="text-muted-foreground">
-                        {viewMode === 'list' ? "Manage employee directory and details." : "Fill in the details below."}
+            <div className="flex justify-between items-start shrink-0">
+                <div className="flex flex-col gap-1">
+                    <h1 className="text-3xl font-bold tracking-tight">Core HR</h1>
+                    <p className="text-muted-foreground text-sm">
+                        Manage employee directory and details.
                     </p>
                 </div>
                 {viewMode !== 'list' && (
@@ -1721,235 +1653,188 @@ export default function CoreHR() {
                         */}
 
                         {(viewMode === 'add') && (
-                            <Button variant="outline" onClick={handleBackToList}>Cancel</Button>
+                            <Button variant="outline" onClick={handleBackToList}>Close</Button>
                         )}
 
                         {(viewMode === 'edit' && !isEditing) && (
-                            <Button variant="outline" onClick={handleBackToList}>Back</Button>
+                            <Button variant="outline" onClick={handleBackToList}>Close</Button>
                         )}
 
-                        {(viewMode === 'edit' && isEditing) && (
-                            <Button variant="outline" onClick={() => setIsEditing(false)}>Cancel</Button>
-                        )}
-
-                        {viewMode === 'edit' && editingId && (
-                            <AlertDialog open={isDeleteOpen} onOpenChange={setIsDeleteOpen}>
-                                <AlertDialogTrigger asChild>
-                                    <Button variant="destructive">
-                                        <Trash2 className="mr-2 h-4 w-4" /> Delete
-                                    </Button>
-                                </AlertDialogTrigger>
-                                <AlertDialogContent>
-                                    <AlertDialogHeader>
-                                        <AlertDialogTitle>Are you absolutely sure?</AlertDialogTitle>
-                                        <AlertDialogDescription>
-                                            This action cannot be undone. This will permanently delete the employee record.
-                                        </AlertDialogDescription>
-                                    </AlertDialogHeader>
-                                    <AlertDialogFooter>
-                                        <AlertDialogCancel>Cancel</AlertDialogCancel>
-                                        <AlertDialogAction onClick={handleDelete} className="bg-destructive text-destructive-foreground hover:bg-destructive/90">
-                                            Delete
-                                        </AlertDialogAction>
-                                    </AlertDialogFooter>
-                                </AlertDialogContent>
-                            </AlertDialog>
-                        )}
-
-                        {/* Action Buttons */}
-                        {viewMode === 'edit' && !isEditing && (
-                            <Button onClick={() => setIsEditing(true)}>
-                                <Edit className="mr-2 h-4 w-4" /> Edit Info
-                            </Button>
+                        {viewMode === 'edit' && editingId && isEditing && (
+                            <div className="flex gap-2">
+                                <Button variant="outline" onClick={handleBackToList}>Close</Button>
+                                <AlertDialog open={isDeleteOpen} onOpenChange={setIsDeleteOpen}>
+                                    <AlertDialogTrigger asChild>
+                                        <Button variant="destructive">
+                                            <Trash2 className="mr-2 h-4 w-4" /> Delete
+                                        </Button>
+                                    </AlertDialogTrigger>
+                                    <AlertDialogContent>
+                                        <AlertDialogHeader>
+                                            <AlertDialogTitle>Are you absolutely sure?</AlertDialogTitle>
+                                            <AlertDialogDescription>
+                                                This action cannot be undone. This will permanently delete the employee record.
+                                            </AlertDialogDescription>
+                                        </AlertDialogHeader>
+                                        <AlertDialogFooter>
+                                            <AlertDialogCancel>Cancel</AlertDialogCancel>
+                                            <AlertDialogAction onClick={handleDelete} className="bg-destructive text-destructive-foreground hover:bg-destructive/90">
+                                                Delete
+                                            </AlertDialogAction>
+                                        </AlertDialogFooter>
+                                    </AlertDialogContent>
+                                </AlertDialog>
+                            </div>
                         )}
                     </div>
                 )}
             </div>
-
-            {/* List View */}
             {viewMode === 'list' && (
                 <div className="space-y-4">
                     {/* Controls Bar */}
-                    <div className="flex flex-col sm:flex-row justify-between gap-4">
-                        <div className="flex items-center gap-4">
-                            <div className="relative w-full sm:w-72 p-0.5">
-                                <Search className="absolute left-3 top-3 h-4 w-4 text-muted-foreground" />
-                                <Input
-                                    placeholder="Search employees..."
-                                    className="pl-9 search-input-caret-fix"
-                                    value={searchTerm} // Need to add state
-                                    onChange={(e) => setSearchTerm ? setSearchTerm(e.target.value) : null} // Placeholder until state added check
-                                    ref={(el) => {
-                                        if (el) {
-                                            // Force styles using setProperty with important flag
-                                            el.style.setProperty('caret-color', '#000000', 'important');
-                                            el.style.setProperty('color', '#333333', 'important');
-                                            el.style.setProperty('-webkit-text-fill-color', '#333333', 'important');
-                                            el.style.setProperty('-webkit-caret-color', '#000000', 'important');
-                                            el.style.setProperty('-moz-caret-color', '#000000', 'important');
-                                        }
-                                    }}
-                                    onFocus={(e) => {
-                                        const target = e.target as HTMLInputElement;
-                                        target.style.setProperty('caret-color', '#000000', 'important');
-                                        target.style.setProperty('color', '#333333', 'important');
-                                        target.style.setProperty('-webkit-text-fill-color', '#333333', 'important');
-                                        target.style.setProperty('-webkit-caret-color', '#000000', 'important');
-                                        target.style.setProperty('-moz-caret-color', '#000000', 'important');
-                                    }}
-                                    onInput={(e) => {
-                                        const target = e.target as HTMLInputElement;
-                                        target.style.setProperty('caret-color', '#000000', 'important');
-                                        target.style.setProperty('color', '#333333', 'important');
-                                        target.style.setProperty('-webkit-text-fill-color', '#333333', 'important');
-                                        target.style.setProperty('-webkit-caret-color', '#000000', 'important');
-                                        target.style.setProperty('-moz-caret-color', '#000000', 'important');
-                                    }}
-                                    onClick={(e) => {
-                                        const target = e.target as HTMLInputElement;
-                                        target.style.setProperty('caret-color', '#000000', 'important');
-                                        target.style.setProperty('color', '#333333', 'important');
-                                        target.style.setProperty('-webkit-text-fill-color', '#333333', 'important');
-                                        target.style.setProperty('-webkit-caret-color', '#000000', 'important');
-                                        target.style.setProperty('-moz-caret-color', '#000000', 'important');
-                                    }}
-                                />
-                            </div>
-                            {/* Selected Count Indicator */}
-                            {selectedEmployeeIds.length > 0 && (
-                                <div className="text-sm text-muted-foreground">
-                                    {selectedEmployeeIds.length} selected
-                                </div>
-                            )}
-                        </div>
-                        <div className="flex gap-2">
-                            {/* Export Button - Only enabled when employees are selected */}
-                            <Button variant="outline" disabled={selectedEmployeeIds.length === 0} onClick={handleBulkExport}>
-                                <FileSpreadsheet className="mr-2 h-4 w-4" /> Export
-                            </Button>
-                            {/* Import Button */}
-                            <Button variant="outline" onClick={() => setIsImportModalOpen(true)}>
-                                <Upload className="mr-2 h-4 w-4" /> Import
-                            </Button>
-                            {/* Add New Employee Button - Disabled when employees are selected */}
-                            <Button onClick={handleAddNew} disabled={selectedEmployeeIds.length > 0}>
-                                <Plus className="mr-2 h-4 w-4" /> Add New Employee
-                            </Button>
-                        </div>
-                    </div>
+                    <AppListToolbar
+                        search={{
+                            value: searchTerm,
+                            onChange: setSearchTerm,
+                            placeholder: "Search employees..."
+                        }}
+                        filters={[
+                            {
+                                type: 'select',
+                                label: 'Department',
+                                value: departmentFilter,
+                                options: [{ label: "All Departments", value: "all" }, ...departments.map(d => d.name)],
+                                onChange: setDepartmentFilter,
+                                searchable: true
+                            }
+                        ]}
+                        actions={[
+                            {
+                                label: 'Export',
+                                icon: <FileSpreadsheet className="h-4 w-4" />,
+                                onClick: handleBulkExport,
+                                variant: 'outline',
+                                disabled: selectedEmployeeIds.length === 0
+                            },
+                            {
+                                label: 'Import',
+                                icon: <Upload className="h-4 w-4" />,
+                                onClick: () => setIsImportModalOpen(true),
+                                variant: 'outline'
+                            },
+                            {
+                                label: 'Add New Employee',
+                                icon: <Plus className="h-4 w-4" />,
+                                onClick: handleAddNew,
+                                disabled: selectedEmployeeIds.length > 0
+                            }
+                        ]}
+                        className="bg-card p-4 rounded-lg border shadow-sm"
+                    />
 
-                    {/* Table-like Card Layout - UI matches Materials reference */}
+                    {/* Table-like Card Layout */}
                     <Card>
                         <CardContent className="pt-6">
                             <div className="rounded-md border">
-                                <div className="bg-card overflow-hidden">
-                                    {/* Header Row */}
-                                    <div className="grid grid-cols-13 gap-4 p-4 bg-muted/50 font-semibold text-xs text-muted-foreground border-b uppercase tracking-wider">
-                                        <div className="col-span-1 flex items-center">
-                                            <Checkbox
-                                                checked={isIndeterminate ? "indeterminate" : isAllSelected}
-                                                onCheckedChange={handleSelectAll}
-                                            />
-                                        </div>
-                                        <div className="col-span-3">Name</div>
-                                        <div className="col-span-2">Email</div>
-                                        <div className="col-span-2">Phone No.</div>
-                                        <div className="col-span-1">Gender</div>
-                                        <div className="col-span-1">Dept</div>
-                                        <div className="col-span-1">Designation</div>
-                                        <div className="col-span-1">Status</div>
-                                        <div className="col-span-1 text-right pr-6">Action</div>
-                                    </div>
-
-                                    {/* Loading State */}
-                                    {isLoading ? (
-                                        <div className="p-8 text-center text-muted-foreground">Loading employees...</div>
-                                    ) : (
-                                        <div className="divide-y">
-                                            {paginatedEmployees.map((emp: any) => (
-                                                <div
-                                                    key={emp.id}
-                                                    className="grid grid-cols-13 gap-4 p-4 items-center hover:bg-muted/30 transition-colors group border-b"
-                                                >
-                                                    {/* Checkbox */}
-                                                    <div className="col-span-1 flex items-center" onClick={(e) => e.stopPropagation()}>
+                                <Table>
+                                    <TableHeader>
+                                        <TableRow className="bg-muted/50">
+                                            <TableHead className="w-[50px]">
+                                                <Checkbox
+                                                    checked={isIndeterminate ? "indeterminate" : isAllSelected}
+                                                    onCheckedChange={handleSelectAll}
+                                                />
+                                            </TableHead>
+                                            <TableHead className="text-[10px] font-bold text-muted-foreground uppercase tracking-wider">NAME</TableHead>
+                                            <TableHead className="text-[10px] font-bold text-muted-foreground uppercase tracking-wider">EMAIL</TableHead>
+                                            <TableHead className="text-[10px] font-bold text-muted-foreground uppercase tracking-wider">PHONE NO.</TableHead>
+                                            <TableHead className="text-[10px] font-bold text-muted-foreground uppercase tracking-wider">GENDER</TableHead>
+                                            <TableHead className="text-[10px] font-bold text-muted-foreground uppercase tracking-wider">DEPT</TableHead>
+                                            <TableHead className="text-[10px] font-bold text-muted-foreground uppercase tracking-wider">DESIGNATION</TableHead>
+                                            <TableHead className="text-[10px] font-bold text-muted-foreground uppercase tracking-wider">STATUS</TableHead>
+                                            <TableHead className="text-center w-[100px] text-[10px] font-bold text-muted-foreground uppercase tracking-wider">ACTION</TableHead>
+                                        </TableRow>
+                                    </TableHeader>
+                                    <TableBody>
+                                        {isLoading ? (
+                                            <TableRow>
+                                                <TableCell colSpan={7} className="h-32 text-center">
+                                                    Loading employees...
+                                                </TableCell>
+                                            </TableRow>
+                                        ) : paginatedEmployees.length === 0 ? (
+                                            <TableRow>
+                                                <TableCell colSpan={7} className="h-32 text-center text-muted-foreground italic">
+                                                    No employees found.
+                                                </TableCell>
+                                            </TableRow>
+                                        ) : (
+                                            paginatedEmployees.map((emp: any) => (
+                                                <TableRow key={emp.id} className="hover:bg-muted/30 transition-colors group">
+                                                    <TableCell>
                                                         <Checkbox
                                                             checked={selectedEmployeeIds.includes(emp.id)}
                                                             onCheckedChange={(checked) => handleSelectEmployee(emp.id, checked as boolean)}
                                                         />
-                                                    </div>
-
-                                                    {/* Name with Avatar */}
-                                                    <div className="col-span-3 flex items-center gap-3 cursor-pointer" onClick={() => handleEdit(emp)}>
-                                                        <div className="h-9 w-9 rounded-full bg-primary/10 flex items-center justify-center text-primary font-semibold text-sm">
-                                                            {emp.firstName.charAt(0)}{emp.lastName.charAt(0)}
+                                                    </TableCell>
+                                                    <TableCell>
+                                                        <div className="flex items-center gap-3">
+                                                            <div className="h-9 w-9 rounded-full bg-primary/10 flex items-center justify-center text-primary font-semibold text-xs shrink-0">
+                                                                {emp.firstName.charAt(0)}{emp.lastName.charAt(0)}
+                                                            </div>
+                                                            <div className="flex flex-col min-w-0">
+                                                                <span className="font-medium text-sm text-foreground truncate">{emp.firstName} {emp.lastName}</span>
+                                                                <span className="text-[10px] text-muted-foreground">{emp.employeeId}</span>
+                                                            </div>
                                                         </div>
-                                                        <div className="flex flex-col">
-                                                            <span className="font-medium text-sm text-foreground">{emp.firstName} {emp.lastName}</span>
-                                                            <span className="text-xs text-muted-foreground">{emp.employeeId}</span>
-                                                        </div>
-                                                    </div>
-
-                                                    {/* Email */}
-                                                    <div className="col-span-2 text-sm text-muted-foreground truncate cursor-pointer" title={emp.email} onClick={() => handleEdit(emp)}>
-                                                        {emp.email}
-                                                    </div>
-
-                                                    {/* Phone */}
-                                                    <div className="col-span-2 text-sm text-muted-foreground cursor-pointer" onClick={() => handleEdit(emp)}>
-                                                        {emp.phone}
-                                                    </div>
-
-                                                    {/* Gender */}
-                                                    <div className="col-span-1 text-sm text-muted-foreground cursor-pointer" onClick={() => handleEdit(emp)}>
-                                                        {emp.gender || "Male"}
-                                                    </div>
-
-                                                    {/* Department */}
-                                                    <div className="col-span-1 text-sm text-muted-foreground cursor-pointer" onClick={() => handleEdit(emp)}>
-                                                        {departments.find((d: any) => d.id === emp.departmentId)?.code || emp.departmentId}
-                                                    </div>
-
-                                                    {/* Designation */}
-                                                    <div className="col-span-1 text-sm text-muted-foreground truncate cursor-pointer" onClick={() => handleEdit(emp)}>
-                                                        {emp.designation}
-                                                    </div>
-
-                                                    {/* Status */}
-                                                    <div className="col-span-1 cursor-pointer" onClick={() => handleEdit(emp)}>
-                                                        <Badge variant={emp.status?.toLowerCase() === 'active' ? 'default' : 'secondary'} className={cn("text-xs font-normal lowercase", emp.status?.toLowerCase() === 'active' ? "bg-green-100 text-green-700 hover:bg-green-100" : "bg-gray-100 text-gray-700")}>
+                                                    </TableCell>
+                                                    <TableCell>
+                                                        <span className="text-xs text-muted-foreground">{emp.email}</span>
+                                                    </TableCell>
+                                                    <TableCell>
+                                                        <span className="text-xs text-muted-foreground">{emp.phone}</span>
+                                                    </TableCell>
+                                                    <TableCell className="text-sm">{emp.gender || "Male"}</TableCell>
+                                                    <TableCell>
+                                                        <span className="text-sm font-medium">{departments.find((d: any) => d.id === emp.departmentId)?.code || emp.departmentId}</span>
+                                                    </TableCell>
+                                                    <TableCell>
+                                                        <span className="text-xs text-muted-foreground truncate">{emp.designation}</span>
+                                                    </TableCell>
+                                                    <TableCell>
+                                                        <Badge 
+                                                            variant={emp.status?.toLowerCase() === 'active' ? 'default' : 'secondary'} 
+                                                            className={cn(
+                                                                "text-[10px] h-5 px-1.5 font-bold uppercase", 
+                                                                emp.status?.toLowerCase() === 'active' ? "bg-green-100 text-green-700 hover:bg-green-100" : "bg-gray-100 text-gray-700"
+                                                            )}
+                                                        >
                                                             {emp.status?.toLowerCase()}
                                                         </Badge>
-                                                    </div>
-
-                                                    {/* Actions */}
-                                                    <div className="col-span-1 flex justify-end gap-2 pr-6" onClick={(e) => e.stopPropagation()}>
-                                                        <Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground hover:text-primary" onClick={() => handleEdit(emp)}>
-                                                            <Eye className="h-4 w-4" />
-                                                        </Button>
-                                                    </div>
-                                                </div>
-                                            ))}
-                                            {paginatedEmployees.length === 0 && (
-                                                <div className="p-8 text-center text-muted-foreground">No employees found.</div>
-                                            )}
-                                        </div>
-                                    )}
-                                </div>
+                                                    </TableCell>
+                                                    <TableCell className="text-center">
+                                                        <TableActionButtons
+                                                            onView={() => handleView(emp)}
+                                                            onEdit={() => handleEdit(emp)}
+                                                        />
+                                                    </TableCell>
+                                                </TableRow>
+                                            ))
+                                        )}
+                                    </TableBody>
+                                </Table>
                             </div>
-
-                            {/* Pagination - Same position as Materials reference */}
-                            <DataTablePagination
-                                currentPage={currentPage}
-                                totalPages={totalPages}
-                                totalItems={filteredEmployees.length}
-                                itemsPerPage={itemsPerPage}
-                                onPageChange={setCurrentPage}
-                                onItemsPerPageChange={setItemsPerPage}
-                                options={[10, 15, 30, 50]}
-                            />
-                        </CardContent>
-                    </Card>
+                        <DataTablePagination
+                            currentPage={currentPage}
+                            totalPages={totalPages}
+                            totalItems={filteredEmployees.length}
+                            itemsPerPage={itemsPerPage}
+                            onPageChange={setCurrentPage}
+                            onItemsPerPageChange={setItemsPerPage}
+                            options={[10, 15, 30, 50]}
+                        />
+                    </CardContent>
+                </Card>
                 </div>
             )}
 
@@ -2003,8 +1888,8 @@ export default function CoreHR() {
                             </div>
                         </ScrollArea>
 
-                        <div className="p-4 border-t bg-muted/20 flex justify-end gap-3 shrink-0">
-                            {(isEditing || viewMode === 'add') && (
+                        {(isEditing || viewMode === 'add') && (
+                            <div className="p-4 border-t bg-muted/20 flex justify-end gap-3 shrink-0">
                                 <Button
                                     variant="outline"
                                     onClick={handleClear}
@@ -2012,53 +1897,53 @@ export default function CoreHR() {
                                 >
                                     Clear
                                 </Button>
-                            )}
 
-                            {/* Save & Next button - show for Personal and Employment tabs only */}
-                            {(isEditing || viewMode === 'add') && (activeTab === 'personal' || activeTab === 'job') && (
-                                <Button
-                                    onClick={() => handleSave(false)}
-                                    disabled={!isCurrentTabValid()}
-                                    className={`${isCurrentTabValid()
-                                        ? "bg-blue-600 hover:bg-blue-700 text-white"
-                                        : "bg-gray-300 text-gray-500 cursor-not-allowed"
-                                        }`}
-                                >
-                                    Save & Next
-                                </Button>
-                            )}
+                                {/* Save & Next button - show for Personal and Employment tabs only */}
+                                {(activeTab === 'personal' || activeTab === 'job') && (
+                                    <Button
+                                        onClick={() => handleSave(false)}
+                                        disabled={!isCurrentTabValid()}
+                                        className={`${isCurrentTabValid()
+                                            ? "bg-blue-600 hover:bg-blue-700 text-white"
+                                            : "bg-gray-300 text-gray-500 cursor-not-allowed"
+                                            }`}
+                                    >
+                                        Save & Next
+                                    </Button>
+                                )}
 
-                            {/* Save & Next button for Documents tab - navigates to System Access */}
-                            {(isEditing || viewMode === 'add') && activeTab === 'docs' && (
-                                <Button
-                                    onClick={() => {
-                                        // Save document data and navigate to System Access tab
-                                        setActiveTab('system');
-                                    }}
-                                    disabled={!isCurrentTabValid()}
-                                    className={`${isCurrentTabValid()
-                                        ? "bg-blue-600 hover:bg-blue-700 text-white"
-                                        : "bg-gray-300 text-gray-500 cursor-not-allowed"
-                                        }`}
-                                >
-                                    Save & Next
-                                </Button>
-                            )}
+                                {/* Save & Next button for Documents tab - navigates to System Access */}
+                                {activeTab === 'docs' && (
+                                    <Button
+                                        onClick={() => {
+                                            // Save document data and navigate to System Access tab
+                                            setActiveTab('system');
+                                        }}
+                                        disabled={!isCurrentTabValid()}
+                                        className={`${isCurrentTabValid()
+                                            ? "bg-blue-600 hover:bg-blue-700 text-white"
+                                            : "bg-gray-300 text-gray-500 cursor-not-allowed"
+                                            }`}
+                                    >
+                                        Save & Next
+                                    </Button>
+                                )}
 
-                            {/* Save Employee button - only on System Access tab */}
-                            {(isEditing || viewMode === 'add') && activeTab === 'system' && (
-                                <Button
-                                    onClick={() => handleSave(true)}
-                                    disabled={!areAllTabsValid()}
-                                    className={`${areAllTabsValid()
-                                        ? "bg-blue-600 hover:bg-blue-700 text-white"
-                                        : "bg-gray-300 text-gray-500 cursor-not-allowed"
-                                        }`}
-                                >
-                                    {viewMode === 'edit' ? 'Update Info' : 'Save Employee'}
-                                </Button>
-                            )}
-                        </div>
+                                {/* Save Employee button - only on System Access tab */}
+                                {activeTab === 'system' && (
+                                    <Button
+                                        onClick={() => handleSave(true)}
+                                        disabled={!areAllTabsValid()}
+                                        className={`${areAllTabsValid()
+                                            ? "bg-blue-600 hover:bg-blue-700 text-white"
+                                            : "bg-gray-300 text-gray-500 cursor-not-allowed"
+                                            }`}
+                                    >
+                                        {viewMode === 'edit' ? 'Update Info' : 'Save Employee'}
+                                    </Button>
+                                )}
+                            </div>
+                        )}
                     </div>
                 </Tabs>
             )}
@@ -2317,14 +2202,10 @@ function PersonalDetailsForm({ data, updateData, readOnly }: any) {
 
                     {/* Right Column: Fields */}
                     <div className="col-span-12 md:col-span-9 grid grid-cols-1 md:grid-cols-2 gap-5 content-start">
-                        <div className="space-y-2">
-                            <Label>Employee ID <span className="text-red-500">*</span></Label>
-                            <Input value={data.employeeId} readOnly className="bg-muted cursor-text" />
-                        </div>
                         {data.id && (
                             <div className="space-y-2">
-                                <Label>Employee Code <span className="text-red-500">*</span></Label>
-                                <Input value={data.employeeCode} readOnly className="bg-muted cursor-text" />
+                                <Label>Employee ID <span className="text-red-500">*</span></Label>
+                                <Input value={data.employeeId} readOnly className="bg-muted cursor-text" />
                             </div>
                         )}
 

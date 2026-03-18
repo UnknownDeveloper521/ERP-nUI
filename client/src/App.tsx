@@ -25,7 +25,8 @@ import CompanyManagement from "@/pages/super-admin/CompanyManagement";
 import Vendors from "@/pages/Vendors";
 import Customers from "@/pages/Customers";
 import Sales from "@/pages/Sales";
-import UsersRoles from "@/pages/UsersRoles";
+import UserManagement from "@/pages/UserManagement";
+import RolesPermissions from "@/pages/RolesPermissions";
 import MyAccount from "@/pages/MyAccount";
 
 import PerformanceDashboard from "@/pages/PerformanceDashboard";
@@ -39,6 +40,8 @@ import AttendancePage from "@/pages/hrms/Attendance";
 import LeaveManagement from "@/pages/hrms/LeaveManagement";
 import PayrollManagement from "@/pages/hrms/PayrollManagement";
 import WorkerPayrolls from "@/pages/hrms/WorkerPayrolls";
+import Holiday from "@/pages/hrms/Holiday";
+import EmployeePayslip from "@/pages/hrms/EmployeePayslip";
 
 import InventoryDashboard from "@/pages/inventory/InventoryDashboard";
 import Materials from "@/pages/inventory/Materials";
@@ -46,7 +49,7 @@ import GRN from "@/pages/inventory/GRN";
 import Dispatch from "@/pages/inventory/Dispatch";
 import MaterialLedger from "@/pages/inventory/MaterialLedger";
 // Inventory Material Requisitions - for issuing materials to service center
-import InventorySMRRequests from "@/pages/inventory/SMRRequests";
+import InventorySMRRequests from "@/pages/inventory/MaterialRequisitions";
 
 // Removed old Production QC import (moved to Quality Check > Batch QC)
 // import QualityCheck from "@/pages/production/QualityCheck";
@@ -76,13 +79,13 @@ import InventoryMasters from "@/pages/masters/InventoryMasters";
 import ProductionMasters from "@/pages/masters/ProductionMasters";
 
 import HRSetupDashboard from "@/pages/hr-setup/HRSetupDashboard";
-import EmployeeSalaryDetails from "@/pages/hr-setup/EmployeeSalaryDetails";
+import AssignEmployeeSalary from "@/pages/hr-setup/AssignEmployeeSalary";
 import SalaryComponent from "@/pages/hr-setup/SalaryComponent";
 import SalaryStructure from "@/pages/hr-setup/SalaryStructure";
 import PayPeriod from "@/pages/hr-setup/PayPeriod";
 import WorkersWagePeriod from "@/pages/hr-setup/WorkersWagePeriod";
 
-import MRRequest from "@/pages/procurement/MRRequest";
+import MRRequest from "@/pages/procurement/MyMR";
 import MRExecution from "@/pages/procurement/MRExecution";
 import PO from "@/pages/procurement/PO";
 
@@ -205,30 +208,18 @@ function Router() {
         )}
       </Route>
 
-      <Route path="/hrms/leave-management/holidays">
-        {() => (
-          <ProtectedRoute>
-            <MainLayout>
-              <LeaveManagement />
-            </MainLayout>
-          </ProtectedRoute>
-        )}
-      </Route>
 
-      {/* Payroll Management - Main page (Run Payroll tab) */}
+      {/* Payroll Management - Main page (Redirect to Run Payroll) */}
       <Route path="/hrms/payroll-management">
-        {() => (
-          <ProtectedRoute>
-            <MainLayout>
-              <PayrollManagement />
-            </MainLayout>
-          </ProtectedRoute>
-        )}
+        {() => {
+          window.location.replace("/hrms/payroll-management/run-payroll");
+          return null;
+        }}
       </Route>
 
-      {/* Payroll Management - Payslips Tab */}
-      <Route path="/hrms/payroll-management/payslips">
-        {() => (
+      {/* Payroll Management - Tabbed view (Run Payroll / Payslips) */}
+      <Route path="/hrms/payroll-management/:tab/:subPath*">
+        {(params) => (
           <ProtectedRoute>
             <MainLayout>
               <PayrollManagement />
@@ -281,6 +272,26 @@ function Router() {
           <ProtectedRoute>
             <MainLayout>
               <WorkerPayrolls />
+            </MainLayout>
+          </ProtectedRoute>
+        )}
+      </Route>
+
+      <Route path="/hrms/holiday">
+        {() => (
+          <ProtectedRoute>
+            <MainLayout>
+              <Holiday />
+            </MainLayout>
+          </ProtectedRoute>
+        )}
+      </Route>
+
+      <Route path="/hrms/employee-payslip">
+        {() => (
+          <ProtectedRoute>
+            <MainLayout>
+              <EmployeePayslip />
             </MainLayout>
           </ProtectedRoute>
         )}
@@ -388,7 +399,7 @@ function Router() {
       </Route>
 
       {/* Material Requisitions Route */}
-      <Route path="/inventory/smr-requests">
+      <Route path="/inventory/material-requisitions">
         {() => (
           <ProtectedRoute>
             <MainLayout>
@@ -486,7 +497,7 @@ function Router() {
       </Route>
 
       {/* Sales Module - Updated: Changed base path from /sales-invoicing to /sales */}
-      <Route path="/sales">
+      <Route path="/sales/dashboard">
         {() => (
           <ProtectedRoute>
             <MainLayout>
@@ -504,7 +515,7 @@ function Router() {
           </ProtectedRoute>
         )}
       </Route>
-      <Route path="/sales/orders">
+      <Route path="/sales/sales-orders">
         {() => (
           <ProtectedRoute>
             <MainLayout>
@@ -547,7 +558,7 @@ function Router() {
       </Route>
 
       {/* My MR - separate page */}
-      <Route path="/procurement/mr-request">
+      <Route path="/procurement/my-mr">
         {() => (
           <ProtectedRoute>
             <MainLayout>
@@ -654,54 +665,61 @@ function Router() {
 
 
 
+      <Route path="/user-management">
+        {() => (
+          <ProtectedRoute>
+            <MainLayout>
+              <UserManagement />
+            </MainLayout>
+          </ProtectedRoute>
+        )}
+      </Route>
+
       <Route path="/settings">
         {() => (
           <ProtectedRoute>
             <MainLayout>
-              <UsersRoles />
+              <RolesPermissions />
             </MainLayout>
           </ProtectedRoute>
         )}
       </Route>
 
       {/* HR Setup Routes */}
-      <Route path="/hr-setup/employee-salary">
+      <Route path="/hr-setup/assign-employee-salary">
         {() => (
           <ProtectedRoute>
             <MainLayout>
-              <EmployeeSalaryDetails />
+              <AssignEmployeeSalary />
             </MainLayout>
           </ProtectedRoute>
         )}
       </Route>
       {/* Route for creating a new Employee Salary Assignment */}
-      <Route path="/hr-setup/employee-salary/new">
+      <Route path="/hr-setup/assign-employee-salary/new">
         {() => (
           <ProtectedRoute>
             <MainLayout>
-              <EmployeeSalaryDetails />
+              <AssignEmployeeSalary />
             </MainLayout>
           </ProtectedRoute>
         )}
       </Route>
       {/* Route for editing an existing Employee Salary Assignment */}
-      <Route path="/hr-setup/employee-salary/:id">
+      <Route path="/hr-setup/assign-employee-salary/:id">
         {() => (
           <ProtectedRoute>
             <MainLayout>
-              <EmployeeSalaryDetails />
+              <AssignEmployeeSalary />
             </MainLayout>
           </ProtectedRoute>
         )}
       </Route>
       <Route path="/hr-setup/salary-component">
-        {() => (
-          <ProtectedRoute>
-            <MainLayout>
-              <SalaryComponent />
-            </MainLayout>
-          </ProtectedRoute>
-        )}
+        {() => {
+          window.location.replace("/hr-setup/salary-component/earnings");
+          return null;
+        }}
       </Route>
       {/* Route for Salary Component Tabs (earning, deduction, reimbursement) */}
       <Route path="/hr-setup/salary-component/:tab">

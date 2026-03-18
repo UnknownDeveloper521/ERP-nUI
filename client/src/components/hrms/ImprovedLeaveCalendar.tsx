@@ -7,7 +7,8 @@ import { cn } from "@/lib/utils";
  */
 interface LeaveApplication {
   id: string;              // Unique identifier for the leave
-  employee: string;        // Employee name
+  employeeCode: string;    // Employee code
+  employeeName: string;    // Employee name
   leaveType: string;       // Type of leave (Paid, Sick, Casual, Annual, Unpaid)
   fromDate: string;        // Start date of leave (ISO format)
   toDate: string;          // End date of leave (ISO format)
@@ -119,7 +120,7 @@ export default function ImprovedLeaveCalendar({
    * @returns Array of leave applications for that employee
    */
   const getEmployeeLeavesForMonth = (employeeName: string) => {
-    return leaveApplications.filter(app => app.employee === employeeName);
+    return leaveApplications.filter(app => `${app.employeeCode} - ${app.employeeName}` === employeeName || app.employeeName === employeeName);
   };
 
   /**
@@ -351,7 +352,7 @@ export default function ImprovedLeaveCalendar({
           <div className="space-y-2 text-xs">
             {/* Employee name header */}
             <div className="font-bold text-sm border-b pb-1.5 text-gray-900">
-              {hoveredLeave.leave.employee}
+              {`${hoveredLeave.leave.employeeCode} - ${hoveredLeave.leave.employeeName}`}
             </div>
             
             {/* Leave details grid */}

@@ -52,18 +52,18 @@ export let mockReleaseRecords: OperationRelease[] = [
     status: "Issued to Warehouse",
     batchIds: ["BT-PL-001", "BT-PL-002"],
     items: [
-      { id: 101, itemCode: "sfg-1", itemName: "Purified Lead", uom: "KG", qtyProduced: 950 },
+      { id: 101, itemCode: "SFG-001", itemName: "Purified Lead", uom: "KG", qtyProduced: 950 },
     ],
     batchDetails: [
       {
         batchNo: "BT-PL-001",
         shift: "Morning",
-        items: [{ id: 101, itemCode: "sfg-1", itemName: "Purified Lead", uom: "KG", qtyProduced: 500 }]
+        items: [{ id: 101, itemCode: "SFG-001", itemName: "Purified Lead", uom: "KG", qtyProduced: 500 }]
       },
       {
         batchNo: "BT-PL-002",
         shift: "Night",
-        items: [{ id: 101, itemCode: "sfg-1", itemName: "Purified Lead", uom: "KG", qtyProduced: 450 }]
+        items: [{ id: 101, itemCode: "SFG-001", itemName: "Purified Lead", uom: "KG", qtyProduced: 450 }]
       }
     ]
   },
@@ -78,13 +78,13 @@ export let mockReleaseRecords: OperationRelease[] = [
     status: "Received By Warehouse",
     batchIds: ["BT-BC-005"],
     items: [
-      { id: 201, itemCode: "sfg-2", itemName: "Battery Cases", uom: "NOS", qtyProduced: 200 },
+      { id: 201, itemCode: "SFG-002", itemName: "Battery Cases", uom: "NOS", qtyProduced: 200 },
     ],
     batchDetails: [
       {
         batchNo: "BT-BC-005",
         shift: "Morning",
-        items: [{ id: 201, itemCode: "sfg-2", itemName: "Battery Cases", uom: "NOS", qtyProduced: 200 }]
+        items: [{ id: 201, itemCode: "SFG-002", itemName: "Battery Cases", uom: "NOS", qtyProduced: 200 }]
       }
     ]
   }

@@ -23,6 +23,8 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
+import { DataTablePagination } from "@/components/shared/DataTablePagination";
+import { AppListToolbar } from "@/components/shared/AppListToolbar";
 import {
   Select,
   SelectContent,
@@ -49,8 +51,10 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
-import { Search, Plus, Edit, ArrowLeft, Trash2, Info, ChevronLeft, ChevronRight } from "lucide-react";
+import { Search, Plus, Edit, ArrowLeft, Trash2, Info, ChevronLeft, ChevronRight, Eye, Pencil } from "lucide-react";
+import { cn } from "@/lib/utils";
 import { useToast } from "@/hooks/use-toast";
+import { TableActionButtons } from "@/components/shared/TableActionButtons";
 
 // --- Types ---
 
@@ -139,7 +143,7 @@ export default function SalaryStructurePage() {
   // List View State
   const [searchTerm, setSearchTerm] = useState("");
   const [currentPage, setCurrentPage] = useState(1);
-  const itemsPerPage = 10;
+  const [itemsPerPage, setItemsPerPage] = useState(10);
 
   // Form View State
   const [isEditMode, setIsEditMode] = useState(false);
@@ -319,93 +323,74 @@ export default function SalaryStructurePage() {
 
   if (viewMode === "list") {
     return (
-      <div className="space-y-6">
-        <div className="flex justify-between items-center">
-          <div>
-            <h1 className="text-3xl font-bold tracking-tight">Salary Structure</h1>
-            <p className="text-muted-foreground">Manage salary structure templates and rules</p>
-          </div>
+      <div className="h-full flex flex-col gap-6">
+        <div className="flex flex-col gap-1">
+          <h1 className="text-3xl font-bold tracking-tight">Salary Structures</h1>
+          <p className="text-muted-foreground text-sm">Define earnings and deductions rules for employee grades.</p>
         </div>
 
-        <div className="flex items-center justify-between gap-2">
-          {/* Search Box Wrapper: Matches standard Input style, using ring-inset to prevent clipping */}
-          <div className="relative w-96 flex items-center h-10 border border-zinc-400 rounded-md bg-background focus-within:ring-1 focus-within:ring-ring focus-within:ring-inset">
-            {/* Icon: Standard positioning */}
-            <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground pointer-events-none" />
-            {/* Input: Borderless, transparent, standard padding */}
-            <Input
-              placeholder="Search structure..."
-              value={searchTerm}
-              onChange={(e) => setSearchTerm(e.target.value)}
-              className="pl-9 border-none shadow-none focus-visible:ring-0 bg-transparent h-full w-full"
-            />
-          </div>
-          <Button onClick={handleCreateNew}>
-            <Plus className="mr-2 h-4 w-4" /> Add Structure
-          </Button>
-        </div>
+        <AppListToolbar
+          search={{
+            placeholder: "Search structure...",
+            value: searchTerm,
+            onChange: setSearchTerm
+          }}
+          actions={[
+            {
+              label: "Add Structure",
+              icon: <Plus className="h-4 w-4 mr-2" />,
+              onClick: handleCreateNew
+            }
+          ]}
+        />
 
         <Card>
-          <CardContent className="p-0">
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Structure Name</TableHead>
-                  <TableHead>Status</TableHead>
-                  <TableHead>Created On</TableHead>
-                  <TableHead className="text-right">Actions</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {paginatedStructures.length === 0 ? (
-                  <TableRow>
-                    <TableCell colSpan={4} className="h-24 text-center">No structures found.</TableCell>
+          <CardContent className="pt-6">
+            <div className="rounded-md border">
+              <Table>
+                <TableHeader>
+                  <TableRow className="bg-muted/50">
+                    <TableHead>Structure Name</TableHead>
+                    <TableHead>Status</TableHead>
+                    <TableHead>Created On</TableHead>
+                    <TableHead className="text-center w-[100px]">Actions</TableHead>
                   </TableRow>
-                ) : paginatedStructures.map(s => (
-                  <TableRow key={s.id}>
-                    <TableCell className="font-medium">{s.name}</TableCell>
-                    <TableCell>
-                      <Badge className={s.status === 'active' ? "bg-green-100 text-green-700" : "bg-red-100 text-red-700"}>
-                        {s.status}
-                      </Badge>
-                    </TableCell>
-                    <TableCell>{s.createdAt}</TableCell>
-                    <TableCell className="text-right">
-                      <Button variant="ghost" size="icon" onClick={() => handleEdit(s)}>
-                        <Edit className="h-4 w-4" />
-                      </Button>
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          </CardContent>
-        </Card>
-
-        <div className="flex justify-between items-center px-1 py-4">
-          <div className="text-sm text-muted-foreground">
-            Showing {(currentPage - 1) * itemsPerPage + 1} to {Math.min(currentPage * itemsPerPage, filteredStructures.length)} of {filteredStructures.length} entries
-          </div>
-          <div className="flex gap-2">
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
-              disabled={currentPage === 1}
-            >
-              <ChevronLeft className="h-4 w-4" />
-            </Button>
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
-              disabled={currentPage === totalPages || totalPages === 0}
-            >
-              <ChevronRight className="h-4 w-4" />
-            </Button>
-          </div>
-        </div>
-      </div>
+                </TableHeader>
+                <TableBody>
+                  {paginatedStructures.length === 0 ? (
+                    <TableRow>
+                      <TableCell colSpan={4} className="h-32 text-center text-muted-foreground italic">No structures found.</TableCell>
+                    </TableRow>
+                  ) : paginatedStructures.map(s => (
+                    <TableRow key={s.id} className="hover:bg-muted/30 transition-colors">
+                      <TableCell className="font-medium text-sm">{s.name}</TableCell>
+                      <TableCell>
+                        <Badge className={cn("text-xs", s.status === 'active' ? "bg-green-100 text-green-700" : "bg-red-100 text-red-700")}>
+                          {s.status}
+                        </Badge>
+                      </TableCell>
+                      <TableCell className="text-sm">{s.createdAt}</TableCell>
+                      <TableCell className="text-center">
+                        <TableActionButtons
+                          onEdit={() => handleEdit(s)}
+                        />
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </div>
+          <DataTablePagination
+            currentPage={currentPage}
+            totalPages={totalPages}
+            totalItems={filteredStructures.length}
+            itemsPerPage={itemsPerPage}
+            onPageChange={setCurrentPage}
+            onItemsPerPageChange={setItemsPerPage}
+          />
+        </CardContent>
+      </Card>
+    </div>
     );
   }
 

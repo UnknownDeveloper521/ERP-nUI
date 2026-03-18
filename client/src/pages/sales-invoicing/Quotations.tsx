@@ -46,7 +46,6 @@ import { Badge } from "@/components/ui/badge";
 import {
     Search,
     Plus,
-    Eye,
     ChevronLeft,
     ChevronRight,
     Trash2,
@@ -55,12 +54,13 @@ import {
     ChevronsUpDown,
     Check,
     X,
-    Edit,
     Download,
 } from "lucide-react";
+import { TableActionButtons } from "@/components/shared/TableActionButtons";
 import { useToast } from "@/hooks/use-toast";
 import { cn } from "@/lib/utils";
 import { DataTablePagination } from "@/components/shared/DataTablePagination";
+import { AppListToolbar } from "@/components/shared/AppListToolbar";
 import React from "react";
 // Updated: Import mock quotation service instead of using localStorage
 import {
@@ -239,6 +239,8 @@ export default function Quotations() {
     const [isManualEntry, setIsManualEntry] = useState(false);
     const [editingId, setEditingId] = useState<number | null>(null);
     const [viewingQuotation, setViewingQuotation] = useState<QuotationData | null>(null);
+    const [isDeleteAlertOpen, setIsDeleteAlertOpen] = useState(false);
+    const [quotationToDelete, setQuotationToDelete] = useState<QuotationData | null>(null);
 
     const [formData, setFormData] = useState<Partial<QuotationData>>({
         quotationDate: getCurrentDateForInput(),
@@ -780,6 +782,18 @@ export default function Quotations() {
         setIsFormModalOpen(true);
     };
 
+    // New: Handle deletion
+    const handleDeleteQuotation = (id: number) => {
+        deleteQuotation(id);
+        setQuotations(getQuotations()); // Refresh list
+        setIsDeleteAlertOpen(false);
+        setIsFormModalOpen(false);
+        toast({
+            title: "Quotation Deleted",
+            description: "The quotation has been deleted successfully."
+        });
+    };
+
     // Export as PDF - Using unified template
     const handleExportPDF = (quotation: QuotationData) => {
         const pdfContent = generateQuotationPDFHTML(quotation);
@@ -893,140 +907,100 @@ export default function Quotations() {
 
     const getStatusBadge = (status: QuotationStatus) => {
         switch (status) {
-            case "Draft Quote": return <Badge className="bg-slate-500 hover:bg-slate-600">Draft Quote</Badge>;
-            case "Submitted Quote": return <Badge className="bg-blue-500 hover:bg-blue-600">Submitted Quote</Badge>;
-            case "Expired Quotations": return <Badge className="bg-orange-500 hover:bg-orange-600">Expired Quotations</Badge>;
-            case "Converted to SO": return <Badge className="bg-purple-500 hover:bg-purple-600">Converted to SO</Badge>;
-            default: return <Badge variant="outline">{status}</Badge>;
+            case "Draft Quote":
+                return <Badge variant="outline">Draft Quote</Badge>;
+            case "Submitted Quote":
+                return <Badge variant="default">Submitted Quote</Badge>;
+            case "Expired Quotations":
+                return <Badge variant="destructive">Expired Quotations</Badge>;
+            case "Converted to SO":
+                return <Badge variant="secondary">Converted to SO</Badge>;
+            default:
+                return <Badge variant="outline">{status}</Badge>;
         }
     };
 
     return (
         <div className="h-full flex flex-col gap-6 animate-in fade-in duration-500">
-            {/* Header */}
-            <div className="flex flex-col gap-2">
-                <h1 className="text-3xl font-bold tracking-tight text-slate-900">Quotations</h1>
-                <p className="text-muted-foreground">Manage sales quotations and customer proposals.</p>
-            </div>
+            <h1 className="text-3xl font-bold tracking-tight">Quotations</h1>
 
-            {/* Filter Section - Matching SO layout */}
-            <div className="flex flex-col sm:flex-row items-end gap-4 bg-card p-4 rounded-xl border shadow-sm">
-                <div className="w-full sm:flex-1">
-                    <Label className="mb-2 block text-[10px] font-bold text-muted-foreground uppercase tracking-wider">Search Quotation</Label>
-                    <div className="relative">
-                        <Search className="absolute left-3 top-3 h-4 w-4 text-muted-foreground" />
-                        <Input
-                            placeholder="Search by Quotation No, Customer..."
-                            className="pl-10 h-10 rounded-md border-input bg-background"
-                            value={searchTerm}
-                            onChange={(e) => {
-                                setSearchTerm(e.target.value);
-                                setCurrentPage(1);
-                            }}
-                        />
-                    </div>
-                </div>
-                <div className="w-full sm:w-56">
-                    <Label className="mb-2 block text-[10px] font-bold text-muted-foreground uppercase tracking-wider">Filter By Date</Label>
-                    <div className="flex gap-2">
-                        <DatePicker date={filterDate} setDate={(date) => {
+            <AppListToolbar
+                search={{
+                    value: searchTerm,
+                    onChange: setSearchTerm,
+                    placeholder: "Search by Quotation No, Customer..."
+                }}
+                filters={[
+                    {
+                        type: 'date',
+                        label: 'Date',
+                        value: filterDate,
+                        onChange: (date) => {
                             setFilterDate(date);
                             setCurrentPage(1);
-                        }} />
-                        {filterDate && (
-                            <Button variant="ghost" size="icon" className="h-10 w-10 shrink-0" onClick={() => {
-                                setFilterDate(undefined);
-                                setCurrentPage(1);
-                            }}>
-                                <Trash2 className="h-4 w-4 text-muted-foreground" />
-                            </Button>
-                        )}
-                    </div>
-                </div>
-                <div className="w-full sm:w-48">
-                    <Label className="mb-2 block text-[10px] font-bold text-muted-foreground uppercase tracking-wider">Filter By Status</Label>
-                    <Select value={filterStatus} onValueChange={(val) => {
-                        setFilterStatus(val);
-                        setCurrentPage(1);
-                    }}>
-                        <SelectTrigger className="h-10">
-                            <SelectValue placeholder="All Status" />
-                        </SelectTrigger>
-                        <SelectContent>
-                            <SelectItem value="all">All Status</SelectItem>
-                            <SelectItem value="Draft Quote">Draft Quote</SelectItem>
-                            <SelectItem value="Submitted Quote">Submitted Quote</SelectItem>
-                            <SelectItem value="Expired Quotations">Expired Quotations</SelectItem>
-                            <SelectItem value="Converted to SO">Converted to SO</SelectItem>
-                        </SelectContent>
-                    </Select>
-                </div>
-                <div className="w-full sm:w-auto">
-                    <Button
-                        onClick={() => { resetForm(); setIsFormModalOpen(true); }}
-                        className="w-full sm:w-auto h-10 font-bold shadow-md"
-                    >
-                        <Plus className="h-4 w-4 mr-2" />
-                        Create Quotation
-                    </Button>
-                </div>
-            </div>
+                        },
+                        showClear: true
+                    },
+                    {
+                        type: 'select',
+                        label: 'Status',
+                        value: filterStatus,
+                        options: [{ label: "All Status", value: "all" }, "Draft Quote", "Submitted Quote", "Expired Quotations", "Converted to SO"],
+                        onChange: (val) => {
+                            setFilterStatus(val);
+                            setCurrentPage(1);
+                        },
+                        searchable: true
+                    }
+                ]}
+                actions={[
+                    {
+                        label: "New Quotation",
+                        icon: <Plus className="h-4 w-4" />,
+                        onClick: () => { resetForm(); setIsFormModalOpen(true); }
+                    }
+                ]}
+            />
 
-            {/* Quotation Table - Matching SO layout */}
-            <Card className="border shadow-sm overflow-hidden bg-white/50">
-                <CardContent className="p-0">
-                    <div className="rounded-md">
+            {/* Quotation Table - Matching WarrantyService layout */}
+            <Card>
+                <CardContent className="pt-6">
+                    <div className="rounded-md border">
                         <Table>
                             <TableHeader>
-                                <TableRow className="bg-muted/50">
-                                    <TableHead className="font-bold uppercase text-[11px] tracking-wider py-4 pl-6">Quotation No</TableHead>
-                                    <TableHead className="font-bold uppercase text-[11px] tracking-wider">Quotation Date</TableHead>
-                                    <TableHead className="font-bold uppercase text-[11px] tracking-wider">Customer</TableHead>
-                                    <TableHead className="font-bold uppercase text-[11px] tracking-wider text-center">Status</TableHead>
-                                    <TableHead className="text-right font-bold uppercase text-[11px] tracking-wider pr-6">Actions</TableHead>
+                                <TableRow className="bg-muted/50 hover:bg-muted/50">
+                                    <TableHead className="font-semibold text-xs uppercase tracking-wider py-4 pl-6">Quotation No</TableHead>
+                                    <TableHead className="font-semibold text-xs uppercase tracking-wider">Quotation Date</TableHead>
+                                    <TableHead className="font-semibold text-xs uppercase tracking-wider">Customer</TableHead>
+                                    <TableHead className="font-semibold text-xs uppercase tracking-wider text-center">Status</TableHead>
+                                    <TableHead className="font-semibold text-xs tracking-wider text-center">Actions</TableHead>
                                 </TableRow>
                             </TableHeader>
                             <TableBody>
                                 {paginatedQuotations.length === 0 ? (
                                     <TableRow>
-                                        <TableCell colSpan={5} className="h-32 text-center text-muted-foreground italic">
-                                            No Quotations found
+                                        <TableCell colSpan={5} className="h-32 text-center text-muted-foreground">
+                                            No quotations found
                                         </TableCell>
                                     </TableRow>
                                 ) : (
                                     paginatedQuotations.map((quote) => (
-                                        <TableRow key={quote.id} className="hover:bg-muted/20 group transition-colors border-b last:border-none">
-                                            <TableCell className="py-4 pl-6 font-medium text-xs text-primary">{quote.quotationNo || `QT-${quote.id}`}</TableCell>
+                                        <TableRow key={quote.id} className="hover:bg-muted/30 transition-colors border-b last:border-none">
+                                            <TableCell className="py-4 pl-6 font-medium text-xs font-mono text-primary">{quote.quotationNo || `QT-${quote.id}`}</TableCell>
                                             <TableCell className="py-4 text-sm font-medium text-slate-600">{formatDate(quote.quotationDate)}</TableCell>
                                             <TableCell className="py-4 text-sm font-bold text-primary">{quote.customerName}</TableCell>
                                             <TableCell className="py-4 text-center">
                                                 {getStatusBadge(quote.status)}
                                             </TableCell>
-                                            <TableCell className="py-4 text-right pr-6">
-                                                <div className="flex justify-end gap-1">
-                                                    <Button
-                                                        variant="ghost"
-                                                        size="icon"
-                                                        className="h-8 w-8 text-muted-foreground hover:text-primary"
-                                                        onClick={() => {
-                                                            setViewingQuotation(quote);
-                                                            setIsViewModalOpen(true);
-                                                        }}
-                                                    >
-                                                        <Eye className="h-4 w-4" />
-                                                    </Button>
-                                                    {/* Edit allowed for Draft Quote and Submitted Quote */}
-                                                    {(quote.status === "Draft Quote" || quote.status === "Submitted Quote") && (
-                                                        <Button
-                                                            variant="ghost"
-                                                            size="icon"
-                                                            className="h-8 w-8 text-muted-foreground hover:text-emerald-600"
-                                                            onClick={() => handleEdit(quote)}
-                                                        >
-                                                            <Edit className="h-4 w-4" />
-                                                        </Button>
-                                                    )}
-                                                </div>
+                                            <TableCell className="py-4 text-center">
+                                                <TableActionButtons
+                                                    onView={() => {
+                                                        setViewingQuotation(quote);
+                                                        setIsViewModalOpen(true);
+                                                    }}
+                                                    onEdit={(quote.status === "Draft Quote" || quote.status === "Submitted Quote") ? () => handleEdit(quote) : undefined}
+                                                    onDelete={undefined}
+                                                />
                                             </TableCell>
                                         </TableRow>
                                     ))
@@ -1036,7 +1010,7 @@ export default function Quotations() {
                     </div>
 
                     {/* DataTablePagination - matching SO pagination position */}
-                    <div className="p-4 border-t">
+                    <div className="px-4 py-2 border-t">
                         <DataTablePagination
                             currentPage={currentPage}
                             totalPages={totalPages}
@@ -1219,7 +1193,7 @@ export default function Quotations() {
                                             <TableHead className="text-[10px] font-bold uppercase py-3 w-[180px]">Term Type</TableHead>
                                             <TableHead className="text-[10px] font-bold uppercase py-3 text-center w-[150px]">Days</TableHead>
                                             <TableHead className="text-[10px] font-bold uppercase py-3 text-center w-[120px]">Date</TableHead>
-                                            <TableHead className="text-[10px] font-bold uppercase py-3 text-right pr-6 w-[100px]">Actions</TableHead>
+                                            <TableHead className="text-[10px] font-bold py-3 text-center w-[100px]">Actions</TableHead>
                                         </TableRow>
                                     </TableHeader>
                                     <TableBody>
@@ -1317,15 +1291,10 @@ export default function Quotations() {
                                                         </TableCell>
 
                                                         {/* Actions Column */}
-                                                        <TableCell className="py-4 text-right pr-6">
-                                                            <Button
-                                                                variant="ghost"
-                                                                size="icon"
-                                                                className="h-8 w-8 text-muted-foreground hover:text-red-600"
-                                                                onClick={() => handleRemovePaymentTerm(term.id)}
-                                                            >
-                                                                <Trash2 className="h-4 w-4" />
-                                                            </Button>
+                                                        <TableCell className="py-4 text-center">
+                                                            <TableActionButtons
+                                                                onDelete={() => handleRemovePaymentTerm(term.id)}
+                                                            />
                                                         </TableCell>
                                                     </TableRow>
                                                 );
@@ -1353,7 +1322,7 @@ export default function Quotations() {
                                             <TableHead className="text-[10px] font-bold uppercase py-3 text-center">Qty</TableHead>
                                             <TableHead className="text-[10px] font-bold uppercase py-3 text-center">Rate</TableHead>
                                             <TableHead className="text-[10px] font-bold uppercase py-3 text-center">Price</TableHead>
-                                            <TableHead className="text-[10px] font-bold uppercase py-3 text-right pr-6">Actions</TableHead>
+                                            <TableHead className="text-[10px] font-bold py-3 text-center">Actions</TableHead>
                                         </TableRow>
                                     </TableHeader>
                                     <TableBody>
@@ -1426,15 +1395,10 @@ export default function Quotations() {
                                                     <TableCell className="text-center">
                                                         <span className="font-bold text-primary">USh {item.amount.toFixed(2)}</span>
                                                     </TableCell>
-                                                    <TableCell className="text-right pr-6">
-                                                        <Button
-                                                            variant="ghost"
-                                                            size="icon"
-                                                            className="h-8 w-8 text-muted-foreground hover:text-red-600"
-                                                            onClick={() => handleRemoveItem(item.id)}
-                                                        >
-                                                            <Trash2 className="h-4 w-4" />
-                                                        </Button>
+                                                    <TableCell className="text-center">
+                                                        <TableActionButtons
+                                                            onDelete={() => handleRemoveItem(item.id)}
+                                                        />
                                                     </TableCell>
                                                 </TableRow>
                                             ))
@@ -1583,6 +1547,26 @@ export default function Quotations() {
 
                     {/* layout only - match SO: Footer action bar aligned right like SO */}
                     <DialogFooter className="p-6 border-t mt-auto gap-2">
+                        {formData.status === "Draft Quote" && (
+                            <div className="mr-auto">
+                                {editingId && (
+                                    <Button
+                                        variant="destructive"
+                                        onClick={() => {
+                                            const quote = quotations.find(q => q.id === editingId);
+                                            if (quote) {
+                                                setQuotationToDelete(quote);
+                                                setIsDeleteAlertOpen(true);
+                                            }
+                                        }}
+                                        className="gap-2"
+                                    >
+                                        <Trash2 className="h-4 w-4" />
+                                        Delete
+                                    </Button>
+                                )}
+                            </div>
+                        )}
                         <Button variant="outline" onClick={() => setIsFormModalOpen(false)}>
                             Close
                         </Button>
@@ -1849,6 +1833,27 @@ export default function Quotations() {
                             )}
                         </div>
                     </div>
+                </DialogContent>
+            </Dialog>
+
+            {/* Delete Confirmation Alert */}
+            <Dialog open={isDeleteAlertOpen} onOpenChange={setIsDeleteAlertOpen}>
+                <DialogContent className="max-w-[400px]">
+                    <DialogHeader>
+                        <DialogTitle>Are you sure?</DialogTitle>
+                        <DialogDescription>
+                            This will permanently delete the quotation {quotationToDelete?.quotationNo || 'Draft'}. This action cannot be undone.
+                        </DialogDescription>
+                    </DialogHeader>
+                    <DialogFooter className="gap-2 sm:gap-0">
+                        <Button variant="outline" onClick={() => setIsDeleteAlertOpen(false)}>Cancel</Button>
+                        <Button
+                            variant="destructive"
+                            onClick={() => quotationToDelete && handleDeleteQuotation(quotationToDelete.id)}
+                        >
+                            Delete
+                        </Button>
+                    </DialogFooter>
                 </DialogContent>
             </Dialog>
         </div>

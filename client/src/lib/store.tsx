@@ -6,7 +6,7 @@ import {
   signOut,
   signUpWithEmail,
   signInCompanyWithEmail
-} from './supabase';
+} from './customAuth';
 
 // --- Types ---
 
@@ -149,7 +149,7 @@ export const MODULE_HIERARCHY: ModuleHierarchyItem[] = [
       { name: "Master" },
       {
         name: "HRsetup",
-        popupModules: ["Employee Salary Details", "Salary Component", "Salary Structure"]
+        popupModules: ["Assign Employee Salary", "Salary Component", "Salary Structure"]
       }
     ]
   }

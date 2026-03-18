@@ -32,14 +32,15 @@ import { Badge } from "@/components/ui/badge";
 import {
     Search,
     Plus,
-    Eye,
     Trash2,
-    Edit,
     Calendar as CalendarIcon,
     ChevronLeft,
     ChevronRight,
     ChevronDown,
     Download,
+    ChevronsUpDown,
+    Check,
+    X,
 } from "lucide-react";
 import {
     Popover,
@@ -58,6 +59,9 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { cn } from "@/lib/utils";
 import { useToast } from "@/hooks/use-toast";
 import { DataTablePagination } from "@/components/shared/DataTablePagination";
+import { TableActionButtons } from "@/components/shared/TableActionButtons";
+import { AppListToolbar } from "@/components/shared/AppListToolbar";
+import { DatePicker } from "@/components/shared/DatePicker";
 
 import {
     ServiceRequestStatus,
@@ -76,6 +80,10 @@ import {
 // ============================================================================
 // HELPER FUNCTIONS
 // ============================================================================
+
+// Using shared AppListToolbar and DatePicker components
+
+// Reusable components (using shared versions)
 
 const formatDate = (dateStr: string) => {
     try {
@@ -181,7 +189,7 @@ const getDisplayStatus = (request: ServiceRequestData): string => {
 // MAIN COMPONENT
 // ============================================================================
 
-export default function WarrantyService() {
+function WarrantyService() {
     const { toast } = useToast();
 
     // State with mock data initialization
@@ -190,6 +198,7 @@ export default function WarrantyService() {
     });
 
     const [searchTerm, setSearchTerm] = useState("");
+    const [filterDate, setFilterDate] = useState<Date | undefined>(undefined);
     const [filterStatus, setFilterStatus] = useState<string>("Draft");
     const [currentPage, setCurrentPage] = useState(1);
     const [itemsPerPage, setItemsPerPage] = useState(10);
@@ -1431,7 +1440,23 @@ export default function WarrantyService() {
                         (item.serviceRequestCode?.toLowerCase().includes(searchTerm.toLowerCase()) || false) ||
                         (item.serialNumber?.toLowerCase().includes(searchTerm.toLowerCase()) || false);
                     const matchesStatus = filterStatus === "All" || item.status === filterStatus;
-                    return matchesSearch && matchesStatus;
+                    
+                    // Robust date matching
+                    let matchesDate = true;
+                    if (filterDate) {
+                        try {
+                            const selectedDateStr = format(filterDate, "yyyy-MM-dd");
+                            // Normalize item date - handle cases where it might be a Date object or string
+                            const itemDate = safeParseDate(item.serviceDate);
+                            const itemDateStr = itemDate ? format(itemDate, "yyyy-MM-dd") : "";
+                            matchesDate = itemDateStr === selectedDateStr;
+                        } catch (e) {
+                            console.error('Error matching date:', e);
+                            matchesDate = false;
+                        }
+                    }
+
+                    return matchesSearch && matchesStatus && matchesDate;
                 } catch (e) {
                     console.error('Error filtering item:', e);
                     return false;
@@ -1441,7 +1466,7 @@ export default function WarrantyService() {
             console.error('Error filtering data:', e);
             return [];
         }
-    }, [serviceRequests, searchTerm, filterStatus]);
+    }, [serviceRequests, searchTerm, filterStatus, filterDate]);
 
     const paginatedData = React.useMemo(() => {
         try {
@@ -1460,7 +1485,7 @@ export default function WarrantyService() {
 
     useEffect(() => {
         setCurrentPage(1);
-    }, [searchTerm, filterStatus]);
+    }, [searchTerm, filterStatus, filterDate]);
 
 
     return (
@@ -1468,39 +1493,44 @@ export default function WarrantyService() {
             <h1 className="text-3xl font-bold tracking-tight">Warranty Service Request</h1>
 
             {/* Filters */}
-            <div className="flex flex-col sm:flex-row items-end gap-4 bg-card p-4 rounded-lg border shadow-sm">
-                <div className="w-full sm:flex-1">
-                    <Label className="mb-1.5 block text-xs font-medium text-muted-foreground uppercase tracking-wider">Search</Label>
-                    <div className="relative">
-                        <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
-                        <Input
-                            placeholder="Search by Code, Serial No..."
-                            className="pl-9 h-10"
-                            value={searchTerm}
-                            onChange={(e) => setSearchTerm(e.target.value)}
-                        />
-                    </div>
-                </div>
-                <div className="w-full sm:w-48">
-                    <Label className="mb-1.5 block text-xs font-medium text-muted-foreground uppercase tracking-wider">Status</Label>
-                    <Select value={filterStatus} onValueChange={setFilterStatus}>
-                        <SelectTrigger className="h-10">
-                            <SelectValue />
-                        </SelectTrigger>
-                        <SelectContent>
-                            <SelectItem value="All">All Status</SelectItem>
-                            <SelectItem value="Draft">Draft</SelectItem>
-                            <SelectItem value="Submitted Request">Submitted Request</SelectItem>
-                            <SelectItem value="Completed Request">Completed Request</SelectItem>
-                            <SelectItem value="Rejected Request">Rejected Request</SelectItem>
-                        </SelectContent>
-                    </Select>
-                </div>
-                <Button onClick={() => { resetForm(); setIsFormModalOpen(true); }} className="h-10">
-                    <Plus className="mr-2 h-4 w-4" />
-                    New Service Request
-                </Button>
-            </div>
+            {/* Standardized Toolbar */}
+            <AppListToolbar
+                search={{
+                    value: searchTerm,
+                    onChange: setSearchTerm,
+                    placeholder: "Search by Code, Serial No..."
+                }}
+                filters={[
+                    {
+                        type: 'date',
+                        label: 'Date',
+                        value: filterDate,
+                        onChange: setFilterDate,
+                        placeholder: "All Dates"
+                    },
+                    {
+                        type: 'select',
+                        label: 'Status',
+                        value: filterStatus,
+                        options: [
+                            { value: "All", label: "All Status" },
+                            { value: "Draft", label: "Draft" },
+                            { value: "Submitted Request", label: "Submitted Request" },
+                            { value: "Completed Request", label: "Completed Request" },
+                            { value: "Rejected Request", label: "Rejected Request" }
+                        ],
+                        onChange: setFilterStatus,
+                        searchable: true
+                    }
+                ]}
+                actions={[
+                    {
+                        label: "New Service Request",
+                        icon: <Plus className="mr-2 h-4 w-4" />,
+                        onClick: () => { resetForm(); setIsFormModalOpen(true); }
+                    }
+                ]}
+            />
 
             {/* Table */}
             <Card>
@@ -1516,7 +1546,7 @@ export default function WarrantyService() {
                                     <TableHead className="font-semibold text-xs uppercase tracking-wider">Warranty Status</TableHead>
                                     <TableHead className="font-semibold text-xs uppercase tracking-wider">Claim</TableHead>
                                     <TableHead className="font-semibold text-xs uppercase tracking-wider">Status</TableHead>
-                                    <TableHead className="text-right font-semibold text-xs uppercase tracking-wider pr-6">Actions</TableHead>
+                                    <TableHead className="text-center font-semibold text-xs uppercase tracking-wider w-[100px]">Actions</TableHead>
                                 </TableRow>
                             </TableHeader>
                             <TableBody>
@@ -1566,27 +1596,11 @@ export default function WarrantyService() {
                                                             {getDisplayStatus(item)}
                                                         </Badge>
                                                     </TableCell>
-                                                    <TableCell className="text-right pr-6">
-                                                        <div className="flex justify-end gap-1">
-                                                            <Button
-                                                                variant="ghost"
-                                                                size="icon"
-                                                                className="h-8 w-8"
-                                                                onClick={() => handleView(item)}
-                                                            >
-                                                                <Eye className="h-4 w-4" />
-                                                            </Button>
-                                                            {(item?.status === "Draft" || item?.status === "Submitted Request") && (
-                                                                <Button
-                                                                    variant="ghost"
-                                                                    size="icon"
-                                                                    className="h-8 w-8"
-                                                                    onClick={() => handleEdit(item)}
-                                                                >
-                                                                    <Edit className="h-4 w-4" />
-                                                                </Button>
-                                                            )}
-                                                        </div>
+                                                    <TableCell className="text-center py-4">
+                                                        <TableActionButtons
+                                                            onView={() => handleView(item)}
+                                                            onEdit={(item?.status === "Draft" || item?.status === "Submitted Request") ? () => handleEdit(item) : undefined}
+                                                        />
                                                     </TableCell>
                                                 </TableRow>
                                             );
@@ -2427,361 +2441,4 @@ export default function WarrantyService() {
     );
 }
 
-
-// ============================================================================
-// DATE PICKER COMPONENT (Copied from Attendance.tsx)
-// ============================================================================
-
-function DatePicker({ date, setDate, disabled = false }: {
-    date?: Date,
-    setDate: (d?: Date) => void,
-    disabled?: boolean
-}) {
-    const [isOpen, setIsOpen] = useState(false);
-    const [viewMode, setViewMode] = useState<"day" | "month" | "year">("day");
-    
-    // Safe date initialization - handle invalid dates
-    const [visibleDate, setVisibleDate] = useState(() => {
-        try {
-            if (date && date instanceof Date && !isNaN(date.getTime())) {
-                return date;
-            }
-        } catch (e) {
-            console.error('Error initializing date:', e);
-        }
-        return new Date();
-    });
-
-    // Update visibleDate when date prop changes
-    useEffect(() => {
-        try {
-            if (date && date instanceof Date && !isNaN(date.getTime())) {
-                setVisibleDate(date);
-            }
-        } catch (e) {
-            console.error('Error updating visible date:', e);
-        }
-    }, [date]);
-
-    const monthNames = [
-        "January", "February", "March", "April", "May", "June",
-        "July", "August", "September", "October", "November", "December"
-    ];
-
-    const monthNamesShort = [
-        "Jan", "Feb", "Mar", "Apr", "May", "Jun",
-        "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"
-    ];
-
-    const formatDisplayDate = (date: Date | undefined) => {
-        if (!date) return "Pick a date";
-        try {
-            if (!(date instanceof Date) || isNaN(date.getTime())) {
-                return "Pick a date";
-            }
-            return format(date, "dd/MM/yyyy");
-        } catch (error) {
-            console.error('Error formatting date:', error);
-            return "Pick a date";
-        }
-    };
-
-    const handleDateSelect = (selectedDate: Date) => {
-        try {
-            if (selectedDate && selectedDate instanceof Date && !isNaN(selectedDate.getTime())) {
-                setDate(selectedDate);
-                setIsOpen(false);
-                setViewMode("day");
-            }
-        } catch (e) {
-            console.error('Error selecting date:', e);
-        }
-    };
-
-    const handleMonthSelect = (monthIndex: number) => {
-        const newDate = new Date(visibleDate.getFullYear(), monthIndex, 1);
-        setVisibleDate(newDate);
-        setViewMode("day");
-    };
-
-    const handleYearSelect = (year: number) => {
-        const newDate = new Date(year, visibleDate.getMonth(), 1);
-        setVisibleDate(newDate);
-        setViewMode("month");
-    };
-
-    const navigateMonth = (direction: number) => {
-        const newDate = new Date(visibleDate.getFullYear(), visibleDate.getMonth() + direction, 1);
-        setVisibleDate(newDate);
-    };
-
-    const getDaysInMonth = (date: Date) => {
-        try {
-            if (!date || !(date instanceof Date) || isNaN(date.getTime())) {
-                date = new Date();
-            }
-            
-            const year = date.getFullYear();
-            const month = date.getMonth();
-            const firstDay = new Date(year, month, 1);
-            const lastDay = new Date(year, month + 1, 0);
-            const daysInMonth = lastDay.getDate();
-            const startingDayOfWeek = firstDay.getDay();
-
-            const days = [];
-
-            // Previous month's trailing days
-            const prevMonth = new Date(year, month - 1, 0);
-            for (let i = startingDayOfWeek - 1; i >= 0; i--) {
-                const dayDate = new Date(year, month - 1, prevMonth.getDate() - i);
-                dayDate.setHours(0, 0, 0, 0);
-                days.push({
-                    date: dayDate,
-                    isCurrentMonth: false,
-                    isToday: false,
-                    isSelected: false,
-                    isPast: false
-                });
-            }
-
-            // Current month days
-            for (let day = 1; day <= daysInMonth; day++) {
-                const currentDate = new Date(year, month, day);
-                currentDate.setHours(0, 0, 0, 0);
-                const isToday = new Date().toDateString() === currentDate.toDateString();
-                const isSelected = date && currentDate.toDateString() === date.toDateString();
-
-                days.push({
-                    date: currentDate,
-                    isCurrentMonth: true,
-                    isToday,
-                    isSelected,
-                    isPast: false
-                });
-            }
-
-            // Next month's leading days
-            const remainingDays = 42 - days.length;
-            for (let day = 1; day <= remainingDays; day++) {
-                const dayDate = new Date(year, month + 1, day);
-                dayDate.setHours(0, 0, 0, 0);
-                days.push({
-                    date: dayDate,
-                    isCurrentMonth: false,
-                    isToday: false,
-                    isSelected: false,
-                    isPast: false
-                });
-            }
-
-            return days;
-        } catch (e) {
-            console.error('Error getting days in month:', e);
-            return [];
-        }
-    };
-
-    const renderDayView = () => {
-        try {
-            const days = getDaysInMonth(visibleDate);
-            if (!days || days.length === 0) {
-                return <div className="w-80 p-4 text-center text-muted-foreground">Error loading calendar</div>;
-            }
-            
-            const weekDays = ["Su", "Mo", "Tu", "We", "Th", "Fr", "Sa"];
-
-            return (
-                <div className="w-80">
-                    <div className="flex items-center justify-between mb-4">
-                        <Button
-                            variant="ghost"
-                            size="icon"
-                            className="h-8 w-8"
-                            onClick={() => navigateMonth(-1)}
-                        >
-                            <ChevronLeft className="h-4 w-4" />
-                        </Button>
-
-                        <div className="flex items-center gap-2">
-                            <Button
-                                variant="ghost"
-                                className="font-semibold text-sm"
-                                onClick={() => setViewMode("month")}
-                            >
-                                {monthNames[visibleDate.getMonth()]}
-                                <ChevronDown className="ml-1 h-3 w-3" />
-                            </Button>
-                            <Button
-                                variant="ghost"
-                                className="font-semibold text-sm"
-                                onClick={() => setViewMode("year")}
-                            >
-                                {visibleDate.getFullYear()}
-                                <ChevronDown className="ml-1 h-3 w-3" />
-                            </Button>
-                        </div>
-
-                        <Button
-                            variant="ghost"
-                            size="icon"
-                            className="h-8 w-8"
-                            onClick={() => navigateMonth(1)}
-                        >
-                            <ChevronRight className="h-4 w-4" />
-                        </Button>
-                    </div>
-
-                    <div className="grid grid-cols-7 gap-1 mb-2">
-                        {weekDays.map((day) => (
-                            <div key={day} className="h-8 flex items-center justify-center text-xs font-medium text-muted-foreground">
-                                {day}
-                            </div>
-                        ))}
-                    </div>
-
-                    <div className="grid grid-cols-7 gap-1">
-                        {days.map((day, index) => (
-                            <Button
-                                key={index}
-                                variant="ghost"
-                                size="icon"
-                                disabled={day.isPast}
-                                className={cn(
-                                    "h-8 w-8 text-sm font-normal",
-                                    !day.isCurrentMonth && "text-muted-foreground opacity-50",
-                                    day.isToday && "bg-accent text-accent-foreground font-semibold",
-                                    day.isSelected && "bg-primary text-primary-foreground font-semibold",
-                                    day.isCurrentMonth && !day.isPast && "hover:bg-accent hover:text-accent-foreground",
-                                    day.isPast && "opacity-30 cursor-not-allowed text-muted-foreground"
-                                )}
-                                onClick={() => !day.isPast && handleDateSelect(day.date)}
-                            >
-                                {day.date.getDate()}
-                            </Button>
-                        ))}
-                    </div>
-                </div>
-            );
-        } catch (e) {
-            console.error('Error rendering day view:', e);
-            return <div className="w-80 p-4 text-center text-muted-foreground">Error loading calendar</div>;
-        }
-    };
-
-    const renderMonthView = () => {
-        return (
-            <div className="w-80">
-                <div className="flex items-center justify-between mb-4">
-                    <Button
-                        variant="ghost"
-                        size="icon"
-                        className="h-8 w-8"
-                        onClick={() => setViewMode("day")}
-                    >
-                        <ChevronLeft className="h-4 w-4" />
-                    </Button>
-                    <h3 className="font-semibold">{visibleDate.getFullYear()}</h3>
-                    <Button
-                        variant="ghost"
-                        className="font-semibold text-sm"
-                        onClick={() => setViewMode("year")}
-                    >
-                        {visibleDate.getFullYear()}
-                        <ChevronDown className="ml-1 h-3 w-3" />
-                    </Button>
-                </div>
-
-                <div className="grid grid-cols-3 gap-2">
-                    {monthNamesShort.map((month, index) => (
-                        <Button
-                            key={month}
-                            variant="ghost"
-                            className={cn(
-                                "h-10 text-sm font-normal",
-                                index === visibleDate.getMonth() && "bg-primary text-primary-foreground font-semibold"
-                            )}
-                            onClick={() => handleMonthSelect(index)}
-                        >
-                            {month}
-                        </Button>
-                    ))}
-                </div>
-            </div>
-        );
-    };
-
-    const renderYearView = () => {
-        const currentYear = visibleDate.getFullYear();
-        const startYear = Math.floor(currentYear / 12) * 12;
-        const years = Array.from({ length: 12 }, (_, i) => startYear + i);
-
-        return (
-            <div className="w-80">
-                <div className="flex items-center justify-between mb-4">
-                    <Button
-                        variant="ghost"
-                        size="icon"
-                        className="h-8 w-8"
-                        onClick={() => {
-                            const newStartYear = startYear - 12;
-                            setVisibleDate(new Date(newStartYear, visibleDate.getMonth(), 1));
-                        }}
-                    >
-                        <ChevronLeft className="h-4 w-4" />
-                    </Button>
-                    <h3 className="font-semibold">{startYear} - {startYear + 11}</h3>
-                    <Button
-                        variant="ghost"
-                        size="icon"
-                        className="h-8 w-8"
-                        onClick={() => {
-                            const newStartYear = startYear + 12;
-                            setVisibleDate(new Date(newStartYear, visibleDate.getMonth(), 1));
-                        }}
-                    >
-                        <ChevronRight className="h-4 w-4" />
-                    </Button>
-                </div>
-
-                <div className="grid grid-cols-3 gap-2">
-                    {years.map((year) => (
-                        <Button
-                            key={year}
-                            variant="ghost"
-                            className={cn(
-                                "h-10 text-sm font-normal",
-                                year === currentYear && "bg-primary text-primary-foreground font-semibold"
-                            )}
-                            onClick={() => handleYearSelect(year)}
-                        >
-                            {year}
-                        </Button>
-                    ))}
-                </div>
-            </div>
-        );
-    };
-
-    return (
-        <Popover open={isOpen} onOpenChange={setIsOpen}>
-            <PopoverTrigger asChild>
-                <Button
-                    variant="outline"
-                    disabled={disabled}
-                    className={cn(
-                        "w-full justify-start text-left font-normal flex h-10 rounded-md border border-input px-3 py-2 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50 hover:bg-white",
-                        !date && "text-muted-foreground"
-                    )}
-                >
-                    <CalendarIcon className="mr-2 h-4 w-4" />
-                    {date ? formatDisplayDate(date) : <span>Pick a date</span>}
-                </Button>
-            </PopoverTrigger>
-            <PopoverContent className="w-auto p-4 shadow-lg border rounded-lg z-[9999]" align="start" side="bottom" sideOffset={4}>
-                {viewMode === "day" && renderDayView()}
-                {viewMode === "month" && renderMonthView()}
-                {viewMode === "year" && renderYearView()}
-            </PopoverContent>
-        </Popover>
-    );
-}
+export default WarrantyService;

@@ -18,6 +18,7 @@ interface DataTablePaginationProps {
     onPageChange: (page: number) => void;
     onItemsPerPageChange: (items: number) => void;
     options?: number[];
+    showRowsPerPage?: boolean;
 }
 
 export function DataTablePagination({
@@ -27,33 +28,36 @@ export function DataTablePagination({
     itemsPerPage,
     onPageChange,
     onItemsPerPageChange,
-    options = [10, 15, 30, 50]
+    options = [10, 15, 30, 50],
+    showRowsPerPage = true
 }: DataTablePaginationProps) {
     return (
-        <div className="flex flex-col sm:flex-row justify-between items-center px-1 mt-4 gap-4">
+        <div className="flex flex-col sm:flex-row justify-between items-center px-1 mt-2 gap-4">
             <div className="flex items-center gap-4 order-2 sm:order-1">
                 <div className="text-sm text-muted-foreground">
                     Showing {totalItems === 0 ? 0 : (currentPage - 1) * itemsPerPage + 1} to {Math.min(currentPage * itemsPerPage, totalItems)} of {totalItems} entries
                 </div>
-                <div className="flex items-center gap-2">
-                    <Label className="text-xs whitespace-nowrap">Rows per page:</Label>
-                    <Select
-                        value={itemsPerPage.toString()}
-                        onValueChange={(val) => {
-                            onItemsPerPageChange(parseInt(val));
-                            onPageChange(1);
-                        }}
-                    >
-                        <SelectTrigger className="h-8 w-[70px]">
-                            <SelectValue placeholder={itemsPerPage.toString()} />
-                        </SelectTrigger>
-                        <SelectContent>
-                            {options.map(opt => (
-                                <SelectItem key={opt} value={opt.toString()}>{opt}</SelectItem>
-                            ))}
-                        </SelectContent>
-                    </Select>
-                </div>
+                {showRowsPerPage && (
+                    <div className="flex items-center gap-2">
+                        <Label className="text-xs whitespace-nowrap">Rows per page:</Label>
+                        <Select
+                            value={itemsPerPage.toString()}
+                            onValueChange={(val) => {
+                                onItemsPerPageChange(parseInt(val));
+                                onPageChange(1);
+                            }}
+                        >
+                            <SelectTrigger className="h-8 w-[70px]">
+                                <SelectValue placeholder={itemsPerPage.toString()} />
+                            </SelectTrigger>
+                            <SelectContent>
+                                {options.map(opt => (
+                                    <SelectItem key={opt} value={opt.toString()}>{opt}</SelectItem>
+                                ))}
+                            </SelectContent>
+                        </Select>
+                    </div>
+                )}
             </div>
             <div className="flex gap-2 order-1 sm:order-2">
                 <Button

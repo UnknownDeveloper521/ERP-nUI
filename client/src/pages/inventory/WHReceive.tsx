@@ -33,10 +33,13 @@ import {
 } from "@/components/ui/command";
 import { Badge } from "@/components/ui/badge";
 import { Checkbox } from "@/components/ui/checkbox";
-import { Search, ChevronLeft, ChevronRight, ChevronsUpDown, Check, Eye } from "lucide-react";
+import { Search, ChevronLeft, ChevronRight, ChevronsUpDown, Check } from "lucide-react";
 import { DataTablePagination } from "@/components/shared/DataTablePagination";
+import { TableActionButtons } from "@/components/shared/TableActionButtons";
 import { useToast } from "@/hooks/use-toast";
 import { cn } from "@/lib/utils";
+import { AppListToolbar } from "@/components/shared/AppListToolbar";
+import { SearchableSelect } from "@/components/shared/SearchableSelect";
 import { 
   mockReleaseRecords, 
   updateReleaseRecord, 
@@ -76,82 +79,7 @@ const formatDate = (date: Date | string): string => {
 const WAREHOUSES = ["Jinja WH"];
 const WORK_CENTERS = ["Lead Furnace Center", "Plastic Casing Center", "Grid Generation Center", "Assembly Line"];
 
-// ============================================================================
-// SEARCHABLE SELECT COMPONENT
-// ============================================================================
-
-interface SearchableSelectProps {
-    label?: string;
-    value?: string;
-    options: string[];
-    onChange: (val: string) => void;
-    placeholder?: string;
-    required?: boolean;
-    disabled?: boolean;
-}
-
-function SearchableSelect({ label, value, options, onChange, placeholder, required = false, disabled = false }: SearchableSelectProps) {
-    const [open, setOpen] = useState(false);
-
-    return (
-        <div className="space-y-2">
-            {label && <Label className="text-xs font-medium text-muted-foreground uppercase tracking-wider">{label}{required && <span className="text-red-500 ml-1">*</span>}</Label>}
-            <Popover open={open} onOpenChange={setOpen}>
-                <PopoverTrigger asChild>
-                    <Button
-                        variant="outline"
-                        role="combobox"
-                        aria-expanded={open}
-                        disabled={disabled}
-                        className="w-full justify-between h-10 font-normal border-input"
-                    >
-                        <span className={cn(!value && "text-muted-foreground")}>
-                            {value || placeholder || `Select ${label}`}
-                        </span>
-                        <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
-                    </Button>
-                </PopoverTrigger>
-                <PopoverContent className="w-[var(--radix-popover-trigger-width)] p-0" align="start">
-                    <Command>
-                        <CommandInputBorderless placeholder={`Search...`} className="h-9" />
-                        <CommandList className="max-h-[200px] overflow-y-auto">
-                            <CommandEmpty>No results found.</CommandEmpty>
-                            <CommandGroup>
-                                {!required && (
-                                    <CommandItem
-                                        value=""
-                                        onSelect={() => {
-                                            onChange("");
-                                            setOpen(false);
-                                        }}
-                                        className="cursor-pointer"
-                                    >
-                                        <Check className={cn("mr-2 h-4 w-4", !value ? "opacity-100" : "opacity-0")} />
-                                        All
-                                    </CommandItem>
-                                )}
-                                {options.map((item) => (
-                                    <CommandItem
-                                        key={item}
-                                        value={item}
-                                        onSelect={() => {
-                                            onChange(item);
-                                            setOpen(false);
-                                        }}
-                                        className="cursor-pointer"
-                                    >
-                                        <Check className={cn("mr-2 h-4 w-4", value === item ? "opacity-100" : "opacity-0")} />
-                                        {item}
-                                    </CommandItem>
-                                ))}
-                            </CommandGroup>
-                        </CommandList>
-                    </Command>
-                </PopoverContent>
-            </Popover>
-        </div>
-    );
-}
+// Local SearchableSelect removed in favor of shared component
 
 // ============================================================================
 // MAIN COMPONENT
@@ -162,8 +90,8 @@ export default function WHReceive() {
 
     const [whReceives, setWhReceives] = useState<OperationRelease[]>(mockReleaseRecords);
     const [searchTerm, setSearchTerm] = useState("");
-    const [warehouseFilter, setWarehouseFilter] = useState("");
-    const [workCenterFilter, setWorkCenterFilter] = useState("");
+    const [warehouseFilter, setWarehouseFilter] = useState("all");
+    const [workCenterFilter, setWorkCenterFilter] = useState("all");
     const [statusFilter, setStatusFilter] = useState("Issued to Warehouse"); // Default to Issued to Warehouse
     const [currentPage, setCurrentPage] = useState(1);
     // Pagination state - using DataTablePagination component
@@ -177,9 +105,9 @@ export default function WHReceive() {
     const filteredWHReceives = whReceives.filter(whr => {
         const matchesSearch = whr.releaseNo.toLowerCase().includes(searchTerm.toLowerCase()) ||
             whr.operation.toLowerCase().includes(searchTerm.toLowerCase());
-        const matchesWarehouse = !warehouseFilter || whr.warehouse === warehouseFilter;
-        const matchesWorkCenter = !workCenterFilter || whr.workCenter === workCenterFilter;
-        const matchesStatus = !statusFilter || whr.status === statusFilter;
+        const matchesWarehouse = warehouseFilter === "all" || whr.warehouse === warehouseFilter;
+        const matchesWorkCenter = workCenterFilter === "all" || whr.workCenter === workCenterFilter;
+        const matchesStatus = statusFilter === "all" || whr.status === statusFilter;
 
         return matchesSearch && matchesWarehouse && matchesWorkCenter && matchesStatus;
     });
@@ -249,50 +177,39 @@ export default function WHReceive() {
     return (
         <div className="flex flex-col gap-6">
             {/* Filter Section */}
-            <div className="flex flex-col sm:flex-row items-end gap-4 bg-card p-4 rounded-lg border shadow-sm">
-                <div className="w-full sm:w-1/4">
-                    <Label className="text-xs font-medium text-muted-foreground uppercase tracking-wider mb-1.5 block">Search</Label>
-                    <div className="relative">
-                        <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
-                        <Input
-                            placeholder="Search Release No, Operation, Work Center..."
-                            className="pl-9 h-10"
-                            value={searchTerm}
-                            onChange={(e) => setSearchTerm(e.target.value)}
-                        />
-                    </div>
-                </div>
-
-                <div className="w-full sm:w-1/4">
-                    <SearchableSelect
-                        label="Work Center"
-                        options={WORK_CENTERS}
-                        value={workCenterFilter}
-                        onChange={setWorkCenterFilter}
-                        placeholder="Select Work Center"
-                    />
-                </div>
-
-                <div className="w-full sm:w-1/4">
-                    <SearchableSelect
-                        label="Warehouse"
-                        options={WAREHOUSES}
-                        value={warehouseFilter}
-                        onChange={setWarehouseFilter}
-                        placeholder="Select Warehouse"
-                    />
-                </div>
-
-                <div className="w-full sm:w-1/4">
-                    <SearchableSelect
-                        label="Status"
-                        options={["Issued to Warehouse", "Received By Warehouse"]}
-                        value={statusFilter}
-                        onChange={setStatusFilter}
-                        placeholder="Select Status"
-                    />
-                </div>
-            </div>
+            <AppListToolbar
+                search={{
+                    value: searchTerm,
+                    onChange: setSearchTerm,
+                    placeholder: "Search Release No, Operation, Work Center..."
+                }}
+                filters={[
+                    {
+                        type: 'select',
+                        label: 'Work Center',
+                        value: workCenterFilter,
+                        options: [{ label: "All Work Centers", value: "all" }, ...WORK_CENTERS],
+                        onChange: setWorkCenterFilter,
+                        searchable: true
+                    },
+                    {
+                        type: 'select',
+                        label: 'Warehouse',
+                        value: warehouseFilter,
+                        options: [{ label: "All Warehouses", value: "all" }, ...WAREHOUSES],
+                        onChange: setWarehouseFilter,
+                        searchable: true
+                    },
+                    {
+                        type: 'select',
+                        label: 'Status',
+                        value: statusFilter,
+                        options: [{ label: "All Status", value: "all" }, "Issued to Warehouse", "Received By Warehouse"],
+                        onChange: setStatusFilter,
+                        searchable: true
+                    }
+                ]}
+            />
 
             {/* Listing Table */}
             <Card>
@@ -307,13 +224,13 @@ export default function WHReceive() {
                                     <TableHead className="font-semibold text-xs uppercase tracking-wider">WORK CENTER</TableHead>
                                     <TableHead className="font-semibold text-xs uppercase tracking-wider">WAREHOUSE</TableHead>
                                     <TableHead className="font-semibold text-xs uppercase tracking-wider">STATUS</TableHead>
-                                    <TableHead className="text-right font-semibold text-xs uppercase tracking-wider pr-6">ACTION</TableHead>
+                                    <TableHead className="text-center w-[100px]">Actions</TableHead>
                                 </TableRow>
                             </TableHeader>
                             <TableBody>
                                 {paginatedWHReceives.length === 0 ? (
                                     <TableRow>
-                                        <TableCell colSpan={8} className="h-32 text-center text-muted-foreground">
+                                        <TableCell colSpan={7} className="h-32 text-center text-muted-foreground">
                                             No warehouse receipts found.
                                         </TableCell>
                                     </TableRow>
@@ -337,15 +254,10 @@ export default function WHReceive() {
                                                     {whr.status}
                                                 </Badge>
                                             </TableCell>
-                                            <TableCell className="text-right pr-6">
-                                                <Button
-                                                    variant="ghost"
-                                                    size="icon"
-                                                    className="h-8 w-8"
-                                                    onClick={() => handleView(whr)}
-                                                >
-                                                    <Eye className="h-4 w-4" />
-                                                </Button>
+                                            <TableCell className="text-center">
+                                                <TableActionButtons
+                                                    onView={() => handleView(whr)}
+                                                />
                                             </TableCell>
                                         </TableRow>
                                     ))
@@ -435,18 +347,20 @@ export default function WHReceive() {
                                         // ✅ ADDED: Group items by itemName (frontend-only grouping)
                                         try {
                                             const itemsMap = new Map<string, {
+                                                itemCode: string;
                                                 itemName: string;
                                                 uom: string;
                                                 qtyProduced: number;
                                             }>();
 
                                             selectedWHReceive.items.forEach(item => {
-                                                const key = `${item.itemName}-${item.uom}`;
+                                                const key = `${item.itemCode}-${item.itemName}-${item.uom}`;
                                                 if (itemsMap.has(key)) {
                                                     const existing = itemsMap.get(key)!;
                                                     existing.qtyProduced += item.qtyProduced;
                                                 } else {
                                                     itemsMap.set(key, {
+                                                        itemCode: item.itemCode,
                                                         itemName: item.itemName,
                                                         uom: item.uom,
                                                         qtyProduced: item.qtyProduced,
@@ -471,17 +385,22 @@ export default function WHReceive() {
                                                     <Table>
                                                         <TableHeader>
                                                             <TableRow className="bg-muted/30 hover:bg-muted/30">
-                                                                <TableHead className="text-[10px] uppercase font-bold">Item</TableHead>
+                                                                <TableHead className="text-[10px] uppercase font-bold pl-4">Item</TableHead>
                                                                 <TableHead className="text-[10px] uppercase font-bold">UOM</TableHead>
-                                                                <TableHead className="text-[10px] uppercase font-bold text-right">Received Qty</TableHead>
+                                                                <TableHead className="text-[10px] uppercase font-bold text-right pr-4">Received Qty</TableHead>
                                                             </TableRow>
                                                         </TableHeader>
                                                         <TableBody>
                                                             {groupedItems.map((groupedItem, index) => (
                                                                 <TableRow key={index}>
-                                                                    <TableCell className="font-medium">{groupedItem.itemName}</TableCell>
-                                                                    <TableCell>{groupedItem.uom}</TableCell>
-                                                                    <TableCell className="text-right font-medium text-primary">{groupedItem.qtyProduced}</TableCell>
+                                                                    <TableCell className="py-3 pl-4">
+                                                                        <div className="flex flex-col">
+                                                                            <span className="font-bold text-xs text-primary">{groupedItem.itemCode}</span>
+                                                                            <span className="text-[10px] text-slate-500 font-medium">{groupedItem.itemName}</span>
+                                                                        </div>
+                                                                    </TableCell>
+                                                                    <TableCell className="text-xs">{groupedItem.uom}</TableCell>
+                                                                    <TableCell className="text-right font-bold text-xs text-primary pr-4">{groupedItem.qtyProduced}</TableCell>
                                                                 </TableRow>
                                                             ))}
                                                         </TableBody>

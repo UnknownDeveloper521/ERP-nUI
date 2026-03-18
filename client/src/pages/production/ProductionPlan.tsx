@@ -46,8 +46,6 @@ import { cn } from "@/lib/utils";
 import {
     Plus,
     Search,
-    Eye,
-    Pencil,
     Trash2,
     ChevronLeft,
     ChevronRight,
@@ -58,12 +56,22 @@ import {
     X
 } from "lucide-react";
 import { DataTablePagination } from "@/components/shared/DataTablePagination";
+import { TableActionButtons } from "@/components/shared/TableActionButtons";
+import { AppListToolbar, FilterField } from "@/components/shared/AppListToolbar";
 import { parse, isValid } from "date-fns";
 
 
 // ============================================================================
 // TYPE DEFINITIONS
 // ============================================================================
+
+interface FGItem {
+    id?: string;
+    code: string;
+    name: string;
+    type?: string;
+    uom?: string;
+}
 
 interface DailyFGPlan {
     id: number;
@@ -177,7 +185,7 @@ interface SearchableSelectProps {
     disabled?: boolean;
 }
 
-function SearchableSelect({
+function LocalSearchableSelect({
     label,
     value,
     options,
@@ -257,8 +265,8 @@ export default function ProductionPlan() {
 
     // Table State
     const [searchTerm, setSearchTerm] = useState("");
-    const [opFilter, setOpFilter] = useState("All");
-    const [shiftFilter, setShiftFilter] = useState("All");
+    const [opFilter, setOpFilter] = useState("all");
+    const [shiftFilter, setShiftFilter] = useState("all");
     const [filterDate, setFilterDate] = useState("");
     const [currentPage, setCurrentPage] = useState(1);
     // Pagination state - using DataTablePagination component
@@ -283,8 +291,8 @@ export default function ProductionPlan() {
     // Filtering
     const filteredPlans = plans.filter(p => {
         const matchesSearch = p.planCode.toLowerCase().includes(searchTerm.toLowerCase());
-        const matchesOp = opFilter === "All" || p.operationName === opFilter;
-        const matchesShift = shiftFilter === "All" || p.shift === shiftFilter;
+        const matchesOp = opFilter === "all" || p.operationName === opFilter;
+        const matchesShift = shiftFilter === "all" || p.shift === shiftFilter;
         const matchesDate = !filterDate || p.planDate === filterDate;
         return matchesSearch && matchesOp && matchesShift && matchesDate;
     });
@@ -436,81 +444,57 @@ export default function ProductionPlan() {
             {/* DAILY FG PLAN CONTENT */}
             <div className="flex-1 flex flex-col gap-6">
                 {/* Search Section with Filters and Create Button - MATCHING MATERIAL OPERATION STYLE */}
-                <div className="flex flex-col sm:flex-row items-end gap-4 bg-card p-4 rounded-lg border shadow-sm">
-                    <div className="w-full sm:flex-1">
-                        <Label className="mb-1.5 block text-xs font-medium text-muted-foreground uppercase tracking-wider">Search</Label>
-                        <div className="relative">
-                            <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
-                            <Input
-                                placeholder="Search code..."
-                                className="pl-9 h-10"
-                                value={searchTerm}
-                                onChange={(e) => {
-                                    setSearchTerm(e.target.value);
-                                    setCurrentPage(1);
-                                }}
-                            />
-                        </div>
-                    </div>
-                    <div className="w-full sm:w-48">
-                        <SearchableSelect
-                            label="Operation"
-                            options={["All", ...MOCK_OPERATIONS.map(o => o.name)]}
-                            value={opFilter}
-                            onChange={(val) => {
+                <AppListToolbar
+                    search={{
+                        value: searchTerm,
+                        onChange: (val) => {
+                            setSearchTerm(val);
+                            setCurrentPage(1);
+                        },
+                        placeholder: "Search code..."
+                    }}
+                    filters={[
+                        {
+                            type: 'select',
+                            label: 'Operation',
+                            value: opFilter,
+                            options: [{ label: "All Operations", value: "all" }, ...MOCK_OPERATIONS.map(o => o.name)],
+                            onChange: (val) => {
                                 setOpFilter(val);
                                 setCurrentPage(1);
-                            }}
-                        />
-                    </div>
-                    <div className="w-full sm:w-48">
-                        <SearchableSelect
-                            label="Shift"
-                            options={["All", "Morning", "Night"]}
-                            value={shiftFilter}
-                            onChange={(val) => {
+                            },
+                            searchable: true
+                        },
+                        {
+                            type: 'select',
+                            label: 'Shift',
+                            value: shiftFilter,
+                            options: [{ label: "All Shifts", value: "all" }, "Morning", "Night"],
+                            onChange: (val) => {
                                 setShiftFilter(val);
                                 setCurrentPage(1);
-                            }}
-                        />
-                    </div>
-                    <div className="w-full sm:w-48">
-                        <Label className="mb-1.5 block text-[10px] font-bold text-muted-foreground uppercase tracking-wider">Date Filter</Label>
-                        <div className="flex gap-2">
-                            <div className="flex-1">
-                                <DatePicker
-                                    date={filterDate ? parseDateString(filterDate) : undefined}
-                                    setDate={(date) => {
-                                        setFilterDate(date ? format(date, "dd-MM-yyyy") : "");
-                                        setCurrentPage(1);
-                                    }}
-                                />
-                            </div>
-                            {filterDate && (
-                                <Button
-                                    variant="ghost"
-                                    size="icon"
-                                    onClick={() => {
-                                        setFilterDate("");
-                                        setCurrentPage(1);
-                                    }}
-                                    className="h-10 w-10 shrink-0 border border-input hover:bg-muted"
-                                    title="Reset date filter"
-                                >
-                                    <X className="h-4 w-4" />
-                                </Button>
-                            )}
-                        </div>
-                    </div>
-
-
-                    <div className="w-full sm:w-auto">
-                        <Button onClick={handleCreatePlan} className="w-full sm:w-auto h-10">
-                            <Plus className="mr-2 h-4 w-4" />
-                            Create Plan
-                        </Button>
-                    </div>
-                </div>
+                            },
+                            searchable: true
+                        },
+                        {
+                            type: 'date',
+                            label: 'Date Filter',
+                            value: filterDate ? parseDateString(filterDate) : undefined,
+                            onChange: (date) => {
+                                setFilterDate(date ? format(date, "dd-MM-yyyy") : "");
+                                setCurrentPage(1);
+                            },
+                            showClear: true
+                        }
+                    ]}
+                    actions={[
+                        {
+                            label: "Create Plan",
+                            icon: <Plus className="h-4 w-4" />,
+                            onClick: handleCreatePlan
+                        }
+                    ]}
+                />
 
                 <Card>
                     <CardContent className="pt-6">
@@ -523,7 +507,7 @@ export default function ProductionPlan() {
                                         <TableHead>Operation</TableHead>
 
                                         <TableHead>Shift</TableHead>
-                                        <TableHead className="text-right pr-6">Action</TableHead>
+                                        <TableHead className="text-center font-bold text-[11px] tracking-wider py-4">Actions</TableHead>
                                     </TableRow>
                                 </TableHeader>
                                 <TableBody>
@@ -546,15 +530,11 @@ export default function ProductionPlan() {
                                                         {plan.shift}
                                                     </Badge>
                                                 </TableCell>
-                                                <TableCell className="text-right pr-6">
-                                                    <div className="flex justify-end gap-1">
-                                                        <Button variant="ghost" size="sm" className="h-8 w-8 text-muted-foreground hover:text-primary hover:bg-primary/5" onClick={() => handleViewPlan(plan.id)}>
-                                                            <Eye className="h-4 w-4" />
-                                                        </Button>
-                                                        <Button variant="ghost" size="sm" className="h-8 w-8 text-muted-foreground hover:text-primary hover:bg-primary/5" onClick={() => handleEditPlan(plan.id)}>
-                                                            <Pencil className="h-4 w-4" />
-                                                        </Button>
-                                                    </div>
+                                                <TableCell className="text-center py-4">
+                                                    <TableActionButtons
+                                                        onView={() => handleViewPlan(plan.id)}
+                                                        onEdit={() => handleEditPlan(plan.id)}
+                                                    />
                                                 </TableCell>
                                             </TableRow>
                                         ))
@@ -613,7 +593,7 @@ export default function ProductionPlan() {
                                 )}
                                 <div className="space-y-1">
                                     <Label className="text-[10px] uppercase font-bold text-muted-foreground block tracking-wider">Plan Date <span className="text-red-500">*</span></Label>
-                                    <DatePicker
+                                    <LocalDatePicker
                                         date={formDate ? parseDateString(formDate) : undefined}
                                         setDate={(date) => setFormDate(date ? format(date, "dd-MM-yyyy") : "")}
                                         disabled={dialogMode === "view"}
@@ -781,9 +761,9 @@ export default function ProductionPlan() {
     );
 }
 
-// --- Reusable Premium DatePicker Component (Replicated from LeaveManagement.tsx) ---
+// --- Reusable Premium LocalDatePicker Component (Replicated from LeaveManagement.tsx) ---
 
-function DatePicker({ date, setDate, disabled = false, minDate }: {
+function LocalDatePicker({ date, setDate, disabled = false, minDate }: {
     date?: Date,
     setDate: (d?: Date) => void,
     disabled?: boolean,

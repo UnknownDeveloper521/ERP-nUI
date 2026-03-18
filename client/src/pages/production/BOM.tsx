@@ -1,4 +1,5 @@
 import { useState, useEffect } from "react";
+import { format, parse, isValid } from "date-fns";
 import { useLocation, useRoute } from "wouter";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -20,8 +21,10 @@ import {
     SelectValue,
 } from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
-import { Plus, Search, Eye, Pencil, ChevronLeft, ChevronRight, ChevronsUpDown, Check, Trash2 } from "lucide-react";
+import { Plus, Search, ChevronLeft, ChevronRight, ChevronsUpDown, Check, Trash2, Calendar as CalendarIcon, ChevronDown, X } from "lucide-react";
 import { DataTablePagination } from "@/components/shared/DataTablePagination";
+import { TableActionButtons } from "@/components/shared/TableActionButtons";
+import { AppListToolbar, FilterField } from "@/components/shared/AppListToolbar";
 import { useToast } from "@/hooks/use-toast";
 import { cn } from "@/lib/utils";
 import {
@@ -45,6 +48,16 @@ import {
     DialogHeader,
     DialogTitle,
 } from "@/components/ui/dialog";
+import {
+    AlertDialog,
+    AlertDialogAction,
+    AlertDialogCancel,
+    AlertDialogContent,
+    AlertDialogDescription,
+    AlertDialogFooter,
+    AlertDialogHeader,
+    AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 
 // ============================================================================
 // HELPERS & MOCK DATA
@@ -102,6 +115,348 @@ const MOCK_OPERATIONS = [
     }
 ];
 
+const parseDateString = (dateStr: string): Date => {
+    if (!dateStr) return new Date();
+    // Try DD-MM-YYYY first
+    let parsed = parse(dateStr, "dd-MM-yyyy", new Date());
+    if (isValid(parsed)) return parsed;
+    // Fallback to YYYY-MM-DD
+    parsed = parse(dateStr, "yyyy-MM-dd", new Date());
+    if (isValid(parsed)) return parsed;
+    return new Date(dateStr);
+};
+
+// ============================================================================
+// REUSABLE COMPONENTS
+// ============================================================================
+
+// ============================================================================
+// LOCAL HELPER COMPONENTS (Used in Dialogs)
+// ============================================================================
+
+function BOMDatePicker({ date, setDate, disabled = false, minDate }: {
+    date?: Date,
+    setDate: (d?: Date) => void,
+    disabled?: boolean,
+    minDate?: Date
+}) {
+    const [isOpen, setIsOpen] = useState(false);
+    const [viewMode, setViewMode] = useState<"day" | "month" | "year">("day");
+    const [visibleDate, setVisibleDate] = useState(() => date || new Date());
+
+    const monthNames = [
+        "January", "February", "March", "April", "May", "June",
+        "July", "August", "September", "October", "November", "December"
+    ];
+
+    const monthNamesShort = [
+        "Jan", "Feb", "Mar", "Apr", "May", "Jun",
+        "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"
+    ];
+
+    const formatDisplayDate = (date: Date | undefined) => {
+        if (!date) return "Pick a date";
+        try {
+            return format(date, "dd-MM-yyyy");
+        } catch (error) {
+            return "Pick a date";
+        }
+    };
+
+    const handleDateSelect = (selectedDate: Date) => {
+        const selected = new Date(selectedDate);
+        selected.setHours(0, 0, 0, 0);
+
+        let isBeforeMinDate = false;
+        if (minDate) {
+            const minimumDate = new Date(minDate);
+            minimumDate.setHours(0, 0, 0, 0);
+            isBeforeMinDate = selected < minimumDate;
+        }
+
+        if (!isBeforeMinDate) {
+            setDate(selectedDate);
+            setIsOpen(false);
+            setViewMode("day");
+        }
+    };
+
+    const handleMonthSelect = (monthIndex: number) => {
+        const newDate = new Date(visibleDate.getFullYear(), monthIndex, 1);
+        setVisibleDate(newDate);
+        setViewMode("day");
+    };
+
+    const handleYearSelect = (year: number) => {
+        const newDate = new Date(year, visibleDate.getMonth(), 1);
+        setVisibleDate(newDate);
+        setViewMode("month");
+    };
+
+    const navigateMonth = (direction: number) => {
+        const newDate = new Date(visibleDate.getFullYear(), visibleDate.getMonth() + direction, 1);
+        setVisibleDate(newDate);
+    };
+
+    const getDaysInMonth = (date: Date) => {
+        const year = date.getFullYear();
+        const month = date.getMonth();
+        const firstDay = new Date(year, month, 1);
+        const lastDay = new Date(year, month + 1, 0);
+        const daysInMonth = lastDay.getDate();
+        const startingDayOfWeek = firstDay.getDay();
+
+        const days = [];
+        let minimumDate: Date | null = null;
+        if (minDate) {
+            minimumDate = new Date(minDate);
+            minimumDate.setHours(0, 0, 0, 0);
+        }
+
+        // Previous month's trailing days
+        const prevMonth = new Date(year, month - 1, 0);
+        for (let i = startingDayOfWeek - 1; i >= 0; i--) {
+            const dayDate = new Date(year, month - 1, prevMonth.getDate() - i);
+            dayDate.setHours(0, 0, 0, 0);
+            days.push({
+                date: dayDate,
+                isCurrentMonth: false,
+                isToday: false,
+                isSelected: false,
+                isPast: minimumDate ? dayDate < minimumDate : false
+            });
+        }
+
+        // Current month days
+        for (let day = 1; day <= daysInMonth; day++) {
+            const currentDate = new Date(year, month, day);
+            currentDate.setHours(0, 0, 0, 0);
+            const isToday = new Date().toDateString() === currentDate.toDateString();
+            const isSelected = date && currentDate.toDateString() === date.toDateString();
+            const isPast = minimumDate ? currentDate < minimumDate : false;
+
+            days.push({
+                date: currentDate,
+                isCurrentMonth: true,
+                isToday,
+                isSelected,
+                isPast: isPast
+            });
+        }
+
+        // Next month's leading days
+        const remainingDays = 42 - days.length;
+        for (let day = 1; day <= remainingDays; day++) {
+            const dayDate = new Date(year, month + 1, day);
+            dayDate.setHours(0, 0, 0, 0);
+            days.push({
+                date: dayDate,
+                isCurrentMonth: false,
+                isToday: false,
+                isSelected: false,
+                isPast: minimumDate ? dayDate < minimumDate : false
+            });
+        }
+
+        return days;
+    };
+
+    const renderDayView = () => {
+        const days = getDaysInMonth(visibleDate);
+        const weekDays = ["Su", "Mo", "Tu", "We", "Th", "Fr", "Sa"];
+
+        return (
+            <div className="w-80">
+                <div className="flex items-center justify-between mb-4">
+                    <Button
+                        variant="ghost"
+                        size="icon"
+                        className="h-8 w-8"
+                        onClick={() => navigateMonth(-1)}
+                    >
+                        <ChevronLeft className="h-4 w-4" />
+                    </Button>
+
+                    <div className="flex items-center gap-2">
+                        <Button
+                            variant="ghost"
+                            className="font-semibold text-sm"
+                            onClick={() => setViewMode("month")}
+                        >
+                            {monthNames[visibleDate.getMonth()]}
+                            <ChevronDown className="ml-1 h-3 w-3" />
+                        </Button>
+                        <Button
+                            variant="ghost"
+                            className="font-semibold text-sm"
+                            onClick={() => setViewMode("year")}
+                        >
+                            {visibleDate.getFullYear()}
+                            <ChevronDown className="ml-1 h-3 w-3" />
+                        </Button>
+                    </div>
+
+                    <Button
+                        variant="ghost"
+                        size="icon"
+                        className="h-8 w-8"
+                        onClick={() => navigateMonth(1)}
+                    >
+                        <ChevronRight className="h-4 w-4" />
+                    </Button>
+                </div>
+
+                <div className="grid grid-cols-7 gap-1 mb-2">
+                    {weekDays.map((day) => (
+                        <div key={day} className="h-8 flex items-center justify-center text-xs font-medium text-muted-foreground">
+                            {day}
+                        </div>
+                    ))}
+                </div>
+
+                <div className="grid grid-cols-7 gap-1">
+                    {days.map((day, index) => (
+                        <Button
+                            key={index}
+                            variant="ghost"
+                            size="icon"
+                            disabled={day.isPast}
+                            className={cn(
+                                "h-8 w-8 text-sm font-normal",
+                                !day.isCurrentMonth && "text-muted-foreground opacity-50",
+                                day.isToday && "bg-accent text-accent-foreground font-semibold",
+                                day.isSelected && "bg-primary text-primary-foreground font-semibold",
+                                day.isCurrentMonth && !day.isPast && "hover:bg-accent hover:text-accent-foreground",
+                                day.isPast && "opacity-30 cursor-not-allowed text-muted-foreground"
+                            )}
+                            onClick={() => !day.isPast && handleDateSelect(day.date)}
+                        >
+                            {day.date.getDate()}
+                        </Button>
+                    ))}
+                </div>
+            </div>
+        );
+    };
+
+    const renderMonthView = () => {
+        return (
+            <div className="w-80">
+                <div className="flex items-center justify-between mb-4">
+                    <Button
+                        variant="ghost"
+                        size="icon"
+                        className="h-8 w-8"
+                        onClick={() => setViewMode("day")}
+                    >
+                        <ChevronLeft className="h-4 w-4" />
+                    </Button>
+                    <h3 className="font-semibold">{visibleDate.getFullYear()}</h3>
+                    <Button
+                        variant="ghost"
+                        className="font-semibold text-sm"
+                        onClick={() => setViewMode("year")}
+                    >
+                        {visibleDate.getFullYear()}
+                        <ChevronDown className="ml-1 h-3 w-3" />
+                    </Button>
+                </div>
+
+                <div className="grid grid-cols-3 gap-2">
+                    {monthNamesShort.map((month, index) => (
+                        <Button
+                            key={month}
+                            variant="ghost"
+                            className={cn(
+                                "h-10 text-sm font-normal",
+                                index === visibleDate.getMonth() && "bg-primary text-primary-foreground font-semibold"
+                            )}
+                            onClick={() => handleMonthSelect(index)}
+                        >
+                            {month}
+                        </Button>
+                    ))}
+                </div>
+            </div>
+        );
+    };
+
+    const renderYearView = () => {
+        const currentYear = visibleDate.getFullYear();
+        const startYear = Math.floor(currentYear / 12) * 12;
+        const years = Array.from({ length: 12 }, (_, i) => startYear + i);
+
+        return (
+            <div className="w-80">
+                <div className="flex items-center justify-between mb-4">
+                    <Button
+                        variant="ghost"
+                        size="icon"
+                        className="h-8 w-8"
+                        onClick={() => {
+                            const newStartYear = startYear - 12;
+                            setVisibleDate(new Date(newStartYear, visibleDate.getMonth(), 1));
+                        }}
+                    >
+                        <ChevronLeft className="h-4 w-4" />
+                    </Button>
+                    <h3 className="font-semibold">{startYear} - {startYear + 11}</h3>
+                    <Button
+                        variant="ghost"
+                        size="icon"
+                        className="h-8 w-8"
+                        onClick={() => {
+                            const newStartYear = startYear + 12;
+                            setVisibleDate(new Date(newStartYear, visibleDate.getMonth(), 1));
+                        }}
+                    >
+                        <ChevronRight className="h-4 w-4" />
+                    </Button>
+                </div>
+
+                <div className="grid grid-cols-3 gap-2">
+                    {years.map((year) => (
+                        <Button
+                            key={year}
+                            variant="ghost"
+                            className={cn(
+                                "h-10 text-sm font-normal",
+                                year === currentYear && "bg-primary text-primary-foreground font-semibold"
+                            )}
+                            onClick={() => handleYearSelect(year)}
+                        >
+                            {year}
+                        </Button>
+                    ))}
+                </div>
+            </div>
+        );
+    };
+
+    return (
+        <Popover open={isOpen} onOpenChange={setIsOpen}>
+            <PopoverTrigger asChild>
+                <Button
+                    variant="outline"
+                    disabled={disabled}
+                    className={cn(
+                        "w-full justify-start text-left font-normal flex h-10 rounded-md border border-input px-3 py-2 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50",
+                        !date && "text-muted-foreground"
+                    )}
+                >
+                    <CalendarIcon className="mr-2 h-4 w-4" />
+                    {date ? formatDisplayDate(date) : <span>Pick a date</span>}
+                </Button>
+            </PopoverTrigger>
+            <PopoverContent className="w-auto p-4 shadow-lg border rounded-lg z-[9999]" align="start" side="bottom" sideOffset={4}>
+                {viewMode === "day" && renderDayView()}
+                {viewMode === "month" && renderMonthView()}
+                {viewMode === "year" && renderYearView()}
+            </PopoverContent>
+        </Popover>
+    );
+}
+
 // ============================================================================
 // SEARCHABLE SELECT COMPONENT
 // ============================================================================
@@ -116,7 +471,7 @@ interface SearchableSelectProps {
 }
 
 
-function SearchableSelect({
+function BOMSearchableSelect({
     label,
     value,
     options,
@@ -209,12 +564,35 @@ interface BOM2Record {
     components: any[];
 }
 
+interface BOMComponent {
+    item_id: string;
+    type: string;
+    quantity: number;
+    item?: {
+        id: string;
+        code: string;
+        name: string;
+        type: string;
+        uom: string;
+    };
+}
+
+interface BOMFormData {
+    id?: number;
+    bomCode?: string;
+    bomName: string;
+    bomDescription: string;
+    selectedItemId: string;
+    components: BOMComponent[];
+}
+
 export default function BOM() {
     const { toast } = useToast();
 
     // Listing State
     const [searchTerm, setSearchTerm] = useState("");
-    const [typeFilter, setTypeFilter] = useState("All");
+    const [typeFilter, setTypeFilter] = useState("all");
+    const [dateFilter, setDateFilter] = useState<Date | undefined>(undefined);
     const [currentPage, setCurrentPage] = useState(1);
     // Pagination state - using DataTablePagination component
     const [itemsPerPage, setItemsPerPage] = useState(10);
@@ -253,12 +631,14 @@ export default function BOM() {
     // Dialog State
     const [dialogOpen, setDialogOpen] = useState(false);
     const [dialogMode, setDialogMode] = useState<"create" | "view" | "edit">("view");
-    const [formData, setFormData] = useState<any>({
+    const [formData, setFormData] = useState<BOMFormData>({
         bomName: "",
         bomDescription: "",
         selectedItemId: "",
         components: []
     });
+
+    const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false);
 
     const handleCreateClick = () => {
         setDialogMode("create");
@@ -309,9 +689,9 @@ export default function BOM() {
                     ...input,
                     item: MOCK_ITEMS.find(i => i.id === input.item_id)
                 }));
-                setFormData(prev => ({ ...prev, components }));
+                setFormData((prev: BOMFormData) => ({ ...prev, components }));
             } else {
-                setFormData(prev => ({ ...prev, components: [] }));
+                setFormData((prev: BOMFormData) => ({ ...prev, components: [] }));
             }
         }
     }, [formData.selectedItemId, dialogMode]);
@@ -334,10 +714,10 @@ export default function BOM() {
                 createdAt: new Date().toISOString(),
                 components: formData.components
             };
-            setBomRecords(prev => [newRecord, ...prev]);
+            setBomRecords((prev: BOM2Record[]) => [newRecord, ...prev]);
             toast({ title: "Success", description: "BOM created successfully" });
         } else {
-            setBomRecords(prev => prev.map(r => r.id === formData.id ? {
+            setBomRecords((prev: BOM2Record[]) => prev.map(r => r.id === formData.id ? {
                 ...r,
                 bomName: formData.bomName,
                 description: formData.bomDescription,
@@ -349,9 +729,10 @@ export default function BOM() {
     };
 
     const handleDelete = () => {
-        setBomRecords(prev => prev.filter(r => r.id !== formData.id));
+        setBomRecords((prev: BOM2Record[]) => prev.filter(r => r.id !== formData.id));
         toast({ title: "Deleted", description: "BOM record removed", variant: "destructive" });
         setDialogOpen(false);
+        setIsDeleteDialogOpen(false);
     };
 
     const filteredData = bomRecords.filter((item) => {
@@ -359,8 +740,18 @@ export default function BOM() {
             item.bomCode.toLowerCase().includes(searchTerm.toLowerCase()) ||
             item.bomName.toLowerCase().includes(searchTerm.toLowerCase()) ||
             item.itemName.toLowerCase().includes(searchTerm.toLowerCase());
-        const matchesType = typeFilter === "All" || item.itemType === typeFilter;
-        return matchesSearch && matchesType;
+        const matchesType = typeFilter === "all" || item.itemType === typeFilter;
+
+        let matchesDate = true;
+        if (dateFilter) {
+            const recordDate = new Date(item.createdAt);
+            recordDate.setHours(0, 0, 0, 0);
+            const filterDate = new Date(dateFilter);
+            filterDate.setHours(0, 0, 0, 0);
+            matchesDate = recordDate.getTime() === filterDate.getTime();
+        }
+
+        return matchesSearch && matchesType && matchesDate;
     });
 
     const paginatedData = filteredData.slice(
@@ -380,43 +771,44 @@ export default function BOM() {
     // Reset to page 1 when filters change
     useEffect(() => {
         setCurrentPage(1);
-    }, [searchTerm, typeFilter]);
+    }, [searchTerm, typeFilter, dateFilter]);
 
     return (
         <div className="h-full flex flex-col gap-6 animate-in fade-in duration-500">
             <h1 className="text-3xl font-bold tracking-tight">BOM Management</h1>
 
             {/* Filters */}
-            <div className="flex flex-col sm:flex-row items-end gap-4 bg-card p-4 rounded-lg border shadow-sm">
-                <div className="w-full sm:flex-1">
-                    <Label className="mb-1.5 block text-[10px] font-bold text-muted-foreground uppercase tracking-wider">Search</Label>
-                    <div className="relative">
-                        <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
-                        <Input
-                            placeholder="Search by Code, Name or Item..."
-                            className="pl-9 h-10"
-                            value={searchTerm}
-                            onChange={(e) => setSearchTerm(e.target.value)}
-                        />
-                    </div>
-                </div>
-                <div className="w-full sm:w-64">
-                    <SearchableSelect
-                        label="Type Filter"
-                        value={typeFilter}
-                        options={[
-                            { id: "All", label: "All Items" },
-                            { id: "FG", label: "Finished Goods" },
-                            { id: "SFG", label: "Semi-Finished Goods" }
-                        ]}
-                        onChange={(val) => setTypeFilter(val)}
-                    />
-                </div>
-                <Button onClick={handleCreateClick} className="h-10">
-                    <Plus className="mr-2 h-4 w-4" />
-                    Create BOM
-                </Button>
-            </div>
+            <AppListToolbar
+                search={{
+                    value: searchTerm,
+                    onChange: setSearchTerm,
+                    placeholder: "Search by Code, Name or Item..."
+                }}
+                filters={[
+                    {
+                        type: 'select',
+                        label: 'Type Filter',
+                        value: typeFilter,
+                        options: [{ label: "All Types", value: "all" }, "FG", "SFG"],
+                        onChange: setTypeFilter,
+                        searchable: true
+                    },
+                    {
+                        type: 'date',
+                        label: 'Date',
+                        value: dateFilter,
+                        onChange: setDateFilter,
+                        showClear: true
+                    }
+                ]}
+                actions={[
+                    {
+                        label: "Create BOM",
+                        icon: <Plus className="h-4 w-4" />,
+                        onClick: handleCreateClick
+                    }
+                ]}
+            />
 
             {/* Table */}
             <Card>
@@ -429,7 +821,7 @@ export default function BOM() {
                                     <TableHead>BOM Name</TableHead>
                                     <TableHead>FG / SFG</TableHead>
                                     <TableHead>Created On</TableHead>
-                                    <TableHead className="text-right">Actions</TableHead>
+                                    <TableHead className="text-center font-bold text-[11px] tracking-wider py-4">Actions</TableHead>
                                 </TableRow>
                             </TableHeader>
                             <TableBody>
@@ -446,15 +838,11 @@ export default function BOM() {
                                             </div>
                                         </TableCell>
                                         <TableCell className="text-sm text-muted-foreground">{formatDate(item.createdAt)}</TableCell>
-                                        <TableCell className="text-right">
-                                            <div className="flex justify-end gap-1">
-                                                <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => handleViewClick(item)}>
-                                                    <Eye className="h-4 w-4" />
-                                                </Button>
-                                                <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => handleEditClick(item)}>
-                                                    <Pencil className="h-4 w-4" />
-                                                </Button>
-                                            </div>
+                                        <TableCell className="py-4 text-center">
+                                            <TableActionButtons
+                                                onView={() => handleViewClick(item)}
+                                                onEdit={() => handleEditClick(item)}
+                                            />
                                         </TableCell>
                                     </TableRow>
                                 ))}
@@ -495,11 +883,11 @@ export default function BOM() {
                                 <Input
                                     placeholder="Enter BOM Name"
                                     value={formData.bomName}
-                                    onChange={(e) => setFormData(prev => ({ ...prev, bomName: e.target.value }))}
+                                    onChange={(e) => setFormData((prev: BOMFormData) => ({ ...prev, bomName: e.target.value }))}
                                     disabled={dialogMode === "view"}
                                 />
                             </div>
-                            <SearchableSelect
+                            <BOMSearchableSelect
                                 label="SFG / FG *"
                                 value={formData.selectedItemId}
                                 options={MOCK_ITEMS.filter(i => i.type === "FG" || i.type === "SFG").map(i => {
@@ -511,7 +899,7 @@ export default function BOM() {
                                         disabled: isAlreadyCreated && dialogMode === "create"
                                     };
                                 })}
-                                onChange={(val) => setFormData(prev => ({ ...prev, selectedItemId: val }))}
+                                onChange={(val) => setFormData((prev: BOMFormData) => ({ ...prev, selectedItemId: val }))}
                                 disabled={dialogMode !== "create"}
                             />
 
@@ -520,7 +908,7 @@ export default function BOM() {
                                 <Input
                                     placeholder="Enter Description"
                                     value={formData.bomDescription}
-                                    onChange={(e) => setFormData(prev => ({ ...prev, bomDescription: e.target.value }))}
+                                    onChange={(e) => setFormData((prev: BOMFormData) => ({ ...prev, bomDescription: e.target.value }))}
                                     disabled={dialogMode === "view"}
                                 />
                             </div>
@@ -562,7 +950,7 @@ export default function BOM() {
                                                                     const val = parseFloat(e.target.value) || 0;
                                                                     const newComponents = [...formData.components];
                                                                     newComponents[idx] = { ...comp, quantity: val };
-                                                                    setFormData(prev => ({ ...prev, components: newComponents }));
+                                                                    setFormData((prev: BOMFormData) => ({ ...prev, components: newComponents }));
                                                                 }}
                                                                 className={cn(
                                                                     "h-8 w-24 text-right font-mono font-bold focus-visible:ring-primary/20",
@@ -590,7 +978,7 @@ export default function BOM() {
                     <DialogFooter className="flex justify-between items-center sm:justify-between border-t pt-4">
                         <div>
                             {dialogMode === "edit" && (
-                                <Button variant="destructive" size="sm" onClick={handleDelete} className="gap-2">
+                                <Button variant="destructive" size="sm" onClick={() => setIsDeleteDialogOpen(true)} className="gap-2">
                                     <Trash2 className="h-4 w-4" />
                                     Delete
                                 </Button>
@@ -617,6 +1005,26 @@ export default function BOM() {
                     </DialogFooter>
                 </DialogContent>
             </Dialog>
+
+            <AlertDialog open={isDeleteDialogOpen} onOpenChange={setIsDeleteDialogOpen}>
+                <AlertDialogContent>
+                    <AlertDialogHeader>
+                        <AlertDialogTitle>Delete BOM</AlertDialogTitle>
+                        <AlertDialogDescription>
+                            Are you sure you want to delete this BOM? This action cannot be undone.
+                        </AlertDialogDescription>
+                    </AlertDialogHeader>
+                    <AlertDialogFooter>
+                        <AlertDialogCancel>Cancel</AlertDialogCancel>
+                        <AlertDialogAction
+                            onClick={handleDelete}
+                            className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                        >
+                            Delete
+                        </AlertDialogAction>
+                    </AlertDialogFooter>
+                </AlertDialogContent>
+            </AlertDialog>
         </div>
     );
 }

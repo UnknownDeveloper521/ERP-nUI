@@ -9,12 +9,15 @@ import { useLocation } from "wouter";
 import { format } from "date-fns";
 import { Card, CardContent } from "@/components/ui/card";
 import { generateInvoicePDFHTML } from "@/lib/invoicePDFTemplate";
-import { Search, Eye, ChevronLeft, ChevronRight, Calendar as CalendarIcon, Trash2, Plus, Download, Edit } from "lucide-react";
+import { Search, ChevronLeft, ChevronRight, Calendar as CalendarIcon, Trash2, Plus, Download } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { DataTablePagination } from "@/components/shared/DataTablePagination";
+import { AppListToolbar } from "@/components/shared/AppListToolbar";
+import { SearchableSelect } from "@/components/shared/SearchableSelect";
+import { DatePicker } from "@/components/shared/DatePicker";
 import {
     Table,
     TableBody,
@@ -23,6 +26,7 @@ import {
     TableHeader,
     TableRow,
 } from "@/components/ui/table";
+import { TableActionButtons } from "@/components/shared/TableActionButtons";
 import {
     Select,
     SelectContent,
@@ -210,134 +214,7 @@ const getStoredInvoices = (): InvoiceData[] => {
 // removed localStorage - using mock store
 // saveInvoices function removed - using mock service functions instead
 
-// ============================================================================
-// DATE PICKER COMPONENT
-// ============================================================================
-
-function DatePicker({ date, setDate, disabled = false }: {
-    date?: Date,
-    setDate: (d?: Date) => void,
-    disabled?: boolean
-}) {
-    const [isOpen, setIsOpen] = useState(false);
-    const [visibleDate, setVisibleDate] = useState(() => date || new Date());
-
-    const monthNames = [
-        "January", "February", "March", "April", "May", "June",
-        "July", "August", "September", "October", "November", "December"
-    ];
-
-    const formatDisplayDate = (date: Date | undefined) => {
-        if (!date) return "Pick a date";
-        try {
-            return format(date, "dd/MM/yyyy");
-        } catch (error) {
-            return "Pick a date";
-        }
-    };
-
-    const handleDateSelect = (selectedDate: Date) => {
-        setDate(selectedDate);
-        setIsOpen(false);
-    };
-
-    const navigateMonth = (direction: number) => {
-        const newDate = new Date(visibleDate.getFullYear(), visibleDate.getMonth() + direction, 1);
-        setVisibleDate(newDate);
-    };
-
-    const getDaysInMonth = (date: Date) => {
-        const year = date.getFullYear();
-        const month = date.getMonth();
-        const firstDay = new Date(year, month, 1);
-        const lastDay = new Date(year, month + 1, 0);
-        const daysInMonth = lastDay.getDate();
-        const startingDayOfWeek = firstDay.getDay();
-
-        const days = [];
-        const prevMonth = new Date(year, month - 1, 0);
-        for (let i = startingDayOfWeek - 1; i >= 0; i--) {
-            days.push({ date: new Date(year, month - 1, prevMonth.getDate() - i), isCurrentMonth: false });
-        }
-
-        for (let day = 1; day <= daysInMonth; day++) {
-            const currentDate = new Date(year, month, day);
-            const today = new Date();
-            today.setHours(0, 0, 0, 0);
-            days.push({
-                date: currentDate,
-                isCurrentMonth: true,
-                isToday: today.toDateString() === currentDate.toDateString(),
-                isSelected: date && currentDate.toDateString() === date.toDateString(),
-            });
-        }
-
-        const remainingDays = 42 - days.length;
-        for (let day = 1; day <= remainingDays; day++) {
-            days.push({ date: new Date(year, month + 1, day), isCurrentMonth: false });
-        }
-        return days;
-    };
-
-    return (
-        <Popover open={isOpen} onOpenChange={setIsOpen}>
-            <PopoverTrigger asChild>
-                <Button
-                    variant="outline"
-                    disabled={disabled}
-                    className={cn(
-                        "w-full justify-start text-left font-normal flex h-10 rounded-md border border-input px-3 py-2 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50 hover:bg-white",
-                        !date && "text-muted-foreground"
-                    )}
-                >
-                    <CalendarIcon className="mr-2 h-4 w-4" />
-                    {date ? formatDisplayDate(date) : <span>Pick a date</span>}
-                </Button>
-            </PopoverTrigger>
-            <PopoverContent className="w-auto p-4 shadow-lg border rounded-lg z-[9999]" align="start" side="bottom" sideOffset={4}>
-                <div className="w-80">
-                    <div className="flex items-center justify-between mb-4">
-                        <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => navigateMonth(-1)}>
-                            <ChevronLeft className="h-4 w-4" />
-                        </Button>
-                        <div className="flex items-center gap-2">
-                            <span className="font-semibold text-sm">{monthNames[visibleDate.getMonth()]} {visibleDate.getFullYear()}</span>
-                        </div>
-                        <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => navigateMonth(1)}>
-                            <ChevronRight className="h-4 w-4" />
-                        </Button>
-                    </div>
-                    <div className="grid grid-cols-7 gap-1 mb-2">
-                        {["Su", "Mo", "Tu", "We", "Th", "Fr", "Sa"].map((day) => (
-                            <div key={day} className="h-8 flex items-center justify-center text-xs font-medium text-muted-foreground">
-                                {day}
-                            </div>
-                        ))}
-                    </div>
-                    <div className="grid grid-cols-7 gap-1">
-                        {getDaysInMonth(visibleDate).map((day, index) => (
-                            <Button
-                                key={index}
-                                variant="ghost"
-                                size="icon"
-                                className={cn(
-                                    "h-8 w-8 text-sm font-normal",
-                                    !day.isCurrentMonth && "text-muted-foreground opacity-30",
-                                    (day as any).isToday && "bg-accent text-accent-foreground font-semibold",
-                                    (day as any).isSelected && "bg-primary text-primary-foreground font-semibold",
-                                    day.isCurrentMonth && "hover:bg-accent hover:text-accent-foreground"
-                                )}
-                                onClick={() => handleDateSelect(day.date)}
-                            >
-                                {day.date.getDate()}
-                            </Button>
-                        ))}
-                    </div>
-                </div>
-            </PopoverContent>
-        </Popover>
-    );
-}
+// removed local DatePicker component - using shared one
 
 // ============================================================================
 // HELPER FUNCTIONS
@@ -763,57 +640,35 @@ const Invoicing = () => {
             {/* Header */}
             <h1 className="text-3xl font-bold tracking-tight">Invoicing</h1>
 
-            {/* Filter Section */}
-            <div className="flex flex-col sm:flex-row items-end gap-4 bg-card p-4 rounded-lg border shadow-sm">
-                <div className="w-full sm:flex-1">
-                    <Label className="mb-1.5 block text-xs font-medium text-muted-foreground uppercase tracking-wider">Search</Label>
-                    <div className="relative">
-                        <Search className="absolute left-3 top-3 h-4 w-4 text-muted-foreground" />
-                        <Input
-                            placeholder="Search by Invoice No, SO No, Customer..."
-                            className="pl-10 h-10 rounded-md border-input bg-background"
-                            value={searchTerm}
-                            onChange={(e) => {
-                                setSearchTerm(e.target.value);
-                                setCurrentPage(1);
-                            }}
-                        />
-                    </div>
-                </div>
-                <div className="w-full sm:w-48">
-                    <Label className="mb-1.5 block text-xs font-medium text-muted-foreground uppercase tracking-wider">Date</Label>
-                    <div className="flex gap-2">
-                        <DatePicker date={filterDate} setDate={(date) => {
-                            setFilterDate(date);
-                            setCurrentPage(1);
-                        }} />
-                        {filterDate && (
-                            <Button variant="ghost" size="icon" className="h-10 w-10 shrink-0" onClick={() => {
-                                setFilterDate(undefined);
-                                setCurrentPage(1);
-                            }}>
-                                <Trash2 className="h-4 w-4 text-muted-foreground" />
-                            </Button>
-                        )}
-                    </div>
-                </div>
-                <div className="w-full sm:w-48">
-                    <Label className="mb-1.5 block text-xs font-medium text-muted-foreground uppercase tracking-wider">Status</Label>
-                    <Select value={filterStatus} onValueChange={(val) => {
-                        setFilterStatus(val);
-                        setCurrentPage(1);
-                    }}>
-                        <SelectTrigger className="h-10">
-                            <SelectValue placeholder="All Status" />
-                        </SelectTrigger>
-                        <SelectContent>
-                            <SelectItem value="all">All Status</SelectItem>
-                            <SelectItem value="Invoice Pending">Invoice Pending</SelectItem>
-                            <SelectItem value="Invoiced">Invoiced</SelectItem>
-                        </SelectContent>
-                    </Select>
-                </div>
-            </div>
+            {/* Toolbar */}
+            <AppListToolbar
+                search={{
+                    placeholder: "Search by Invoice No, SO No, Customer...",
+                    value: searchTerm,
+                    onChange: (val) => setSearchTerm(val)
+                }}
+                filters={[
+                    {
+                        type: 'date',
+                        label: "Date",
+                        value: filterDate,
+                        onChange: setFilterDate,
+                        placeholder: "Pick a date"
+                    },
+                    {
+                        type: 'select',
+                        label: "Status",
+                        value: filterStatus,
+                        onChange: setFilterStatus,
+                        options: [
+                            { value: "all", label: "All Status" },
+                            { value: "Invoice Pending", label: "Invoice Pending" },
+                            { value: "Invoiced", label: "Invoiced" }
+                        ],
+                        searchable: true
+                    }
+                ]}
+            />
 
             {/* Invoice Table */}
             <Card>
@@ -828,7 +683,7 @@ const Invoicing = () => {
                                     <TableHead className="font-semibold text-xs uppercase tracking-wider">Customer</TableHead>
                                     <TableHead className="font-semibold text-xs uppercase tracking-wider text-right">Invoice Amount</TableHead>
                                     <TableHead className="font-semibold text-xs uppercase tracking-wider text-center">Status</TableHead>
-                                    <TableHead className="text-right font-semibold text-xs uppercase tracking-wider pr-6">Actions</TableHead>
+                                    <TableHead className="text-center w-[100px]">Actions</TableHead>
                                 </TableRow>
                             </TableHeader>
                             <TableBody>
@@ -853,27 +708,11 @@ const Invoicing = () => {
                                                 <TableCell className="py-4 text-center">
                                                     {getInvoiceStatusBadge(invoice.status)}
                                                 </TableCell>
-                                                <TableCell className="py-4 text-right pr-6">
-                                                    <div className="flex items-center justify-end gap-2">
-                                                        <Button
-                                                            variant="ghost"
-                                                            size="icon"
-                                                            className="h-8 w-8 text-muted-foreground hover:text-primary"
-                                                            onClick={() => handleViewInvoice(invoice)}
-                                                            title="View Invoice (PDF Preview)"
-                                                        >
-                                                            <Eye className="h-4 w-4" />
-                                                        </Button>
-                                                        <Button
-                                                            variant="ghost"
-                                                            size="icon"
-                                                            className="h-8 w-8 text-muted-foreground hover:text-blue-600"
-                                                            onClick={() => handleEditInvoice(invoice)}
-                                                            title="Edit Invoice"
-                                                        >
-                                                            <Edit className="h-4 w-4" />
-                                                        </Button>
-                                                    </div>
+                                                <TableCell className="py-4 text-center">
+                                                    <TableActionButtons
+                                                        onView={() => handleViewInvoice(invoice)}
+                                                        onEdit={invoice.status === "Invoice Pending" ? () => handleEditInvoice(invoice) : undefined}
+                                                    />
                                                 </TableCell>
                                             </TableRow>
                                         );

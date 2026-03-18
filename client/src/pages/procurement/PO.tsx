@@ -3,7 +3,6 @@ import { format, parse, isValid } from "date-fns";
 import { Card, CardContent } from "@/components/ui/card";
 import {
     Search,
-    Eye,
     ChevronLeft,
     ChevronRight,
     FileText,
@@ -15,15 +14,16 @@ import {
     Plus,
     Check,
     Package,
-    Edit,
     Printer,
-    Download
+    Download,
+    ChevronsUpDown
 } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { DataTablePagination } from "@/components/shared/DataTablePagination";
+import { AppListToolbar } from "@/components/shared/AppListToolbar";
 import {
     Table,
     TableBody,
@@ -32,6 +32,7 @@ import {
     TableHeader,
     TableRow,
 } from "@/components/ui/table";
+import { TableActionButtons } from "@/components/shared/TableActionButtons";
 import {
     Tabs,
     TabsContent,
@@ -59,6 +60,24 @@ import {
     DialogHeader,
     DialogTitle,
 } from "@/components/ui/dialog";
+import {
+    AlertDialog,
+    AlertDialogAction,
+    AlertDialogCancel,
+    AlertDialogContent,
+    AlertDialogDescription,
+    AlertDialogFooter,
+    AlertDialogHeader,
+    AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
+import {
+    Command,
+    CommandInputBorderless,
+    CommandList,
+    CommandEmpty,
+    CommandGroup,
+    CommandItem,
+} from "@/components/ui/command";
 import { Checkbox } from "@/components/ui/checkbox";
 import { cn } from "@/lib/utils";
 import { useToast } from "@/hooks/use-toast";
@@ -92,11 +111,35 @@ const parseDateString = (dateStr: string): Date => {
     return new Date(dateStr);
 };
 
+const getStatusColor = (status: string) => {
+    switch (status.toLowerCase()) {
+        case 'draft': return 'bg-slate-100 text-slate-700 border-slate-200';
+        case 'pending approval': return 'bg-amber-50 text-amber-700 border-amber-200';
+        case 'approved': return 'bg-emerald-50 text-emerald-700 border-emerald-200';
+        case 'ordered': return 'bg-blue-50 text-blue-700 border-blue-200';
+        case 'partially received': return 'bg-indigo-50 text-indigo-700 border-indigo-200';
+        case 'received': return 'bg-teal-50 text-teal-700 border-teal-200';
+        case 'closed': return 'bg-gray-50 text-gray-700 border-gray-200';
+        case 'cancelled': return 'bg-rose-50 text-rose-700 border-rose-200';
+        default: return 'bg-slate-50 text-slate-600 border-slate-200';
+    }
+};
+
 const formatDate = (date: Date | string): string => {
     if (!date) return "";
     const d = typeof date === 'string' ? parseDateString(date) : date;
     if (!isValid(d)) return typeof date === 'string' ? date : "";
     return format(d, "dd-MM-yyyy");
+};
+
+const getPOStatusBadge = (status: POStatus) => {
+    switch (status) {
+        case "Draft PO": return <Badge className="bg-slate-500 hover:bg-slate-600">Draft PO</Badge>;
+        case "Submitted PO": return <Badge className="bg-blue-500 hover:bg-blue-600">Submitted PO</Badge>;
+        case "Partially Completed PO": return <Badge className="bg-orange-500 hover:bg-orange-600">Partially Completed PO</Badge>;
+        case "Completed PO": return <Badge className="bg-green-500 hover:bg-green-600">Completed PO</Badge>;
+        default: return <Badge variant="outline">{status}</Badge>;
+    }
 };
 
 function DatePicker({ date, setDate, disabled = false }: {
@@ -154,19 +197,17 @@ function DatePicker({ date, setDate, disabled = false }: {
                 isCurrentMonth: true,
                 isToday: today.toDateString() === currentDate.toDateString(),
                 isSelected: date && currentDate.toDateString() === date.toDateString(),
-                isDisabled: currentDate < today
+                isDisabled: false
             });
         }
 
         const remainingDays = 42 - days.length;
         for (let day = 1; day <= remainingDays; day++) {
             const currentDate = new Date(year, month + 1, day);
-            const today = new Date();
-            today.setHours(0, 0, 0, 0);
             days.push({
                 date: currentDate,
                 isCurrentMonth: false,
-                isDisabled: currentDate < today
+                isDisabled: false
             });
         }
         return days;
@@ -234,16 +275,6 @@ function DatePicker({ date, setDate, disabled = false }: {
     );
 }
 
-const getPOStatusBadge = (status: POStatus) => {
-    switch (status) {
-        case "Draft PO": return <Badge className="bg-slate-500 hover:bg-slate-600">Draft PO</Badge>;
-        case "Submitted PO": return <Badge className="bg-blue-500 hover:bg-blue-600">Submitted PO</Badge>;
-        case "Partially Completed PO": return <Badge className="bg-orange-500 hover:bg-orange-600">Partially Completed PO</Badge>;
-        case "Completed PO": return <Badge className="bg-green-500 hover:bg-green-600">Completed PO</Badge>;
-        default: return <Badge variant="outline">{status}</Badge>;
-    }
-};
-
 const PO = () => {
     const { toast } = useToast();
 
@@ -289,7 +320,7 @@ const PO = () => {
 
     const [poSearchTerm, setPoSearchTerm] = useState("");
     const [poFilterDate, setPoFilterDate] = useState<Date | undefined>(undefined);
-    const [poFilterWorkCenter, setPoFilterWorkCenter] = useState<string>("all");
+    const [poFilterWarehouse, setPoFilterWarehouse] = useState<string>("all");
     const [poFilterStatus, setPoFilterStatus] = useState<string>("Draft PO");
 
     const [isPODialogOpen, setIsPODialogOpen] = useState(false);
@@ -297,6 +328,8 @@ const PO = () => {
     const [isPOEdit, setIsPOEdit] = useState(false);
     const [isDeletePOAlertOpen, setIsDeletePOAlertOpen] = useState(false);
     const [poToDeleteRecord, setPoToDeleteRecord] = useState<POData | null>(null);
+    const [isCreatePOOpen, setIsCreatePOOpen] = useState(false);
+
 
     const handleOpenPO = (po: POData, isEdit: boolean) => {
         const poCopy = JSON.parse(JSON.stringify(po)) as POData;
@@ -410,59 +443,45 @@ const PO = () => {
                 <h1 className="text-3xl font-bold tracking-tight text-slate-900">Purchase Orders</h1>
             </div>
 
-            <div className="flex flex-col sm:flex-row items-end gap-4 bg-card p-4 rounded-lg border shadow-sm">
-                <div className="w-full sm:flex-1">
-                    <Label className="mb-1.5 block text-xs font-medium text-muted-foreground uppercase tracking-wider">Search</Label>
-                    <div className="relative">
-                        <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
-                        <Input
-                            placeholder="Search by PO No, Dept..."
-                            className="pl-9 h-10"
-                            value={poSearchTerm}
-                            onChange={(e) => setPoSearchTerm(e.target.value)}
-                        />
-                    </div>
-                </div>
-                <div className="w-full sm:w-56">
-                    <Label className="mb-1.5 block text-xs font-medium text-muted-foreground uppercase tracking-wider">Filter By Date</Label>
-                    <div className="flex gap-2">
-                        <DatePicker date={poFilterDate} setDate={setPoFilterDate} />
-                        {poFilterDate && (
-                            <Button variant="ghost" size="icon" className="h-10 w-10 shrink-0" onClick={() => setPoFilterDate(undefined)}>
-                                <Trash2 className="h-4 w-4 text-muted-foreground" />
-                            </Button>
-                        )}
-                    </div>
-                </div>
-                <div className="w-full sm:w-48">
-                    <Label className="mb-1.5 block text-xs font-medium text-muted-foreground uppercase tracking-wider">Work Center</Label>
-                    <Select value={poFilterWorkCenter} onValueChange={setPoFilterWorkCenter}>
-                        <SelectTrigger className="h-10">
-                            <SelectValue placeholder="All Work Centers" />
-                        </SelectTrigger>
-                        <SelectContent>
-                            <SelectItem value="all">All Work Centers</SelectItem>
-                            <SelectItem value="General Workshop">General Workshop</SelectItem>
-                            <SelectItem value="CNC Section">CNC Section</SelectItem>
-                        </SelectContent>
-                    </Select>
-                </div>
-                <div className="w-full sm:w-48">
-                    <Label className="mb-1.5 block text-xs font-medium text-muted-foreground uppercase tracking-wider">Filter By Status</Label>
-                    <Select value={poFilterStatus} onValueChange={setPoFilterStatus}>
-                        <SelectTrigger className="h-10">
-                            <SelectValue placeholder="All Status" />
-                        </SelectTrigger>
-                        <SelectContent>
-                            <SelectItem value="all">All Status</SelectItem>
-                            <SelectItem value="Draft PO">Draft PO</SelectItem>
-                            <SelectItem value="Submitted PO">Submitted PO</SelectItem>
-                            <SelectItem value="Partially Completed PO">Partially Completed PO</SelectItem>
-                            <SelectItem value="Completed PO">Completed PO</SelectItem>
-                        </SelectContent>
-                    </Select>
-                </div>
-            </div>
+            <AppListToolbar
+                search={{
+                    value: poSearchTerm,
+                    onChange: setPoSearchTerm,
+                    placeholder: "Search by PO#, Vendor or Warehouse..."
+                }}
+                filters={[
+                    {
+                        type: 'select',
+                        label: 'Warehouse',
+                        value: poFilterWarehouse,
+                        options: [{ label: "All Warehouses", value: "all" }, ...Array.from(new Set(pos.map(po => po.warehouseName)))],
+                        onChange: setPoFilterWarehouse,
+                        searchable: true
+                    },
+                    {
+                        type: 'date',
+                        label: 'Date',
+                        value: poFilterDate,
+                        onChange: setPoFilterDate,
+                        showClear: !!poFilterDate
+                    },
+                    {
+                        type: 'select',
+                        label: 'Status',
+                        value: poFilterStatus,
+                        options: [{ label: "All Status", value: "all" }, "Draft PO", "Submitted PO", "Partially Completed PO", "Completed PO"],
+                        onChange: setPoFilterStatus,
+                        searchable: true
+                    }
+                ]}
+                actions={[
+                    {
+                        label: "Create PO",
+                        icon: <Plus className="h-4 w-4" />,
+                        onClick: () => setIsCreatePOOpen(true)
+                    }
+                ]}
+            />
 
             <Card>
                 <CardContent className="pt-6">
@@ -476,17 +495,17 @@ const PO = () => {
                                     <TableHead className="font-semibold text-xs uppercase tracking-wider">Location</TableHead>
                                     <TableHead className="font-semibold text-xs uppercase tracking-wider">Warehouse</TableHead>
                                     <TableHead className="font-semibold text-xs uppercase tracking-wider text-center">Status</TableHead>
-                                    <TableHead className="text-right font-semibold text-xs uppercase tracking-wider pr-6">Actions</TableHead>
+                                    <TableHead className="text-center w-[100px]">Actions</TableHead>
                                 </TableRow>
                             </TableHeader>
                             <TableBody>
                                 {pos.filter(po => {
                                     const matchesSearch = po.poNumber.toLowerCase().includes(poSearchTerm.toLowerCase()) ||
                                         po.department.toLowerCase().includes(poSearchTerm.toLowerCase());
-                                    const matchesWorkCenter = poFilterWorkCenter === "all" || po.workCenter === poFilterWorkCenter;
+                                    const matchesWarehouse = poFilterWarehouse === "all" || po.warehouseName === poFilterWarehouse;
                                     const matchesStatus = poFilterStatus === "all" || po.status === poFilterStatus;
                                     const matchesDate = !poFilterDate || po.poDate === format(poFilterDate, "dd-MM-yyyy");
-                                    return matchesSearch && matchesWorkCenter && matchesStatus && matchesDate;
+                                    return matchesSearch && matchesWarehouse && matchesStatus && matchesDate;
                                 }).length === 0 ? (
                                     <TableRow>
                                         <TableCell colSpan={7} className="h-32 text-center text-muted-foreground">
@@ -497,10 +516,10 @@ const PO = () => {
                                     pos.filter(po => {
                                         const matchesSearch = po.poNumber.toLowerCase().includes(poSearchTerm.toLowerCase()) ||
                                             po.department.toLowerCase().includes(poSearchTerm.toLowerCase());
-                                        const matchesWorkCenter = poFilterWorkCenter === "all" || po.workCenter === poFilterWorkCenter;
+                                        const matchesWarehouse = poFilterWarehouse === "all" || po.warehouseName === poFilterWarehouse;
                                         const matchesStatus = poFilterStatus === "all" || po.status === poFilterStatus;
                                         const matchesDate = !poFilterDate || po.poDate === format(poFilterDate, "dd-MM-yyyy");
-                                        return matchesSearch && matchesWorkCenter && matchesStatus && matchesDate;
+                                        return matchesSearch && matchesWarehouse && matchesStatus && matchesDate;
                                     }).map((po) => (
                                         <TableRow key={po.id} className="hover:bg-muted/30 transition-colors border-b">
                                             <TableCell className="py-4 font-medium font-mono">{po.poNumber}</TableCell>
@@ -511,40 +530,11 @@ const PO = () => {
                                             <TableCell className="text-center">
                                                 {getPOStatusBadge(po.status)}
                                             </TableCell>
-                                            <TableCell className="text-right pr-6">
-                                                <div className="flex justify-end gap-1">
-                                                    <Button
-                                                        variant="ghost"
-                                                        size="icon"
-                                                        className="h-8 w-8"
-                                                        onClick={() => handleOpenPO(po, false)}
-                                                    >
-                                                        <Eye className="h-4 w-4" />
-                                                    </Button>
-                                                    {(po.status === "Draft PO" || po.status === "Partially Completed PO") && (
-                                                        <Button
-                                                            variant="ghost"
-                                                            size="icon"
-                                                            className="h-8 w-8"
-                                                            onClick={() => handleOpenPO(po, true)}
-                                                        >
-                                                            <Edit className="h-4 w-4" />
-                                                        </Button>
-                                                    )}
-                                                    {po.status === "Draft PO" && (
-                                                        <Button
-                                                            variant="ghost"
-                                                            size="icon"
-                                                            className="h-8 w-8"
-                                                            onClick={() => {
-                                                                setPoToDeleteRecord(po);
-                                                                setIsDeletePOAlertOpen(true);
-                                                            }}
-                                                        >
-                                                            <Trash2 className="h-4 w-4" />
-                                                        </Button>
-                                                    )}
-                                                </div>
+                                            <TableCell className="text-center">
+                                                <TableActionButtons
+                                                    onView={() => handleOpenPO(po, false)}
+                                                    onEdit={(po.status === "Draft PO" || po.status === "Partially Completed PO") ? () => handleOpenPO(po, true) : undefined}
+                                                />
                                             </TableCell>
                                         </TableRow>
                                     ))
@@ -556,10 +546,10 @@ const PO = () => {
                     {pos.filter(po => {
                         const matchesSearch = po.poNumber.toLowerCase().includes(poSearchTerm.toLowerCase()) ||
                             po.department.toLowerCase().includes(poSearchTerm.toLowerCase());
-                        const matchesWorkCenter = poFilterWorkCenter === "all" || po.workCenter === poFilterWorkCenter;
+                        const matchesWarehouse = poFilterWarehouse === "all" || po.warehouseName === poFilterWarehouse;
                         const matchesStatus = poFilterStatus === "all" || po.status === poFilterStatus;
                         const matchesDate = !poFilterDate || po.poDate === format(poFilterDate, "dd-MM-yyyy");
-                        return matchesSearch && matchesWorkCenter && matchesStatus && matchesDate;
+                        return matchesSearch && matchesWarehouse && matchesStatus && matchesDate;
                     }).length > 0 && (
                         <DataTablePagination
                             currentPage={1}
@@ -567,10 +557,10 @@ const PO = () => {
                             totalItems={pos.filter(po => {
                                 const matchesSearch = po.poNumber.toLowerCase().includes(poSearchTerm.toLowerCase()) ||
                                     po.department.toLowerCase().includes(poSearchTerm.toLowerCase());
-                                const matchesWorkCenter = poFilterWorkCenter === "all" || po.workCenter === poFilterWorkCenter;
+                                const matchesWarehouse = poFilterWarehouse === "all" || po.warehouseName === poFilterWarehouse;
                                 const matchesStatus = poFilterStatus === "all" || po.status === poFilterStatus;
                                 const matchesDate = !poFilterDate || po.poDate === format(poFilterDate, "dd-MM-yyyy");
-                                return matchesSearch && matchesWorkCenter && matchesStatus && matchesDate;
+                                return matchesSearch && matchesWarehouse && matchesStatus && matchesDate;
                             }).length}
                             itemsPerPage={10}
                             onPageChange={() => {}}
@@ -888,62 +878,79 @@ const PO = () => {
                         </div>
                     </div>
 
-                    <DialogFooter className="p-6 border-t mt-auto gap-2">
-                        <Button variant="outline" onClick={() => setIsPODialogOpen(false)}>Close</Button>
-
-                        {activePO?.status === "Draft PO" && isPOEdit && (
-                            <>
-                                <Button
-                                    variant="secondary"
-                                    className="font-bold font-sm"
+                    <DialogFooter className="p-6 border-t mt-auto flex sm:flex-row flex-col-reverse sm:justify-between justify-between items-center w-full sm:space-x-0">
+                        <div className="flex justify-start">
+                            {activePO?.status === "Draft PO" && isPOEdit && (
+                                <Button 
+                                    variant="destructive" 
                                     onClick={() => {
-                                        updatePos(pos.map(p => p.id === activePO.id ? activePO : p));
-                                        setIsPODialogOpen(false);
-                                        toast({ title: "PO Saved", description: "Draft changes have been saved." });
+                                        setPoToDeleteRecord(activePO);
+                                        setIsDeletePOAlertOpen(true);
                                     }}
                                 >
-                                    Save Draft
+                                    <Trash2 className="h-4 w-4 mr-2" />
+                                    Delete
                                 </Button>
+                            )}
+                        </div>
+
+                        <div className="flex gap-2">
+                            <Button variant="outline" onClick={() => setIsPODialogOpen(false)}>Close</Button>
+
+                            {activePO?.status === "Draft PO" && isPOEdit && (
+                                <>
+                                    <Button
+                                        variant="secondary"
+                                        className="font-bold text-sm"
+                                        onClick={() => {
+                                            updatePos(pos.map(p => p.id === activePO.id ? activePO : p));
+                                            setIsPODialogOpen(false);
+                                            toast({ title: "PO Saved", description: "Draft changes have been saved." });
+                                        }}
+                                    >
+                                        Save Draft
+                                    </Button>
+                                    <Button
+                                        className="bg-emerald-600 hover:bg-emerald-700 font-bold"
+                                        onClick={() => {
+                                            const incomplete = activePO.items.some(i => !i.price || !i.deliveryDate);
+                                            if (incomplete) {
+                                                toast({ title: "Incomplete PO", description: "Please fill price and delivery date for all items.", variant: "destructive" });
+                                                return;
+                                            }
+                                            const submittedPO = { ...activePO, status: "Submitted PO" as POStatus };
+                                            updatePos(pos.map(p => p.id === activePO.id ? submittedPO : p));
+                                            setIsPODialogOpen(false);
+                                            toast({ title: "PO Submitted", description: "PO status updated to Submitted." });
+                                        }}
+                                    >
+                                        Submit PO
+                                    </Button>
+                                </>
+                            )}
+
+                            {activePO?.status === "Partially Completed PO" && isPOEdit && (
                                 <Button
-                                    className="bg-emerald-600 hover:bg-emerald-700 font-bold"
+                                    className="bg-primary hover:bg-primary/90 font-bold"
                                     onClick={() => {
-                                        const incomplete = activePO.items.some(i => !i.price || !i.deliveryDate);
-                                        if (incomplete) {
-                                            toast({ title: "Incomplete PO", description: "Please fill price and delivery date for all items.", variant: "destructive" });
-                                            return;
-                                        }
-                                        const submittedPO = { ...activePO, status: "Submitted PO" as POStatus };
-                                        updatePos(pos.map(p => p.id === activePO.id ? submittedPO : p));
+                                        const completedPO = { ...activePO, status: "Completed PO" as POStatus };
+                                        updatePos(pos.map(p => p.id === activePO.id ? completedPO : p));
                                         setIsPODialogOpen(false);
-                                        toast({ title: "PO Submitted", description: "PO status updated to Submitted." });
+                                        toast({ title: "PO Completed", description: "Purchase Order has been marked as Completed." });
                                     }}
                                 >
-                                    Submit PO
+                                    <Check className="h-4 w-4 mr-2" />
+                                    Complete PO
                                 </Button>
-                            </>
-                        )}
+                            )}
 
-                        {activePO?.status === "Partially Completed PO" && isPOEdit && (
-                            <Button
-                                className="bg-primary hover:bg-primary/90 font-bold"
-                                onClick={() => {
-                                    const completedPO = { ...activePO, status: "Completed PO" as POStatus };
-                                    updatePos(pos.map(p => p.id === activePO.id ? completedPO : p));
-                                    setIsPODialogOpen(false);
-                                    toast({ title: "PO Completed", description: "Purchase Order has been marked as Completed." });
-                                }}
-                            >
-                                <Check className="h-4 w-4 mr-2" />
-                                Complete PO
-                            </Button>
-                        )}
-
-                        {activePO?.status === "Submitted PO" && !isPOEdit && (
-                            <Button variant="secondary" onClick={handlePrintPO} className="font-bold">
-                                <Printer className="h-4 w-4 mr-2" />
-                                Print PO
-                            </Button>
-                        )}
+                            {activePO?.status === "Submitted PO" && !isPOEdit && (
+                                <Button variant="secondary" onClick={handlePrintPO} className="font-bold">
+                                    <Printer className="h-4 w-4 mr-2" />
+                                    Print PO
+                                </Button>
+                            )}
+                        </div>
                     </DialogFooter>
                 </DialogContent>
             </Dialog>
@@ -965,35 +972,29 @@ const DeletePOAlert = ({ isOpen, setOpen, po, onDelete }: {
     onDelete: (id: number) => void
 }) => {
     return (
-        <Dialog open={isOpen} onOpenChange={setOpen}>
-            <DialogContent className="sm:max-w-[425px]">
-                <DialogHeader>
-                    <DialogTitle className="flex items-center gap-2 text-red-600">
-                        <Trash2 className="h-5 w-5" />
-                        Delete Purchase Order?
-                    </DialogTitle>
-                    <DialogDescription className="py-2">
-                        Are you sure you want to delete <span className="font-bold">{po?.poNumber}</span>?
-                        <br /><br />
-                        You will have to create this PO again from the <span className="font-bold">MR Execution</span> page for MR: <span className="font-bold">{po?.mrCode}</span>.
-                    </DialogDescription>
-                </DialogHeader>
-                <DialogFooter className="gap-2 sm:gap-0">
-                    <Button variant="outline" onClick={() => setOpen(false)}>Cancel</Button>
-                    <Button
-                        variant="destructive"
+        <AlertDialog open={isOpen} onOpenChange={setOpen}>
+            <AlertDialogContent className="sm:max-w-[425px]">
+                <AlertDialogHeader>
+                    <AlertDialogTitle>Are you sure?</AlertDialogTitle>
+                    <AlertDialogDescription>
+                        Are you sure you want to delete this purchase order? This action cannot be undone.
+                    </AlertDialogDescription>
+                </AlertDialogHeader>
+                <AlertDialogFooter>
+                    <AlertDialogCancel>Cancel</AlertDialogCancel>
+                    <AlertDialogAction
+                        className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
                         onClick={() => {
                             if (po) {
                                 onDelete(po.id);
-                                setOpen(false);
                             }
                         }}
                     >
-                        Delete PO
-                    </Button>
-                </DialogFooter>
-            </DialogContent>
-        </Dialog>
+                        Delete
+                    </AlertDialogAction>
+                </AlertDialogFooter>
+            </AlertDialogContent>
+        </AlertDialog>
     );
 };
 

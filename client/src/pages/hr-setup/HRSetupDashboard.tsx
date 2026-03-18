@@ -3,8 +3,8 @@ import ModuleTabs from "@/components/shared/ModuleTabs";
 import { Users, DollarSign, Settings } from "lucide-react";
 
 const hrSetupTabs = [
-  { name: "Employee Salary Details", path: "/hr-setup/employee-salary" },
-  { name: "Salary Component", path: "/hr-setup/salary-component" },
+  { name: "Assign Employee Salary", path: "/hr-setup/assign-employee-salary" },
+  { name: "Salary Component", path: "/hr-setup/salary-component/earnings" },
   { name: "Salary Structure", path: "/hr-setup/salary-structure" },
 ];
 

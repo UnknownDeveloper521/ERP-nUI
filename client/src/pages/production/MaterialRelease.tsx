@@ -33,8 +33,10 @@ import {
   CommandInputBorderless,
 } from "@/components/ui/command";
 import { Badge } from "@/components/ui/badge";
-import { Plus, Search, Eye, ChevronLeft, ChevronRight, ChevronsUpDown, Check, Upload, Printer } from "lucide-react";
+import { Plus, Search, ChevronLeft, ChevronRight, ChevronsUpDown, Check, Upload, Printer } from "lucide-react";
 import { DataTablePagination } from "@/components/shared/DataTablePagination";
+import { TableActionButtons } from "@/components/shared/TableActionButtons";
+import { AppListToolbar, FilterField } from "@/components/shared/AppListToolbar";
 import { useToast } from "@/hooks/use-toast";
 import { cn } from "@/lib/utils";
 import * as XLSX from "xlsx";
@@ -249,7 +251,7 @@ interface SearchableSelectProps {
  * @param props - SearchableSelectProps
  * @returns JSX.Element
  */
-function SearchableSelect({
+function LocalSearchableSelect({
   value,
   onValueChange,
   options,
@@ -267,7 +269,10 @@ function SearchableSelect({
           variant="outline"
           role="combobox"
           aria-expanded={open}
-          className={cn("w-full justify-between h-10 font-normal", className)}
+          className={cn(
+            "w-full justify-between h-10 font-normal px-3 py-2 text-sm border border-input shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50 hover:bg-white",
+            className
+          )}
         >
           <span className={cn(!value && "text-muted-foreground")}>
             {value
@@ -329,6 +334,8 @@ export default function MaterialRelease() {
 
   const [searchTerm, setSearchTerm] = useState("");
   const [statusFilter, setStatusFilter] = useState("Issued to Warehouse"); // Default filter to show issued
+  const [operationFilter, setOperationFilter] = useState("all");
+  const [shiftFilter, setShiftFilter] = useState("all");
   const [currentPage, setCurrentPage] = useState(1);
   const [isViewModalOpen, setIsViewModalOpen] = useState(false);
   const [viewingRelease, setViewingRelease] = useState<OperationRelease | null>(null);
@@ -364,7 +371,7 @@ export default function MaterialRelease() {
 
   useEffect(() => {
     setCurrentPage(1);
-  }, [searchTerm, statusFilter]);
+  }, [searchTerm, statusFilter, operationFilter, shiftFilter]);
 
   // ============================================================================
   // MOCK DATA
@@ -782,9 +789,11 @@ export default function MaterialRelease() {
       release.operation.toLowerCase().includes(searchTerm.toLowerCase()) ||
       release.workCenter.toLowerCase().includes(searchTerm.toLowerCase());
 
-    const matchesStatus = statusFilter === "All" || release.status === statusFilter;
+    const matchesStatus = statusFilter === "all" || release.status === statusFilter;
+    const matchesOperation = operationFilter === "all" || release.operation === operationFilter;
+    const matchesShift = shiftFilter === "all" || (release.batchDetails?.some(b => b.shift === shiftFilter) ?? false);
 
-    return matchesSearch && matchesStatus;
+    return matchesSearch && matchesStatus && matchesOperation && matchesShift;
   });
 
   const totalPages = Math.ceil(filteredReleases.length / itemsPerPage);
@@ -837,47 +846,46 @@ export default function MaterialRelease() {
         </p>
       </div>
 
-      {/* Search and Filter Section */}
-      <div className="flex flex-col md:flex-row items-end justify-between gap-4 bg-card p-4 rounded-lg border shadow-sm">
-        <div className="flex-1 w-full max-w-md space-y-1.5">
-          <Label className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">
-            Search
-          </Label>
-          <div className="relative">
-            <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
-            <Input
-              placeholder="Search by Release No / Operation..."
-              className="pl-9 h-10 border-input"
-              value={searchTerm}
-              onChange={(e) => setSearchTerm(e.target.value)}
-            />
-          </div>
-        </div>
-
-        <div className="flex items-end gap-3 w-full md:w-auto">
-          <div className="w-full md:w-64 space-y-1.5">
-            <Label className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">
-              Status
-            </Label>
-            <SearchableSelect
-              value={statusFilter}
-              onValueChange={setStatusFilter}
-              options={[
-                { value: "All", label: "All" },
-                { value: "Issued to Warehouse", label: "Issued to Warehouse" },
-                { value: "Received By Warehouse", label: "Received By Warehouse" },
-              ]}
-              placeholder="Select Status"
-              searchPlaceholder="Search status..."
-            />
-          </div>
-          
-          <Button onClick={handleAddRelease} className="h-10 px-6">
-            <Plus className="mr-2 h-4 w-4" />
-            Add Release
-          </Button>
-        </div>
-      </div>
+      <AppListToolbar
+        search={{
+          value: searchTerm,
+          onChange: setSearchTerm,
+          placeholder: "Search by Release No / Operation..."
+        }}
+        filters={[
+          {
+            type: 'select',
+            label: 'Shift',
+            value: shiftFilter,
+            options: [{ label: "All Shifts", value: "all" }, "Morning", "Night"],
+            onChange: setShiftFilter,
+            searchable: true
+          },
+          {
+            type: 'select',
+            label: 'Operation',
+            value: operationFilter,
+            options: [{ label: "All Operations", value: "all" }, ...operationMasters.map(om => om.operation)],
+            onChange: setOperationFilter,
+            searchable: true
+          },
+          {
+            type: 'select',
+            label: 'Status',
+            value: statusFilter,
+            options: [{ label: "All Status", value: "all" }, "Issued to Warehouse", "Received By Warehouse"],
+            onChange: setStatusFilter,
+            searchable: true
+          }
+        ]}
+        actions={[
+          {
+            label: "Create Material Release",
+            icon: <Plus className="h-4 w-4" />,
+            onClick: handleAddRelease
+          }
+        ]}
+      />
 
       {/* Releases Table */}
       <Card>
@@ -892,7 +900,7 @@ export default function MaterialRelease() {
                   <TableHead>Work Center</TableHead>
                   <TableHead>Warehouse</TableHead>
                   <TableHead>Status</TableHead>
-                  <TableHead className="text-right">Action</TableHead>
+                  <TableHead className="text-center font-bold text-[11px] tracking-wider py-4">Actions</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -918,15 +926,10 @@ export default function MaterialRelease() {
                           {release.status}
                         </Badge>
                       </TableCell>
-                      <TableCell className="text-right">
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          className="h-8 w-8 hover:bg-muted"
-                          onClick={() => handleViewRelease(release)}
-                        >
-                          <Eye className="h-4 w-4" />
-                        </Button>
+                      <TableCell className="text-center py-4">
+                        <TableActionButtons
+                          onView={() => handleViewRelease(release)}
+                        />
                       </TableCell>
                     </TableRow>
                   ))
@@ -1096,12 +1099,8 @@ export default function MaterialRelease() {
 
           <div className="space-y-6">
             {/* Header Summary Section */}
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               {/* Auto-filled fields (read-only) */}
-              <div>
-                <Label>Release No</Label>
-                <Input value={formData.releaseNo} readOnly className="bg-muted" />
-              </div>
               <div>
                 <Label>Release Date</Label>
                 <Input
@@ -1121,7 +1120,7 @@ export default function MaterialRelease() {
                 <Label>
                   Operation <span className="text-destructive">*</span>
                 </Label>
-                <SearchableSelect
+                <LocalSearchableSelect
                   value={selectedOperation}
                   onValueChange={handleOperationChange}
                   options={operationMasters.map(om => ({
@@ -1138,7 +1137,7 @@ export default function MaterialRelease() {
                 <Label>
                   Work Center <span className="text-destructive">*</span>
                 </Label>
-                <SearchableSelect
+                <LocalSearchableSelect
                   value={selectedWorkCenter}
                   onValueChange={handleWorkCenterChange}
                   options={availableWorkCenters.map(wc => ({
@@ -1155,7 +1154,7 @@ export default function MaterialRelease() {
                 <Label>
                   Warehouse <span className="text-destructive">*</span>
                 </Label>
-                <SearchableSelect
+                <LocalSearchableSelect
                   value={selectedWarehouse}
                   onValueChange={setSelectedWarehouse}
                   options={warehouses.map(wh => ({

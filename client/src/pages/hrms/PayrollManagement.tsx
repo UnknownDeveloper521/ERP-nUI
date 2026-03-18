@@ -20,15 +20,6 @@
 import React, { useState, useEffect } from "react";
 import { useLocation } from "wouter";
 import { cn } from "@/lib/utils";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
-import { Label } from "@/components/ui/label";
-import { Check } from "lucide-react";
 
 // Import tab components
 import RunPayroll from "./RunPayroll";
@@ -61,7 +52,8 @@ export default function PayrollManagement() {
   // ============================================================================
   const getActiveTabFromPath = () => {
     if (location.includes("/payslips")) return "payslips";
-    return "run-payroll"; // default
+    if (location.includes("/run-payroll")) return "run-payroll";
+    return "run-payroll";
   };
   
   const [activeTab, setActiveTab] = useState<"run-payroll" | "payslips">(getActiveTabFromPath());
@@ -111,43 +103,6 @@ export default function PayrollManagement() {
           </p>
         </div>
 
-        {/* ====================================================================
-             ROLE SIMULATOR DROPDOWN
-             ====================================================================
-             PURPOSE: Allows testing different user roles without authentication
-             WHY NEEDED: For development/testing - simulates Admin/HR/Employee views
-             REMOVE WHEN: Implementing real authentication system
-             REPLACE WITH: User profile dropdown showing actual logged-in user role
-             ==================================================================== */}
-        <div className="flex items-center gap-2 mt-2 mr-8">
-          <Label className="text-sm font-medium whitespace-nowrap">SIMULATE ROLE:</Label>
-          <Select value={simulatedRole} onValueChange={(value) => setSimulatedRole(value as SimulatedRole)}>
-            <SelectTrigger className="w-[160px]">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="Admin">
-                <div className="flex items-center justify-between w-full">
-                  <span>Admin</span>
-                  {/* Check icon shows current selected role */}
-                  {simulatedRole === "Admin" && <Check className="h-4 w-4 ml-2" />}
-                </div>
-              </SelectItem>
-              <SelectItem value="HR Manager">
-                <div className="flex items-center justify-between w-full">
-                  <span>HR Manager</span>
-                  {simulatedRole === "HR Manager" && <Check className="h-4 w-4 ml-2" />}
-                </div>
-              </SelectItem>
-              <SelectItem value="Employee">
-                <div className="flex items-center justify-between w-full">
-                  <span>Employee</span>
-                  {simulatedRole === "Employee" && <Check className="h-4 w-4 ml-2" />}
-                </div>
-              </SelectItem>
-            </SelectContent>
-          </Select>
-        </div>
       </div>
 
       {/* ====================================================================
@@ -168,7 +123,7 @@ export default function PayrollManagement() {
                ================================================================ */}
           {canAccessRunPayroll && (
             <button
-              onClick={() => setLocation("/hrms/payroll-management")}
+              onClick={() => setLocation("/hrms/payroll-management/run-payroll")}
               className={cn(
                 "whitespace-nowrap py-4 px-1 border-b-2 font-medium text-sm transition-colors",
                 activeTab === "run-payroll"
@@ -210,7 +165,7 @@ export default function PayrollManagement() {
            ==================================================================== */}
       <div>
         {activeTab === "run-payroll" && canAccessRunPayroll && <RunPayroll />}
-        {activeTab === "payslips" && <Payslips simulatedRole={simulatedRole} />}
+        {activeTab === "payslips" && <Payslips />}
       </div>
     </div>
   );

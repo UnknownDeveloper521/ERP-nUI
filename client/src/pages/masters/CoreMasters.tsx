@@ -12,7 +12,7 @@ import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Plus, Search, Pencil, Trash2, CalendarIcon, Check, ChevronsUpDown } from "lucide-react";
+import { Plus, Search, Trash2, CalendarIcon, Check, ChevronsUpDown } from "lucide-react";
 import {
     Dialog,
     DialogContent,
@@ -21,6 +21,16 @@ import {
     DialogHeader,
     DialogTitle,
 } from "@/components/ui/dialog";
+import {
+    AlertDialog,
+    AlertDialogAction,
+    AlertDialogCancel,
+    AlertDialogContent,
+    AlertDialogDescription,
+    AlertDialogFooter,
+    AlertDialogHeader,
+    AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { Label } from "@/components/ui/label";
 import {
     Select,
@@ -36,6 +46,8 @@ import { Switch } from "@/components/ui/switch";
 import { useToast } from "@/hooks/use-toast";
 import { cn } from "@/lib/utils";
 import { DataTablePagination } from "@/components/shared/DataTablePagination";
+import { TableActionButtons } from "@/components/shared/TableActionButtons";
+import { AppListToolbar } from "@/components/shared/AppListToolbar";
 import { 
     mockCountries, 
     mockStates, 
@@ -189,6 +201,8 @@ export default function CoreMasters() {
     const [policyErrors, setPolicyErrors] = useState<Record<string, string>>({});
 
     const [isDialogOpen, setIsDialogOpen] = useState(false);
+    const [isDeleteAlertOpen, setIsDeleteAlertOpen] = useState(false);
+    const [itemToDelete, setItemToDelete] = useState<number | null>(null);
     const [editingId, setEditingId] = useState<number | null>(null);
     const [formData, setFormData] = useState<Partial<BaseMasterItem>>({});
 
@@ -237,16 +251,21 @@ export default function CoreMasters() {
     };
 
     const handleDeleteClick = (id: number) => {
-        const itemToDelete = currentData.find(i => i.id === id);
-        if (!itemToDelete) return;
+        setItemToDelete(id);
+        setIsDeleteAlertOpen(true);
+    };
 
-        if (confirm("Are you sure? This action cannot be undone.")) {
-            setMasterData(prev => ({
-                ...prev,
-                [selectedMaster]: prev[selectedMaster]?.filter(item => item.id !== id)
-            }));
-            toast({ title: "Deleted", description: "Record deleted successfully." });
-        }
+    const confirmDelete = () => {
+        if (itemToDelete === null) return;
+        
+        setMasterData(prev => ({
+            ...prev,
+            [selectedMaster]: prev[selectedMaster]?.filter(item => item.id !== itemToDelete)
+        }));
+        
+        toast({ title: "Deleted", description: "Record deleted successfully." });
+        setIsDeleteAlertOpen(false);
+        setItemToDelete(null);
     };
 
     const validateField = (field: keyof LeavePolicy, value: any): string => {
@@ -359,7 +378,7 @@ export default function CoreMasters() {
             }
         });
         setIsDialogOpen(false);
-        toast({ title: "Success", description: editingId ? "Record updated successfully" : "Record added successfully" });
+        toast({ title: "Success", description: editingId ? "Record updated successfully" : "Record created successfully" });
     };
 
     const renderTableHeaders = () => {
@@ -448,7 +467,7 @@ export default function CoreMasters() {
                     </Card>
                 </div>
                 <Card>
-                    <CardHeader className="flex flex-row items-center justify-between"><CardTitle>Leave Type Distribution</CardTitle><Button size="sm" onClick={handleAddDistributionRow}><Plus className="h-4 w-4 mr-1" /> Add Type</Button></CardHeader>
+                    <CardHeader className="flex flex-row items-center justify-between"><CardTitle>Leave Type Distribution</CardTitle><Button size="sm" onClick={handleAddDistributionRow}><Plus className="h-4 w-4 mr-1" /> Create Type</Button></CardHeader>
                     <CardContent>
                         <Table>
                             <TableHeader><TableRow><TableHead>Leave Type</TableHead><TableHead>Allocated Days</TableHead><TableHead>Carry Fwd</TableHead><TableHead>Neg Bal</TableHead><TableHead>Max/Req</TableHead><TableHead></TableHead></TableRow></TableHeader>
@@ -562,28 +581,56 @@ export default function CoreMasters() {
                 </div>
 
                 <div className="m-0 h-full flex flex-col gap-6 mt-6 overflow-y-auto pr-2 pb-6 custom-scrollbar">
-                    <div className="flex flex-col sm:flex-row items-center gap-4 bg-card p-4 rounded-lg border shadow-sm">
-                        <div className="w-full sm:w-1/3">
-                            <Label className="mb-1.5 block text-xs font-medium text-muted-foreground uppercase tracking-wider">Search</Label>
-                            <div className="relative"><Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" /><Input placeholder={`Search ${selectedMaster}...`} className="pl-9 h-10" value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} /></div>
-                        </div>
-                        <div className="w-full sm:w-auto ml-auto">
-                            {selectedMaster !== "LeavePolicy" && (<Button onClick={handleAddClick} className="w-full sm:w-auto"><Plus className="mr-2 h-4 w-4" /> Add {selectedMaster}</Button>)}
-                        </div>
-                    </div>
+                    <AppListToolbar
+                        search={{
+                            placeholder: `Search ${selectedMaster}...`,
+                            value: searchTerm,
+                            onChange: setSearchTerm
+                        }}
+                        actions={selectedMaster !== "LeavePolicy" ? [
+                            {
+                                label: `Create ${selectedMaster === "UserRoles" ? "User Role" : selectedMaster}`,
+                                icon: <Plus className="mr-2 h-4 w-4" />,
+                                onClick: handleAddClick
+                            }
+                        ] : []}
+                    />
 
                     <Card>
                         <CardHeader className="pb-3"><CardTitle>{selectedMaster === "LeavePolicy" ? "Leave Policy Configuration" : `${selectedMaster} List`}</CardTitle></CardHeader>
                         <CardContent>
                             <div className="rounded-md border">
                                 <Table>
-                                    <TableHeader><TableRow className="bg-muted/50">{renderTableHeaders()}<TableHead className="text-right">Actions</TableHead></TableRow></TableHeader>
+                                    <TableHeader><TableRow className="bg-muted/50">{renderTableHeaders()}<TableHead className="text-center w-[100px]">Actions</TableHead></TableRow></TableHeader>
                                     <TableBody>
                                         {selectedMaster === "LeavePolicy" ? (
-                                            <TableRow key={leavePolicy.id}>{renderTableRow(leavePolicy as any)}<TableCell className="text-right"><div className="flex justify-end gap-2"><Button variant="ghost" size="icon" className="h-8 w-8 hover:bg-muted" onClick={() => setIsDialogOpen(true)}><Pencil className="h-4 w-4" /></Button></div></TableCell></TableRow>
+                                            <TableRow key={leavePolicy.id}>
+                                                {renderTableRow(leavePolicy as any)}
+                                                <TableCell className="text-center">
+                                                    <TableActionButtons
+                                                        onEdit={() => setIsDialogOpen(true)}
+                                                    />
+                                                </TableCell>
+                                            </TableRow>
                                         ) : (
-                                            currentData.length === 0 ? (<TableRow><TableCell colSpan={6} className="h-24 text-center text-muted-foreground">No records found for {selectedMaster}.</TableCell></TableRow>) : (
-                                                currentData.map((item) => (<TableRow key={item.id}>{renderTableRow(item)}<TableCell className="text-right"><div className="flex justify-end gap-2"><Button variant="ghost" size="icon" className="h-8 w-8 hover:bg-muted" onClick={() => handleEditClick(item)}><Pencil className="h-4 w-4" /></Button><Button variant="ghost" size="icon" className="h-8 w-8 text-destructive hover:bg-destructive/10" onClick={() => handleDeleteClick(item.id)}><Trash2 className="h-4 w-4" /></Button></div></TableCell></TableRow>))
+                                            currentData.length === 0 ? (
+                                                <TableRow>
+                                                    <TableCell colSpan={6} className="h-24 text-center text-muted-foreground">
+                                                        No records found for {selectedMaster}.
+                                                    </TableCell>
+                                                </TableRow>
+                                            ) : (
+                                                currentData.map((item) => (
+                                                    <TableRow key={item.id}>
+                                                        {renderTableRow(item)}
+                                                        <TableCell className="text-center">
+                                                            <TableActionButtons
+                                                                onEdit={() => handleEditClick(item)}
+                                                                onDelete={() => handleDeleteClick(item.id)}
+                                                            />
+                                                        </TableCell>
+                                                    </TableRow>
+                                                ))
                                             )
                                         )}
                                     </TableBody>
@@ -607,7 +654,7 @@ export default function CoreMasters() {
             <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
                 <DialogContent className={selectedMaster === "LeavePolicy" ? "sm:max-w-[900px] h-[80vh] flex flex-col p-6" : "sm:max-w-[500px]"}>
                     <DialogHeader>
-                        <DialogTitle>{editingId || selectedMaster === "LeavePolicy" ? "Edit" : "Add New"} {selectedMaster === "LeavePolicy" ? "Policy" : selectedMaster}</DialogTitle>
+                        <DialogTitle>{editingId || selectedMaster === "LeavePolicy" ? "Edit" : "Create"} {selectedMaster === "LeavePolicy" ? "Policy" : (selectedMaster === "UserRoles" ? "User Role" : selectedMaster)}</DialogTitle>
                         <DialogDescription>Configure the details for this {selectedMaster === "LeavePolicy" ? "policy" : "entry"}.</DialogDescription>
                     </DialogHeader>
                     {selectedMaster === "LeavePolicy" ? (<div className="flex-1 overflow-y-auto pr-2 -mr-2">{renderLeavePolicyForm()}</div>) : selectedMaster === "UserRoles" ? renderUserRolesForm() : renderFormFields()}
@@ -617,6 +664,23 @@ export default function CoreMasters() {
                     </DialogFooter>
                 </DialogContent>
             </Dialog>
+
+            <AlertDialog open={isDeleteAlertOpen} onOpenChange={setIsDeleteAlertOpen}>
+                <AlertDialogContent>
+                    <AlertDialogHeader>
+                        <AlertDialogTitle>Delete Record</AlertDialogTitle>
+                        <AlertDialogDescription>
+                            Are you sure you want to delete this record? This action cannot be undone.
+                        </AlertDialogDescription>
+                    </AlertDialogHeader>
+                    <AlertDialogFooter>
+                        <AlertDialogCancel>Cancel</AlertDialogCancel>
+                        <AlertDialogAction onClick={confirmDelete} className="bg-destructive text-destructive-foreground hover:bg-destructive/90">
+                            Delete
+                        </AlertDialogAction>
+                    </AlertDialogFooter>
+                </AlertDialogContent>
+            </AlertDialog>
         </div>
     );
 }

@@ -9,8 +9,6 @@ import { format, parse } from "date-fns";
 import { Card, CardContent } from "@/components/ui/card";
 import {
     Search,
-    Eye,
-    Edit,
     Plus,
     Calendar as CalendarIcon,
     Trash2,
@@ -19,13 +17,19 @@ import {
     ChevronDown,
     ChevronLeft,
     ChevronRight,
-    X
+    X,
+    CheckCircle2,
+    Calendar,
+    Filter,
 } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { DataTablePagination } from "@/components/shared/DataTablePagination";
+import { TableActionButtons } from "@/components/shared/TableActionButtons";
+import { AppListToolbar } from "@/components/shared/AppListToolbar";
+import { DatePicker } from "@/components/shared/DatePicker";
 import {
     Select,
     SelectContent,
@@ -49,6 +53,16 @@ import {
     DialogHeader,
     DialogTitle,
 } from "@/components/ui/dialog";
+import {
+    AlertDialog,
+    AlertDialogAction,
+    AlertDialogCancel,
+    AlertDialogContent,
+    AlertDialogDescription,
+    AlertDialogFooter,
+    AlertDialogHeader,
+    AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import {
     Popover,
     PopoverContent,
@@ -77,7 +91,8 @@ import {
     mockSMRRequests,
     getNextSMRNumber,
     addSMRRequest,
-    updateSMRRequest
+    updateSMRRequest,
+    deleteSMRRequest
 } from "@/lib/smrSharedData";
 
 // ============================================================================
@@ -112,258 +127,7 @@ const SectionHeader = ({ title }: { title: string }) => (
 );
 
 // Custom date picker component
-function DatePicker({ date, setDate, disabled = false }: {
-    date?: Date,
-    setDate: (d?: Date) => void,
-    disabled?: boolean
-}) {
-    const [isOpen, setIsOpen] = useState(false);
-    const [viewMode, setViewMode] = useState<"day" | "month" | "year">("day");
-    const [visibleDate, setVisibleDate] = useState(() => date || new Date());
-
-    const monthNames = [
-        "January", "February", "March", "April", "May", "June",
-        "July", "August", "September", "October", "November", "December"
-    ];
-
-    const monthNamesShort = [
-        "Jan", "Feb", "Mar", "Apr", "May", "Jun",
-        "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"
-    ];
-
-    const formatDisplayDate = (date: Date | undefined) => {
-        if (!date) return "Pick a date";
-        try {
-            return format(date, "dd-MM-yyyy");
-        } catch (error) {
-            return "Pick a date";
-        }
-    };
-
-    const handleDateSelect = (selectedDate: Date) => {
-        setDate(selectedDate);
-        setIsOpen(false);
-        setViewMode("day");
-    };
-
-    const handleMonthSelect = (monthIndex: number) => {
-        const newDate = new Date(visibleDate.getFullYear(), monthIndex, 1);
-        setVisibleDate(newDate);
-        setViewMode("day");
-    };
-
-    const handleYearSelect = (year: number) => {
-        const newDate = new Date(year, visibleDate.getMonth(), 1);
-        setVisibleDate(newDate);
-        setViewMode("month");
-    };
-
-    const navigateMonth = (direction: number) => {
-        const newDate = new Date(visibleDate.getFullYear(), visibleDate.getMonth() + direction, 1);
-        setVisibleDate(newDate);
-    };
-
-    const getDaysInMonth = (date: Date) => {
-        const year = date.getFullYear();
-        const month = date.getMonth();
-        const firstDay = new Date(year, month, 1);
-        const lastDay = new Date(year, month + 1, 0);
-        const daysInMonth = lastDay.getDate();
-        const startingDayOfWeek = firstDay.getDay();
-
-        const days = [];
-
-        // Previous month days
-        const prevMonth = new Date(year, month - 1, 0);
-        for (let i = startingDayOfWeek - 1; i >= 0; i--) {
-            const dayDate = new Date(year, month - 1, prevMonth.getDate() - i);
-            days.push({
-                date: dayDate,
-                isCurrentMonth: false,
-                isToday: false,
-                isSelected: false
-            });
-        }
-
-        // Current month days
-        for (let day = 1; day <= daysInMonth; day++) {
-            const currentDate = new Date(year, month, day);
-            const isToday = new Date().toDateString() === currentDate.toDateString();
-            const isSelected = date && currentDate.toDateString() === date.toDateString();
-
-            days.push({
-                date: currentDate,
-                isCurrentMonth: true,
-                isToday,
-                isSelected
-            });
-        }
-
-        // Next month days to fill grid
-        const remainingDays = 42 - days.length;
-        for (let day = 1; day <= remainingDays; day++) {
-            const dayDate = new Date(year, month + 1, day);
-            days.push({
-                date: dayDate,
-                isCurrentMonth: false,
-                isToday: false,
-                isSelected: false
-            });
-        }
-
-        return days;
-    };
-
-    const renderDayView = () => {
-        const days = getDaysInMonth(visibleDate);
-        const weekDays = ["Su", "Mo", "Tu", "We", "Th", "Fr", "Sa"];
-
-        return (
-            <div className="w-80">
-                <div className="flex items-center justify-between mb-4">
-                    <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => navigateMonth(-1)}>
-                        <ChevronLeft className="h-4 w-4" />
-                    </Button>
-                    <div className="flex items-center gap-2">
-                        <Button variant="ghost" className="font-semibold text-sm" onClick={() => setViewMode("month")}>
-                            {monthNames[visibleDate.getMonth()]}
-                            <ChevronDown className="ml-1 h-3 w-3" />
-                        </Button>
-                        <Button variant="ghost" className="font-semibold text-sm" onClick={() => setViewMode("year")}>
-                            {visibleDate.getFullYear()}
-                            <ChevronDown className="ml-1 h-3 w-3" />
-                        </Button>
-                    </div>
-                    <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => navigateMonth(1)}>
-                        <ChevronRight className="h-4 w-4" />
-                    </Button>
-                </div>
-                <div className="grid grid-cols-7 gap-1 mb-2">
-                    {weekDays.map((day) => (
-                        <div key={day} className="h-8 flex items-center justify-center text-xs font-medium text-muted-foreground">
-                            {day}
-                        </div>
-                    ))}
-                </div>
-                <div className="grid grid-cols-7 gap-1">
-                    {days.map((day, index) => (
-                        <Button
-                            key={index}
-                            variant="ghost"
-                            size="icon"
-                            className={cn(
-                                "h-8 w-8 text-sm font-normal",
-                                !day.isCurrentMonth && "text-muted-foreground opacity-50",
-                                day.isToday && "bg-accent text-accent-foreground font-semibold",
-                                day.isSelected && "bg-primary text-primary-foreground font-semibold",
-                                day.isCurrentMonth && "hover:bg-accent hover:text-accent-foreground"
-                            )}
-                            onClick={() => handleDateSelect(day.date)}
-                        >
-                            {day.date.getDate()}
-                        </Button>
-                    ))}
-                </div>
-            </div>
-        );
-    };
-
-    const renderMonthView = () => {
-        return (
-            <div className="w-80">
-                <div className="flex items-center justify-between mb-4">
-                    <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => setViewMode("day")}>
-                        <ChevronLeft className="h-4 w-4" />
-                    </Button>
-                    <h3 className="font-semibold">{visibleDate.getFullYear()}</h3>
-                    <Button variant="ghost" className="font-semibold text-sm" onClick={() => setViewMode("year")}>
-                        {visibleDate.getFullYear()}
-                        <ChevronDown className="ml-1 h-3 w-3" />
-                    </Button>
-                </div>
-                <div className="grid grid-cols-3 gap-2">
-                    {monthNamesShort.map((month, index) => (
-                        <Button
-                            key={month}
-                            variant="ghost"
-                            className={cn(
-                                "h-10 text-sm font-normal",
-                                index === visibleDate.getMonth() && "bg-primary text-primary-foreground font-semibold"
-                            )}
-                            onClick={() => handleMonthSelect(index)}
-                        >
-                            {month}
-                        </Button>
-                    ))}
-                </div>
-            </div>
-        );
-    };
-
-    const renderYearView = () => {
-        const currentYear = visibleDate.getFullYear();
-        const startYear = Math.floor(currentYear / 12) * 12;
-        const years = Array.from({ length: 12 }, (_, i) => startYear + i);
-
-        return (
-            <div className="w-80">
-                <div className="flex items-center justify-between mb-4">
-                    <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => {
-                        const newStartYear = startYear - 12;
-                        setVisibleDate(new Date(newStartYear, visibleDate.getMonth(), 1));
-                    }}>
-                        <ChevronLeft className="h-4 w-4" />
-                    </Button>
-                    <h3 className="font-semibold">{startYear} - {startYear + 11}</h3>
-                    <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => {
-                        const newStartYear = startYear + 12;
-                        setVisibleDate(new Date(newStartYear, visibleDate.getMonth(), 1));
-                    }}>
-                        <ChevronRight className="h-4 w-4" />
-                    </Button>
-                </div>
-                <div className="grid grid-cols-3 gap-2">
-                    {years.map((year) => (
-                        <Button
-                            key={year}
-                            variant="ghost"
-                            className={cn(
-                                "h-10 text-sm font-normal",
-                                year === currentYear && "bg-primary text-primary-foreground font-semibold"
-                            )}
-                            onClick={() => handleYearSelect(year)}
-                        >
-                            {year}
-                        </Button>
-                    ))}
-                </div>
-            </div>
-        );
-    };
-
-    return (
-        <Popover open={isOpen} onOpenChange={setIsOpen}>
-            <PopoverTrigger asChild>
-                <Button
-                    variant="outline"
-                    disabled={disabled}
-                    className={cn(
-                        "w-full justify-start text-left font-normal flex h-10 rounded-md border border-input px-3 py-2 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50 hover:bg-white",
-                        !date && "text-muted-foreground"
-                    )}
-                >
-                    <CalendarIcon className="mr-2 h-4 w-4" />
-                    {date ? formatDisplayDate(date) : <span>Pick a date</span>}
-                </Button>
-            </PopoverTrigger>
-            <PopoverContent className="w-auto p-4 shadow-lg border rounded-lg z-[9999]" align="start" side="bottom" sideOffset={4}>
-                {viewMode === "day" && renderDayView()}
-                {viewMode === "month" && renderMonthView()}
-                {viewMode === "year" && renderYearView()}
-            </PopoverContent>
-        </Popover>
-    );
-}
+// Local DatePicker removed in favor of shared component
 
 // ============================================================================
 // MAIN COMPONENT
@@ -384,7 +148,9 @@ export default function SMRRequests() {
     // Modal states
     const [isFormModalOpen, setIsFormModalOpen] = useState(false);
     const [isViewModalOpen, setIsViewModalOpen] = useState(false);
+    const [isDeleteAlertOpen, setIsDeleteAlertOpen] = useState(false);
     const [viewingRequest, setViewingRequest] = useState<SMRRequest | null>(null);
+    const [smrToDelete, setSmrToDelete] = useState<SMRRequest | null>(null);
 
     // Form states for creating new SMR
     const [smrRequestDate, setSmrRequestDate] = useState<Date>(new Date());
@@ -426,6 +192,7 @@ export default function SMRRequests() {
         const newItem: SMRItem = {
             id: Date.now(),
             itemName: masterItem.name,
+            itemCode: masterItem.itemCode,
             uom: masterItem.uom,
             type: masterItem.type,
             availableStock: masterItem.availableStock,
@@ -634,6 +401,19 @@ export default function SMRRequests() {
         setViewingRequest(null); // Clear editing state
     };
 
+    // Handler for deleting SMR request
+    const handleDeleteSMR = (id: number) => {
+        const updatedData = deleteSMRRequest(id);
+        setSmrRequests(updatedData);
+        setIsDeleteAlertOpen(false);
+        setIsFormModalOpen(false);
+        resetForm();
+        toast({
+            title: "Success",
+            description: "Material Requisition deleted successfully.",
+        });
+    };
+
     // Handler for opening create modal
     const handleAddSMR = () => {
         resetForm();
@@ -742,72 +522,53 @@ export default function SMRRequests() {
             <h1 className="text-3xl font-bold tracking-tight">Material Requisitions</h1>
 
             {/* Filter Section */}
-            <div className="flex flex-col sm:flex-row items-end gap-4 bg-card p-4 rounded-lg border shadow-sm">
-                <div className="w-full sm:flex-1">
-                    <Label className="mb-1.5 block text-xs font-medium text-muted-foreground uppercase tracking-wider">Search</Label>
-                    <div className="relative">
-                        <Search className="absolute left-3 top-3 h-4 w-4 text-muted-foreground" />
-                        <Input
-                            placeholder="Search by Req No, Location, Workcenter..."
-                            className="pl-10 h-10 rounded-md border-input bg-background"
-                            value={searchTerm}
-                            onChange={(e) => {
-                                setSearchTerm(e.target.value);
-                                setCurrentPage(1);
-                            }}
-                        />
-                    </div>
-                </div>
-                <div className="w-full sm:w-48">
-                    <Label className="mb-1.5 block text-xs font-medium text-muted-foreground uppercase tracking-wider">Status</Label>
-                    <Select value={filterStatus} onValueChange={(val) => {
-                        setFilterStatus(val as SMRStatus | "all");
+            {/* Standardized Toolbar */}
+            <AppListToolbar
+                search={{
+                    value: searchTerm,
+                    onChange: (val) => {
+                        setSearchTerm(val);
                         setCurrentPage(1);
-                    }}>
-                        <SelectTrigger className="h-10">
-                            <SelectValue placeholder="All Status" />
-                        </SelectTrigger>
-                        <SelectContent>
-                            <SelectItem value="all">All Status</SelectItem>
-                            <SelectItem value="Draft Req.">Draft Req.</SelectItem>
-                            <SelectItem value="Requested Req.">Requested Req.</SelectItem>
-                            <SelectItem value="Issued Req. by WH">Issued Req.</SelectItem>
-                            <SelectItem value="Received Req. by SC">Received Req.</SelectItem>
-                        </SelectContent>
-                    </Select>
-                </div>
-                <div className="w-full sm:w-48">
-                    <Label className="mb-1.5 block text-xs font-medium text-muted-foreground uppercase tracking-wider">Date</Label>
-                    <div className="flex gap-2">
-                        <div className="flex-1">
-                            <DatePicker
-                                date={dateFilter}
-                                setDate={setDateFilter}
-                            />
-                        </div>
-                        {dateFilter && (
-                            <Button
-                                variant="ghost"
-                                size="icon"
-                                onClick={() => setDateFilter(undefined)}
-                                className="h-10 w-10 shrink-0"
-                                title="Clear date filter"
-                            >
-                                <X className="h-4 w-4" />
-                            </Button>
-                        )}
-                    </div>
-                </div>
-                <div className="w-full sm:w-auto">
-                    <Button
-                        onClick={handleAddSMR}
-                        className="h-10 font-bold shadow-md"
-                    >
-                        <Plus className="h-4 w-4 mr-2" />
-                        Add Requisition
-                    </Button>
-                </div>
-            </div>
+                    },
+                    placeholder: "Search by Req No, Location, Workcenter..."
+                }}
+                filters={[
+                    {
+                        type: 'date',
+                        label: 'Date',
+                        value: dateFilter,
+                        onChange: (d) => {
+                            setDateFilter(d);
+                            setCurrentPage(1);
+                        },
+                        placeholder: "Pick a date"
+                    },
+                    {
+                        type: 'select',
+                        label: 'Status',
+                        value: filterStatus,
+                        options: [
+                            { value: "all", label: "All Status" },
+                            { value: "Draft Req.", label: "Draft Req." },
+                            { value: "Requested Req.", label: "Requested Req." },
+                            { value: "Issued Req. by WH", label: "Issued Req." },
+                            { value: "Received Req. by SC", label: "Received Req." }
+                        ],
+                        onChange: (val) => {
+                            setFilterStatus(val as SMRStatus | "all");
+                            setCurrentPage(1);
+                        },
+                        searchable: true
+                    }
+                ]}
+                actions={[
+                    {
+                        label: "Add Requisition",
+                        icon: <Plus className="h-4 w-4 mr-2" />,
+                        onClick: handleAddSMR
+                    }
+                ]}
+            />
 
             {/* SMR Requests Table */}
             <Card>
@@ -821,7 +582,7 @@ export default function SMRRequests() {
                                     <TableHead className="font-semibold text-xs uppercase tracking-wider">Location</TableHead>
                                     <TableHead className="font-semibold text-xs uppercase tracking-wider">Work Center</TableHead>
                                     <TableHead className="font-semibold text-xs uppercase tracking-wider text-center">Status</TableHead>
-                                    <TableHead className="text-right font-semibold text-xs uppercase tracking-wider pr-6">Actions</TableHead>
+                                    <TableHead className="text-center font-semibold text-xs uppercase tracking-wider w-[100px]">Actions</TableHead>
                                 </TableRow>
                             </TableHeader>
                             <TableBody>
@@ -852,28 +613,11 @@ export default function SMRRequests() {
                                             <TableCell className="py-4 text-center">
                                                 {getStatusBadge(request.status)}
                                             </TableCell>
-                                            <TableCell className="py-4 text-right pr-6">
-                                                <div className="flex justify-end gap-1">
-                                                    <Button
-                                                        variant="ghost"
-                                                        size="icon"
-                                                        className="h-8 w-8 text-muted-foreground hover:text-primary"
-                                                        onClick={() => handleView(request)}
-                                                    >
-                                                        <Eye className="h-4 w-4" />
-                                                    </Button>
-                                                    {/* Edit button only visible for Draft SMR */}
-                                                    {request.status === "Draft Req." && (
-                                                        <Button
-                                                            variant="ghost"
-                                                            size="icon"
-                                                            className="h-8 w-8 text-muted-foreground hover:text-emerald-600"
-                                                            onClick={() => handleEdit(request)}
-                                                        >
-                                                            <Edit className="h-4 w-4" />
-                                                        </Button>
-                                                    )}
-                                                </div>
+                                            <TableCell className="text-center py-4">
+                                                <TableActionButtons
+                                                    onView={() => handleView(request)}
+                                                    onEdit={request.status === "Draft Req." ? () => handleEdit(request) : undefined}
+                                                />
                                             </TableCell>
                                         </TableRow>
                                     ))
@@ -1169,33 +913,50 @@ export default function SMRRequests() {
                     </div>
 
                     {/* Form Footer with action buttons */}
-                    <DialogFooter className="p-6 pt-2 border-t mt-auto">
-                        <Button variant="outline" onClick={() => setIsFormModalOpen(false)}>
-                            Cancel
-                        </Button>
-                        <Button
-                            variant="secondary"
-                            onClick={handleSaveDraft}
-                            disabled={
-                                !formLocation ||
-                                !formDepartment ||
-                                addedItems.length === 0 ||
-                                addedItems.some(item => !item.qtyNeeded || item.qtyNeeded <= 0 || item.qtyNeeded > item.availableStock)
-                            }
-                        >
-                            Save
-                        </Button>
-                        <Button
-                            onClick={handleSubmit}
-                            disabled={
-                                !formLocation ||
-                                !formDepartment ||
-                                addedItems.length === 0 ||
-                                addedItems.some(item => !item.qtyNeeded || item.qtyNeeded <= 0 || item.qtyNeeded > item.availableStock)
-                            }
-                        >
-                            Submit
-                        </Button>
+                    <DialogFooter className="p-6 pt-2 border-t mt-auto flex sm:flex-row flex-col-reverse sm:justify-between justify-between items-center w-full sm:space-x-0">
+                        <div className="flex justify-start">
+                            {viewingRequest && viewingRequest.status === "Draft Req." && (
+                                <Button
+                                    variant="destructive"
+                                    onClick={() => {
+                                        setSmrToDelete(viewingRequest);
+                                        setIsDeleteAlertOpen(true);
+                                    }}
+                                >
+                                    <Trash2 className="h-4 w-4 mr-2" />
+                                    Delete
+                                </Button>
+                            )}
+                        </div>
+
+                        <div className="flex gap-2">
+                            <Button variant="outline" onClick={() => setIsFormModalOpen(false)}>
+                                Cancel
+                            </Button>
+                            <Button
+                                variant="secondary"
+                                onClick={handleSaveDraft}
+                                disabled={
+                                    !formLocation ||
+                                    !formDepartment ||
+                                    addedItems.length === 0 ||
+                                    addedItems.some(item => !item.qtyNeeded || item.qtyNeeded <= 0 || item.qtyNeeded > item.availableStock)
+                                }
+                            >
+                                Save
+                            </Button>
+                            <Button
+                                onClick={handleSubmit}
+                                disabled={
+                                    !formLocation ||
+                                    !formDepartment ||
+                                    addedItems.length === 0 ||
+                                    addedItems.some(item => !item.qtyNeeded || item.qtyNeeded <= 0 || item.qtyNeeded > item.availableStock)
+                                }
+                            >
+                                Submit
+                            </Button>
+                        </div>
                     </DialogFooter>
                 </DialogContent>
             </Dialog>
@@ -1363,6 +1124,27 @@ export default function SMRRequests() {
                     )}
                 </DialogContent>
             </Dialog>
+
+            {/* DELETE CONFIRMATION ALERT */}
+            <AlertDialog open={isDeleteAlertOpen} onOpenChange={setIsDeleteAlertOpen}>
+                <AlertDialogContent className="sm:max-w-[425px]">
+                    <AlertDialogHeader>
+                        <AlertDialogTitle>Are you sure?</AlertDialogTitle>
+                        <AlertDialogDescription>
+                            Are you sure you want to delete this SMR request? This action cannot be undone.
+                        </AlertDialogDescription>
+                    </AlertDialogHeader>
+                    <AlertDialogFooter>
+                        <AlertDialogCancel>Cancel</AlertDialogCancel>
+                        <AlertDialogAction
+                            className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                            onClick={() => smrToDelete && handleDeleteSMR(smrToDelete.id)}
+                        >
+                            Delete
+                        </AlertDialogAction>
+                    </AlertDialogFooter>
+                </AlertDialogContent>
+            </AlertDialog>
         </div>
     );
 }

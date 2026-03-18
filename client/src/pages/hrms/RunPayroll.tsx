@@ -42,6 +42,9 @@ import { useToast } from "@/hooks/use-toast";
 import { cn } from "@/lib/utils";
 import { differenceInDays, parse, format, isValid } from "date-fns";
 import { PayPeriod, mockPayPeriods, PayrollRun, MOCK_PAYROLL_RUNS, PayrollStatus, MOCK_EMPLOYEES, Employee } from "@/lib/payrollSharedData";
+import { AppListToolbar } from "@/components/shared/AppListToolbar";
+import { SearchableSelect } from "@/components/shared/SearchableSelect";
+import { DataTablePagination } from "@/components/shared/DataTablePagination";
 import { getPayrollSalaryAssignment, type PayrollSalaryAssignment } from "@/lib/salaryAssignmentSharedData";
 
 // ============================================================================
@@ -154,86 +157,12 @@ const getSalaryAssignment = (employeeId: string): SalaryAssignment | undefined =
  * Handles routing between Employee List and Employee Form
  */
 
-// --- Reusable Searchable Combobox Component ---
-
-interface SearchableSelectProps {
-  label: string;
-  value?: string;
-  options: string[];
-  onChange: (val: string) => void;
-  required?: boolean;
-  disabled?: boolean;
-}
-
-function SearchableSelect({
-  label,
-  value,
-  options,
-  onChange,
-  required = false,
-  disabled = false,
-}: SearchableSelectProps) {
-  const [open, setOpen] = useState(false);
-
-  return (
-    <div className="space-y-2">
-      <Label>
-        {label} {required && <span className="text-red-500">*</span>}
-      </Label>
-      <Popover open={open} onOpenChange={setOpen}>
-        <PopoverTrigger asChild>
-          <Button
-            variant="outline"
-            role="combobox"
-            aria-expanded={open}
-            className="w-full justify-between h-10 font-normal border-input"
-            disabled={disabled}
-          >
-            <span className={cn(!value && "text-muted-foreground")}>
-              {value || `Select ${label}`}
-            </span>
-            <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
-          </Button>
-        </PopoverTrigger>
-        <PopoverContent className="w-[var(--radix-popover-trigger-width)] p-0" align="start">
-          <Command>
-            <CommandInputBorderless placeholder={`Search ${label.toLowerCase()}...`} className="h-9" />
-            <CommandList className="max-h-[200px] overflow-y-auto">
-              <CommandEmpty>No results found.</CommandEmpty>
-              <CommandGroup>
-                {options.map((item) => (
-                  <CommandItem
-                    key={item}
-                    value={item}
-                    onSelect={() => {
-                      onChange(item);
-                      setOpen(false);
-                    }}
-                    className="cursor-pointer"
-                  >
-                    <Check
-                      className={cn(
-                        "mr-2 h-4 w-4",
-                        value === item ? "opacity-100" : "opacity-0"
-                      )}
-                    />
-                    {item}
-                  </CommandItem>
-                ))}
-              </CommandGroup>
-            </CommandList>
-          </Command>
-        </PopoverContent>
-      </Popover>
-    </div>
-  );
-}
 
 export default function RunPayroll() {
   const [, setLocation] = useLocation();
   const [refreshTrigger, setRefreshTrigger] = useState(0);
-  const [matchList] = useRoute("/hrms/payroll-management");
-  const [matchForm, params] = useRoute("/hrms/payroll-management/:employeeId");
+  const [matchList] = useRoute("/hrms/payroll-management/run-payroll");
+  const [matchForm, params] = useRoute("/hrms/payroll-management/run-payroll/:employeeId");
 
   // Determine which screen to show based on route
   if (matchForm && params?.employeeId) {
@@ -296,7 +225,7 @@ function EmployeeListScreen({ refreshTrigger }: { refreshTrigger: number }) {
   // KEEP: Essential for performance with large employee lists
   // ============================================================================
   const [currentPage, setCurrentPage] = useState(1);
-  const itemsPerPage = 10;
+  const [itemsPerPage, setItemsPerPage] = useState(10);
 
   const departments = useMemo(() => {
     // Only include departments from employees with salary assignments
@@ -371,7 +300,8 @@ function EmployeeListScreen({ refreshTrigger }: { refreshTrigger: number }) {
       Warning: 1,
       Pending: 2,
       Draft: 3,
-      Locked: 4,
+      Calculated: 4,
+      Locked: 5,
     };
 
     filtered.sort((a, b) => {
@@ -402,7 +332,8 @@ function EmployeeListScreen({ refreshTrigger }: { refreshTrigger: number }) {
       });
       return;
     }
-    setLocation(`/hrms/payroll-management/${employeeId}?periodId=${selectedPeriodId}`);
+    // Fixed: Ensure the route navigation correctly routes inside the run-payroll tab space
+    setLocation(`/hrms/payroll-management/run-payroll/${employeeId}?periodId=${selectedPeriodId}`);
   };
 
   const getStatusBadge = (status: PayrollStatus) => {
@@ -411,6 +342,7 @@ function EmployeeListScreen({ refreshTrigger }: { refreshTrigger: number }) {
       Warning: "bg-red-100 text-red-700 border-red-200",
       Pending: "bg-gray-100 text-gray-700 border-gray-200",
       Draft: "bg-blue-100 text-blue-700 border-blue-200",
+      Calculated: "bg-indigo-100 text-indigo-700 border-indigo-200",
       Locked: "bg-green-100 text-green-700 border-green-200",
     };
 
@@ -428,49 +360,40 @@ function EmployeeListScreen({ refreshTrigger }: { refreshTrigger: number }) {
       </div>
 
       {/* Top Bar Controls */}
-      <Card>
-        <CardContent className="pt-6">
-          <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-            <SearchableSelect
-              label="Pay Period"
-              required
-              value={selectedPeriod?.periodName ?? ""}
-              options={mockPayPeriods.map(p => p.periodName)}
-              onChange={(periodName) => {
-                // ⚠️ SAFE GUARD: Find period by name and set ID
-                const period = mockPayPeriods.find(p => p.periodName === periodName);
-                if (period) {
-                  setSelectedPeriodId(period.id);
-                }
-              }}
-            />
+      <AppListToolbar
+        search={{
+          value: searchQuery,
+          onChange: setSearchQuery,
+          placeholder: "Search by code or name..."
+        }}
+        filters={[
+          {
+            type: 'select',
+            label: 'Pay Period',
+            value: selectedPeriod?.periodName ?? "",
+            options: mockPayPeriods.map(p => p.periodName),
+            onChange: (periodName) => {
+              const period = mockPayPeriods.find(p => p.periodName === periodName);
+              if (period) {
+                setSelectedPeriodId(period.id);
+              }
+            },
+            searchable: true
+          },
+          {
+            type: 'select',
+            label: 'Department',
+            value: deptFilter,
+            options: departments,
+            onChange: setDeptFilter,
+            searchable: true
+          }
+        ]}
+      />
 
-            <SearchableSelect
-              label="Department"
-              value={deptFilter}
-              options={departments}
-              onChange={setDeptFilter}
-            />
-
-            <div className="space-y-2 md:col-span-2">
-              <Label>Search Employee</Label>
-              <div className="relative w-full flex items-center h-10 border border-zinc-400 rounded-md bg-background focus-within:ring-1 focus-within:ring-ring focus-within:ring-inset">
-                <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground pointer-events-none" />
-                <Input
-                  placeholder="Employee Code / Name"
-                  value={searchQuery}
-                  onChange={(e) => setSearchQuery(e.target.value)}
-                  className="pl-9 border-none shadow-none focus-visible:ring-0 bg-transparent h-full w-full"
-                />
-              </div>
-            </div>
-          </div>
-        </CardContent>
-      </Card>
-
-      {/* Employee Table or Empty State */}
+      {/* Employee Table or Empty State Box */}
       {!selectedPeriodId ? (
-        <Card>
+        <Card className="shadow-sm">
           <CardContent className="flex flex-col items-center justify-center py-16">
             <div className="h-16 w-16 rounded-full bg-muted flex items-center justify-center mb-4">
               <AlertCircle className="h-8 w-8 text-muted-foreground" />
@@ -482,81 +405,66 @@ function EmployeeListScreen({ refreshTrigger }: { refreshTrigger: number }) {
           </CardContent>
         </Card>
       ) : (
-        <Card>
-          <CardContent className="p-0">
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Employee Code</TableHead>
-                  <TableHead>Employee Name</TableHead>
-                  <TableHead>Department / Plant</TableHead>
-                  <TableHead>Salary Structure</TableHead>
-                  <TableHead>Status</TableHead>
-                  <TableHead className="text-right">Action</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {paginatedEmployees.length === 0 ? (
-                  <TableRow>
-                    <TableCell colSpan={6} className="h-24 text-center text-muted-foreground">
-                      No employees found
-                    </TableCell>
+        <Card className="shadow-sm">
+          <CardContent className="pt-6">
+            <div className="rounded-md border mb-4">
+              <Table>
+                <TableHeader>
+                  <TableRow className="bg-muted/50">
+                    <TableHead>Employee Code</TableHead>
+                    <TableHead>Employee Name</TableHead>
+                    <TableHead>Department / Plant</TableHead>
+                    <TableHead>Salary Structure</TableHead>
+                    <TableHead>Status</TableHead>
+                    <TableHead className="text-center">Actions</TableHead>
                   </TableRow>
-                ) : (
-                  paginatedEmployees.map(emp => (
-                    <TableRow key={emp.id}>
-                      <TableCell className="font-medium">{emp.code}</TableCell>
-                      <TableCell>{emp.name}</TableCell>
-                      <TableCell>{emp.department}</TableCell>
-                      <TableCell>
-                        {emp.hasAssignment ? emp.structureName : (
-                          <span className="text-red-500 text-sm">Not Assigned</span>
-                        )}
-                      </TableCell>
-                      <TableCell>{getStatusBadge(emp.status)}</TableCell>
-                      <TableCell className="text-right">
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          onClick={() => handleOpenEmployee(emp.id)}
-                        >
-                          Open
-                        </Button>
+                </TableHeader>
+                <TableBody>
+                  {paginatedEmployees.length === 0 ? (
+                    <TableRow>
+                      <TableCell colSpan={6} className="h-24 text-center text-muted-foreground">
+                        No employees found
                       </TableCell>
                     </TableRow>
-                  ))
-                )}
-              </TableBody>
-            </Table>
+                  ) : (
+                    paginatedEmployees.map(emp => (
+                      <TableRow key={emp.id} className="hover:bg-muted/30 transition-colors">
+                        <TableCell className="font-medium">{emp.code}</TableCell>
+                        <TableCell>{emp.name}</TableCell>
+                        <TableCell>{emp.department}</TableCell>
+                        <TableCell>
+                          {emp.hasAssignment ? emp.structureName : (
+                            <span className="text-red-500 text-sm">Not Assigned</span>
+                          )}
+                        </TableCell>
+                        <TableCell>{getStatusBadge(emp.status)}</TableCell>
+                        <TableCell className="text-right">
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => handleOpenEmployee(emp.id)}
+                          >
+                            Open
+                          </Button>
+                        </TableCell>
+                      </TableRow>
+                    ))
+                  )}
+                </TableBody>
+              </Table>
+            </div>
+
+            {/* Pagination inside CardContent */}
+            <DataTablePagination
+              currentPage={currentPage}
+              totalPages={totalPages}
+              totalItems={filteredEmployees.length}
+              itemsPerPage={itemsPerPage}
+              onPageChange={setCurrentPage}
+              onItemsPerPageChange={setItemsPerPage}
+            />
           </CardContent>
         </Card>
-      )}
-
-      {/* Pagination */}
-      {selectedPeriodId && filteredEmployees.length > 0 && (
-        <div className="flex justify-between items-center px-1 py-4">
-          <div className="text-sm text-muted-foreground">
-            Showing {((currentPage - 1) * itemsPerPage) + 1} to {Math.min(currentPage * itemsPerPage, filteredEmployees.length)} of {filteredEmployees.length} entries
-          </div>
-          <div className="flex gap-2">
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
-              disabled={currentPage === 1}
-            >
-              <ChevronLeft className="h-4 w-4" />
-            </Button>
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
-              disabled={currentPage === totalPages || totalPages === 0}
-            >
-              <ChevronRight className="h-4 w-4" />
-            </Button>
-          </div>
-        </div>
       )}
     </div>
   );
@@ -1021,7 +929,7 @@ function EmployeePayrollForm({
 
       // Step 5: Navigate back to listing page
       setTimeout(() => {
-        setLocation("/hrms/payroll-management");
+        setLocation("/hrms/payroll-management/run-payroll");
       }, 500);
     } else {
       toast({
@@ -1034,7 +942,7 @@ function EmployeePayrollForm({
 
   const handleBackToList = () => {
     // ✅ Pay period will be auto-restored from localStorage
-    setLocation("/hrms/payroll-management");
+    setLocation("/hrms/payroll-management/run-payroll");
   };
 
   // ========== RENDER ==========

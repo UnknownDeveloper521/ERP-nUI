@@ -1,41 +1,9 @@
-/**
- * ============================================================================
- * PAYSLIPS TAB - HR/ADMIN AND EMPLOYEE VIEWS (AUTO PAYSLIP FLOW)
- * ============================================================================
- * 
- * FLOW CHANGE: FULL AUTO PAYSLIP VISIBILITY
- * 
- * Key Changes:
- * - NO Send/Resend buttons - payslips are automatically available when Locked
- * - Payslip visibility controlled ONLY by Payroll Status (Locked = Available)
- * - "Resolve via Payroll" automatically unlocks payroll (Locked -> Draft)
- * - Employee cannot view payslip until payroll is locked again
- * 
- * HR/Admin View:
- * - Shows Payroll Status and Payslip Availability
- * - Can view payslips
- * 
- * Employee View:
- * - Shows Payroll Status and Payslip Availability
- * - Can view/download payslips ONLY when payroll is Locked
- * 
- * ============================================================================
- */
-
 import React, { useState, useMemo } from "react";
-import { useLocation } from "wouter";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
 import {
   Table,
   TableBody,
@@ -52,35 +20,24 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from "@/components/ui/alert-dialog";
-import { Textarea } from "@/components/ui/textarea";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
-import { Command, CommandInput, CommandList, CommandEmpty, CommandGroup, CommandItem, CommandInputBorderless } from "@/components/ui/command";
-import { Search, Printer, ChevronLeft, ChevronRight, AlertCircle, ChevronsUpDown, Check } from "lucide-react";
+import { Command, CommandList, CommandEmpty, CommandGroup, CommandItem, CommandInputBorderless } from "@/components/ui/command";
+import { Printer, ChevronLeft, ChevronRight, AlertCircle, ChevronsUpDown, Check, Search } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { cn } from "@/lib/utils";
-import { format, isValid } from "date-fns";
-import { PayPeriod, mockPayPeriods, PayrollRun, MOCK_PAYROLL_RUNS, PayrollStatus, MOCK_EMPLOYEES } from "@/lib/payrollSharedData";
-import { DataTablePagination } from "@/components/shared/DataTablePagination";
-import { TableActionButtons } from "@/components/shared/TableActionButtons";
+import { format } from "date-fns";
 import { AppListToolbar } from "@/components/shared/AppListToolbar";
 import { SearchableSelect } from "@/components/shared/SearchableSelect";
+import { DataTablePagination } from "@/components/shared/DataTablePagination";
+import { TableActionButtons } from "@/components/shared/TableActionButtons";
+import { mockPayPeriods, MOCK_PAYROLL_RUNS, MOCK_EMPLOYEES } from "@/lib/payrollSharedData";
 
 // ============================================================================
 // TYPE DEFINITIONS
 // ============================================================================
 
-type SimulatedRole = "Admin" | "HR Manager" | "Employee";
-type PayslipAvailability = "Available" | "Not Ready"; // Simplified status
+type PayrollStatus = "Draft" | "Calculated" | "Locked";
+type PayslipAvailability = "Available" | "Not Ready";
 
 interface Payslip {
   id: string;
@@ -91,7 +48,6 @@ interface Payslip {
   payPeriodId: string;
   periodName: string;
   payrollStatus: PayrollStatus;
-  // Payslip availability is derived from payrollStatus (Locked = Available)
   grossPay: number;
   totalDeductions: number;
   netPay: number;
@@ -102,31 +58,23 @@ interface Payslip {
   deductions: { name: string; amount: number }[];
 }
 
+// ============================================================================
+// REUSABLE COMPONENTS
+// ============================================================================
 
-// ============================================================================
-// MOCK DATA
-// ============================================================================
-// 
-// - Payslip availability is determined by payrollStatus:
-//   - Locked = Available (employee can view/download)
-//   - Draft/Calculated = Not Ready (employee cannot view)
-// - No "Sent" status - removed from flow
-// Shared mock data is imported from @/lib/payrollSharedData
-// ✅ DERIVED: MOCK_PAYSLIPS are now derived from MOCK_PAYROLL_RUNS inside the component
 
 
 // ============================================================================
 // MAIN COMPONENT
 // ============================================================================
 
-
-export default function Payslips() {
+export default function EmployeePayslip() {
   const { toast } = useToast();
-  const [, setLocation] = useLocation();
 
-  const [refreshTrigger, setRefreshTrigger] = useState(0);
+  // Employee ID for currently logged in (simulated) user
+  const currentEmployeeId = "emp-001";
 
-  // ✅ DERIVED: Compute payslips from shared Payroll Runs
+  // Data derivation
   const allPayslips = useMemo(() => {
     return MOCK_PAYROLL_RUNS.map(run => {
       const employee = MOCK_EMPLOYEES.find(e => e.id === run.employeeId);
@@ -140,7 +88,7 @@ export default function Payslips() {
         department: employee?.department || "N/A",
         payPeriodId: run.payPeriodId,
         periodName: period?.periodName || "N/A",
-        payrollStatus: run.status as PayrollStatus,
+        payrollStatus: run.status as any,
         grossPay: run.grossPay,
         totalDeductions: run.totalDeductions,
         netPay: run.netPay,
@@ -151,44 +99,24 @@ export default function Payslips() {
         deductions: run.deductions || []
       } as Payslip;
     });
-  }, [refreshTrigger]);
+  }, []);
 
-  // Filter and Search State
+  // Filter state
   const [selectedPeriodId, setSelectedPeriodId] = useState<string>("all");
-  const [searchQuery, setSearchQuery] = useState("");
-  const [deptFilter, setDeptFilter] = useState<string>("all");
-
-  // Pagination State
   const [currentPage, setCurrentPage] = useState(1);
   const [itemsPerPage, setItemsPerPage] = useState(10);
-
-  // Selected Payslip for Detail Dialog
   const [selectedPayslip, setSelectedPayslip] = useState<Payslip | null>(null);
 
-
-  // Filtered and Paginated Payslips
   const filteredPayslips = useMemo(() => {
-    let filtered = allPayslips;
+    // Show only for current employee
+    let filtered = allPayslips.filter(p => p.employeeId === currentEmployeeId);
 
     if (selectedPeriodId !== "all") {
       filtered = filtered.filter((p) => p.payPeriodId === selectedPeriodId);
     }
 
-    if (deptFilter !== "all") {
-      filtered = filtered.filter((p) => p.department === deptFilter);
-    }
-
-    if (searchQuery) {
-      const query = searchQuery.toLowerCase();
-      filtered = filtered.filter(
-        (p) =>
-          p.employeeCode.toLowerCase().includes(query) ||
-          p.employeeName.toLowerCase().includes(query)
-      );
-    }
-
     return filtered;
-  }, [allPayslips, selectedPeriodId, deptFilter, searchQuery]);
+  }, [allPayslips, selectedPeriodId]);
 
   const totalPages = Math.ceil(filteredPayslips.length / itemsPerPage);
   const paginatedPayslips = useMemo(() => {
@@ -218,10 +146,19 @@ export default function Payslips() {
   };
 
   const handleViewPayslip = (payslip: Payslip) => {
+    if (payslip.payrollStatus !== "Locked") {
+      toast({
+        title: "Payslip Not Available",
+        description: "Payslip is not available yet. Payroll is not locked for this period.",
+        variant: "destructive",
+      });
+      return;
+    }
     setSelectedPayslip(payslip);
   };
 
   const handleDownloadPayslip = (payslip: Payslip) => {
+    // Reusing the print logic from Payslips.tsx
     const payslipHTML = `
 <!DOCTYPE html>
 <html>
@@ -393,87 +330,84 @@ export default function Payslips() {
     }
   };
 
-
   return (
-    <div className="space-y-6">
+    <div className="h-full flex flex-col gap-6">
+      <div className="flex flex-col gap-1">
+        <h1 className="text-3xl font-bold tracking-tight">Employee Payslip</h1>
+        <p className="text-muted-foreground text-sm">View and download your monthly payslips</p>
+      </div>
+
       <AppListToolbar
-        search={{
-          value: searchQuery,
-          onChange: setSearchQuery,
-          placeholder: "Search by code or name..."
-        }}
         filters={[
           {
             type: 'select',
             label: 'Pay Period',
-            value: selectedPeriodId,
-            options: [{ label: "All Periods", value: "all" }, ...mockPayPeriods.map(period => ({ label: period.periodName, value: period.id }))],
-            onChange: setSelectedPeriodId,
-            searchable: true
-          },
-          {
-            type: 'select',
-            label: 'Department',
-            value: deptFilter,
-            options: [{ label: "All Departments", value: "all" }, "Engineering", "HR", "Finance", "Sales", "Marketing", "Operations"],
-            onChange: setDeptFilter,
+            value: selectedPeriodId === "all" ? "All Periods" : mockPayPeriods.find(p => p.id === selectedPeriodId)?.periodName || "All Periods",
+            options: ["All Periods", ...mockPayPeriods.map(period => period.periodName)],
+            onChange: (value) => {
+              if (value === "All Periods") {
+                setSelectedPeriodId("all");
+              } else {
+                const period = mockPayPeriods.find(p => p.periodName === value);
+                if (period) setSelectedPeriodId(period.id);
+              }
+            },
             searchable: true
           }
         ]}
       />
 
-      <Card className="shadow-sm">
+      <Card>
         <CardContent className="pt-6">
-          <div className="rounded-md border mb-4 overflow-hidden">
+          <div className="rounded-md border">
             <Table>
               <TableHeader>
                 <TableRow className="bg-muted/50">
-                  <TableHead className="font-semibold px-4">Employee Code</TableHead>
-                  <TableHead className="font-semibold">Name</TableHead>
-                  <TableHead className="font-semibold">Period</TableHead>
-                  <TableHead className="font-semibold text-right">Gross Pay</TableHead>
-                  <TableHead className="font-semibold text-right">Deductions</TableHead>
-                  <TableHead className="font-semibold text-right">Net Pay</TableHead>
-                  <TableHead className="font-semibold">Payroll Status</TableHead>
-                  <TableHead className="font-semibold">Payslip Availability</TableHead>
-                  <TableHead className="font-semibold text-center px-4">Actions</TableHead>
+                  <TableHead className="w-[150px]">Period</TableHead>
+                  <TableHead>Payroll Status</TableHead>
+                  <TableHead>Payslip Availability</TableHead>
+                  <TableHead className="text-center">Actions</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {paginatedPayslips.length === 0 ? (
                   <TableRow>
-                    <TableCell colSpan={9} className="text-center py-8 text-gray-500 italic">
-                      No payslips found
+                    <TableCell colSpan={4} className="h-32 text-center text-muted-foreground italic">
+                      No payslips found for your account.
                     </TableCell>
                   </TableRow>
                 ) : (
                   paginatedPayslips.map((payslip) => {
                     const availability = getPayslipAvailability(payslip.payrollStatus);
+                    const isAvailable = payslip.payrollStatus === "Locked";
+
                     return (
                       <TableRow key={payslip.id} className="hover:bg-muted/30 transition-colors">
-                        <TableCell className="font-medium px-4">{payslip.employeeCode}</TableCell>
-                        <TableCell>{payslip.employeeName}</TableCell>
-                        <TableCell>{payslip.periodName}</TableCell>
-                        <TableCell className="text-right">USh{payslip.grossPay.toLocaleString()}</TableCell>
-                        <TableCell className="text-right">USh{payslip.totalDeductions.toLocaleString()}</TableCell>
-                        <TableCell className="text-right font-semibold">USh{payslip.netPay.toLocaleString()}</TableCell>
+                        <TableCell className="font-medium text-sm">{payslip.periodName}</TableCell>
                         <TableCell>{getStatusBadge(payslip.payrollStatus)}</TableCell>
                         <TableCell>{getStatusBadge(availability)}</TableCell>
                         <TableCell>
-                          <TableActionButtons
-                            onView={() => handleViewPayslip(payslip)}
-                            customActions={
-                              <Button
-                                variant="ghost"
-                                size="icon"
-                                className="h-8 w-8 text-muted-foreground hover:text-primary"
-                                onClick={() => handleDownloadPayslip(payslip)}
-                                title="Print Payslip"
-                              >
-                                <Printer className="h-4 w-4" />
-                              </Button>
-                            }
-                          />
+                          {!isAvailable ? (
+                            <div className="flex items-center justify-center gap-2 text-muted-foreground">
+                              <AlertCircle className="h-4 w-4" />
+                              <span className="text-sm">Not Ready</span>
+                            </div>
+                          ) : (
+                            <TableActionButtons
+                              onView={() => handleViewPayslip(payslip)}
+                              customActions={
+                                <Button
+                                  variant="ghost"
+                                  size="icon"
+                                  className="h-8 w-8 text-muted-foreground hover:text-primary"
+                                  onClick={() => handleDownloadPayslip(payslip)}
+                                  title="Print"
+                                >
+                                  <Printer className="h-4 w-4" />
+                                </Button>
+                              }
+                            />
+                          )}
                         </TableCell>
                       </TableRow>
                     );
@@ -494,6 +428,7 @@ export default function Payslips() {
         </CardContent>
       </Card>
 
+
       {selectedPayslip && (
         <PayslipDetailDialog
           payslip={selectedPayslip}
@@ -502,11 +437,9 @@ export default function Payslips() {
           getPayslipAvailability={getPayslipAvailability}
         />
       )}
-
     </div>
   );
 }
-
 
 // ============================================================================
 // PAYSLIP DETAIL DIALOG COMPONENT
@@ -525,18 +458,12 @@ function PayslipDetailDialog({
   getStatusBadge,
   getPayslipAvailability,
 }: PayslipDetailDialogProps) {
-  const handleClose = (open: boolean) => {
-    if (!open) {
-      onClose();
-    }
-  };
-
   if (!payslip) return null;
 
   const availability = getPayslipAvailability(payslip.payrollStatus);
 
   return (
-    <Dialog open={true} onOpenChange={handleClose}>
+    <Dialog open={true} onOpenChange={(open) => !open && onClose()}>
       <DialogContent className="max-w-4xl max-h-[90vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle>Payslip Details</DialogTitle>
@@ -546,7 +473,6 @@ function PayslipDetailDialog({
         </DialogHeader>
 
         <div className="space-y-6">
-          {/* Employee Info */}
           <div className="grid grid-cols-2 gap-4 p-4 bg-gray-50 rounded-lg">
             <div>
               <div className="text-sm text-gray-600">Employee Code</div>
@@ -558,7 +484,7 @@ function PayslipDetailDialog({
             </div>
             <div>
               <div className="text-sm text-gray-600">Payroll Status</div>
-              <div>{payslip && getStatusBadge(payslip.payrollStatus)}</div>
+              <div>{getStatusBadge(payslip.payrollStatus)}</div>
             </div>
             <div>
               <div className="text-sm text-gray-600">Payslip Availability</div>
@@ -566,27 +492,26 @@ function PayslipDetailDialog({
             </div>
           </div>
 
-          {/* Summary Cards */}
           <div className="grid grid-cols-4 gap-4">
-            <Card>
+            <Card className="shadow-none border-gray-100">
               <CardContent className="pt-6">
                 <div className="text-sm text-gray-600">Paid Days</div>
                 <div className="text-2xl font-bold">{payslip?.paidDays}</div>
               </CardContent>
             </Card>
-            <Card>
+            <Card className="shadow-none border-gray-100">
               <CardContent className="pt-6">
                 <div className="text-sm text-gray-600">OT Hours</div>
                 <div className="text-2xl font-bold">{payslip?.otHours}</div>
               </CardContent>
             </Card>
-            <Card>
+            <Card className="shadow-none border-gray-100">
               <CardContent className="pt-6">
                 <div className="text-sm text-gray-600">LWP Days</div>
                 <div className="text-2xl font-bold">{payslip?.lwpDays}</div>
               </CardContent>
             </Card>
-            <Card>
+            <Card className="shadow-none border-gray-100">
               <CardContent className="pt-6">
                 <div className="text-sm text-gray-600">Net Pay</div>
                 <div className="text-2xl font-bold text-green-600">
@@ -596,15 +521,13 @@ function PayslipDetailDialog({
             </Card>
           </div>
 
-          {/* Earnings and Deductions */}
           <div className="grid grid-cols-2 gap-6">
-            {/* Earnings */}
             <div>
               <h3 className="font-semibold mb-3 text-green-700">Earnings</h3>
               <div className="border rounded-lg overflow-hidden">
                 <Table>
                   <TableHeader>
-                    <TableRow className="bg-green-50">
+                    <TableRow className="bg-green-50/50">
                       <TableHead className="font-semibold">Component</TableHead>
                       <TableHead className="font-semibold text-right">Amount</TableHead>
                     </TableRow>
@@ -618,7 +541,7 @@ function PayslipDetailDialog({
                         </TableCell>
                       </TableRow>
                     ))}
-                    <TableRow className="bg-green-50 font-semibold">
+                    <TableRow className="bg-green-50/50 font-semibold">
                       <TableCell>Total Earnings</TableCell>
                       <TableCell className="text-right">
                         USh{payslip?.grossPay.toLocaleString()}
@@ -629,13 +552,12 @@ function PayslipDetailDialog({
               </div>
             </div>
 
-            {/* Deductions */}
             <div>
               <h3 className="font-semibold mb-3 text-red-700">Deductions</h3>
               <div className="border rounded-lg overflow-hidden">
                 <Table>
                   <TableHeader>
-                    <TableRow className="bg-red-50">
+                    <TableRow className="bg-red-50/50">
                       <TableHead className="font-semibold">Component</TableHead>
                       <TableHead className="font-semibold text-right">Amount</TableHead>
                     </TableRow>
@@ -649,7 +571,7 @@ function PayslipDetailDialog({
                         </TableCell>
                       </TableRow>
                     ))}
-                    <TableRow className="bg-red-50 font-semibold">
+                    <TableRow className="bg-red-50/50 font-semibold">
                       <TableCell>Total Deductions</TableCell>
                       <TableCell className="text-right">
                         USh{payslip?.totalDeductions.toLocaleString()}
@@ -661,10 +583,9 @@ function PayslipDetailDialog({
             </div>
           </div>
 
-          {/* Net Pay Summary */}
-          <div className="p-4 bg-blue-50 rounded-lg border-2 border-blue-200">
+          <div className="p-4 bg-blue-50/50 rounded-lg border border-blue-100">
             <div className="flex justify-between items-center">
-              <span className="text-lg font-semibold">Net Pay</span>
+              <span className="text-lg font-semibold">Net Salary</span>
               <span className="text-2xl font-bold text-blue-600">
                 USh{payslip?.netPay.toLocaleString()}
               </span>
@@ -679,5 +600,3 @@ function PayslipDetailDialog({
     </Dialog>
   );
 }
-
-

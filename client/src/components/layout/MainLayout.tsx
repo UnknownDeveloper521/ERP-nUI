@@ -134,8 +134,10 @@ const Sidebar = ({ className }: SidebarProps) => {
         { name: "Core HR", path: "/hrms/core-hr" },
         { name: "Attendance", path: "/hrms/attendance" },
         { name: "Leave Management", path: "/hrms/leave-management" },
-        { name: "Payroll Management", path: "/hrms/payroll-management" },
+        { name: "Payroll Management", path: "/hrms/payroll-management/run-payroll" },
+        // { name: "Employee Payslip", path: "/hrms/employee-payslip" }, // Hidden submodule
         { name: "Worker Payrolls", path: "/hrms/worker-payrolls" },
+        { name: "Holiday", path: "/hrms/holiday" },
       ]
     },
     "Vendors": { name: "Vendors", icon: Box, path: "/vendors" },
@@ -150,7 +152,7 @@ const Sidebar = ({ className }: SidebarProps) => {
         { name: "GRN", path: "/inventory/grn" },
         { name: "Dispatch", path: "/inventory/dispatch" },
         { name: "Material Ledger", path: "/inventory/material-ledger" },
-        { name: "Material Requisitions", path: "/inventory/smr-requests" },
+        { name: "Material Requisitions", path: "/inventory/material-requisitions" },
       ]
     },
     "Production": {
@@ -178,12 +180,12 @@ const Sidebar = ({ className }: SidebarProps) => {
     "Sales": {
       name: "Sales", // Changed: Renamed from "Sales & Invoicing" to "Sales"
       icon: ShoppingCart,
-      path: "/sales", // Updated: Changed from /sales-invoicing to /sales
+      path: "/sales/dashboard", // Updated: Changed from /sales to /sales/dashboard
       subItems: [
-        { name: "Dashboard", path: "/sales" }, // Updated: Changed from /sales-invoicing
+        { name: "Dashboard", path: "/sales/dashboard" }, // Updated: Changed from /sales to /sales/dashboard
         // Removed: Leads submodule
         { name: "Quotations", path: "/sales/quotations" }, // Updated: Changed from /sales-invoicing/quotations
-        { name: "Sales Order", path: "/sales/orders" }, // Updated: Changed from /sales-invoicing/orders
+        { name: "Sales Order", path: "/sales/sales-orders" }, // Updated: Changed from /sales/orders
         // Removed: Invoicing - moved to Accounting module
         { name: "Follow Up", path: "/sales/follow-up" }, // Updated: Changed from /sales-invoicing/follow-up
       ]
@@ -193,7 +195,7 @@ const Sidebar = ({ className }: SidebarProps) => {
       icon: CreditCard,
       path: "/procurement",
       subItems: [
-        { name: "My MR", path: "/procurement/mr-request" },
+        { name: "My MR", path: "/procurement/my-mr" },
         { name: "MR Execution", path: "/procurement/mr-execution" },
         { name: "PO", path: "/procurement/po" },
       ]
@@ -219,14 +221,15 @@ const Sidebar = ({ className }: SidebarProps) => {
         { name: "Pending Payment", path: "/accounting/pending-payment" }
       ]
     },
-    "System": { name: "Users & Roles", icon: Settings, path: "/settings" },
+    "UserManagement": { name: "User Management", icon: User, path: "/user-management" },
+    "RolesPermissions": { name: "Roles & Permissions", icon: Settings, path: "/settings" },
     "HRSetup": {
       name: "HR Setup",
       icon: Settings,
-      path: "/hr-setup/employee-salary",
+      path: "/hr-setup/assign-employee-salary",
       subItems: [
-        { name: "Employee Salary Details", path: "/hr-setup/employee-salary" },
-        { name: "Salary Component", path: "/hr-setup/salary-component" },
+        { name: "Assign Employee Salary", path: "/hr-setup/assign-employee-salary" },
+        { name: "Salary Component", path: "/hr-setup/salary-component/earnings" },
         { name: "Salary Structure", path: "/hr-setup/salary-structure" },
         { name: "Pay Period", path: "/hr-setup/pay-period" },
         { name: "Workers wage Period", path: "/hr-setup/workers-wage-period" },
@@ -253,7 +256,7 @@ const Sidebar = ({ className }: SidebarProps) => {
   // KEEP: Essential for sidebar structure
   // ==========================================================================
   const coreModules = ["Dashboard", "Chat", "HRMS", "Vendors", "Customers", "Inventory", "Production", "QualityCheck", "Sales", "Purchases", "ServiceCenter", "Accounting"];
-  const systemModules = ["System", "HRSetup", "Masters"];
+  const systemModules = ["UserManagement", "RolesPermissions", "HRSetup", "Masters"];
   // ==========================================================================
   // ROLE-BASED FILTERING
   // ==========================================================================
@@ -528,14 +531,17 @@ export default function MainLayout({ children }: { children: ReactNode }) {
   const modules = [
     { name: "Dashboard", path: "/" },
     { name: "HRMS", path: "/hrms" },
+    { name: "Payroll Management", path: "/hrms/payroll-management" },
+    // { name: "Employee Payslip", path: "/hrms/employee-payslip" }, // Hidden submodule
     { name: "Worker Payrolls", path: "/hrms/worker-payrolls" },
+    { name: "Holiday", path: "/hrms/holiday" },
     { name: "Vendors", path: "/vendors" },
     { name: "Inventory", path: "/inventory" },
     { name: "BOM", path: "/production/bom" },
-    { name: "Sales", path: "/sales" }, // Updated: Changed from /sales-invoicing
+    { name: "Sales", path: "/sales/dashboard" }, // Updated: Changed from /sales to /sales/dashboard
     // Removed: Leads module
     { name: "Quotations", path: "/sales/quotations" }, // Updated: Changed from /sales-invoicing/quotations
-    { name: "Sales Order", path: "/sales/orders" }, // Updated: Changed from /sales-invoicing/orders
+    { name: "Sales Order", path: "/sales/sales-orders" }, // Updated: Changed from /sales/orders
     { name: "Follow Up", path: "/sales/follow-up" }, // Updated: Changed from /sales-invoicing/follow-up
     { name: "Invoicing", path: "/accounting/invoicing" }, // Moved: Invoicing to Accounting
     { name: "Pending Payment", path: "/accounting/pending-payment" }, // Pending Payment in Accounting
@@ -543,12 +549,13 @@ export default function MainLayout({ children }: { children: ReactNode }) {
     { name: "Accounting", path: "/accounting" },
     { name: "Worker Payments", path: "/accounting/worker-payments" },
     { name: "Performance", path: "/performance" },
-    { name: "Employee Salary Details", path: "/hr-setup/employee-salary" },
-    { name: "Salary Component", path: "/hr-setup/salary-component" },
+    { name: "Assign Employee Salary", path: "/hr-setup/assign-employee-salary" },
+    { name: "Salary Component", path: "/hr-setup/salary-component/earnings" },
     { name: "Salary Structure", path: "/hr-setup/salary-structure" },
     { name: "Pay Period", path: "/hr-setup/pay-period" },
     { name: "Workers wage Period", path: "/hr-setup/workers-wage-period" },
-    { name: "Settings", path: "/settings" },
+    { name: "User Management", path: "/user-management" },
+    { name: "Roles & Permissions", path: "/settings" },
     { name: "My Account", path: "/my-account" },
   ];
 

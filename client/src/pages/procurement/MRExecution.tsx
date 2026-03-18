@@ -3,7 +3,6 @@ import { format, parse, isValid } from "date-fns";
 import { Card, CardContent } from "@/components/ui/card";
 import {
     Search,
-    Eye,
     ChevronLeft,
     ChevronRight,
     FileText,
@@ -15,15 +14,16 @@ import {
     Plus,
     Check,
     Package,
-    Edit,
     Printer,
-    Download
+    Download,
+    ChevronsUpDown
 } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { DataTablePagination } from "@/components/shared/DataTablePagination";
+import { AppListToolbar } from "@/components/shared/AppListToolbar";
 import {
     Table,
     TableBody,
@@ -32,6 +32,7 @@ import {
     TableHeader,
     TableRow,
 } from "@/components/ui/table";
+import { TableActionButtons } from "@/components/shared/TableActionButtons";
 import {
     Tabs,
     TabsContent,
@@ -59,10 +60,18 @@ import {
     DialogHeader,
     DialogTitle,
 } from "@/components/ui/dialog";
+import {
+    Command,
+    CommandInputBorderless,
+    CommandList,
+    CommandEmpty,
+    CommandGroup,
+    CommandItem,
+} from "@/components/ui/command";
 import { Checkbox } from "@/components/ui/checkbox";
 import { cn } from "@/lib/utils";
 import { useToast } from "@/hooks/use-toast";
-import { mockWarehouses, mockLocations, mockTransporters } from "@/lib/masterMockData";
+import { mockWarehouses, mockLocations, mockTransporters, mockWorkCenters } from "@/lib/masterMockData";
 
 import {
     MRStatus,
@@ -98,141 +107,6 @@ const formatDate = (date: Date | string): string => {
     if (!isValid(d)) return typeof date === 'string' ? date : "";
     return format(d, "dd-MM-yyyy");
 };
-
-function DatePicker({ date, setDate, disabled = false }: {
-    date?: Date,
-    setDate: (d?: Date) => void,
-    disabled?: boolean
-}) {
-    const [isOpen, setIsOpen] = useState(false);
-    const [visibleDate, setVisibleDate] = useState(() => date || new Date());
-
-    const monthNames = [
-        "January", "February", "March", "April", "May", "June",
-        "July", "August", "September", "October", "November", "December"
-    ];
-
-    const formatDisplayDate = (date: Date | undefined) => {
-        if (!date) return "Pick a date";
-        try {
-            return format(date, "dd-MM-yyyy");
-        } catch (error) {
-            return "Pick a date";
-        }
-    };
-
-    const handleDateSelect = (selectedDate: Date) => {
-        setDate(selectedDate);
-        setIsOpen(false);
-    };
-
-    const navigateMonth = (direction: number) => {
-        const newDate = new Date(visibleDate.getFullYear(), visibleDate.getMonth() + direction, 1);
-        setVisibleDate(newDate);
-    };
-
-    const getDaysInMonth = (date: Date) => {
-        const year = date.getFullYear();
-        const month = date.getMonth();
-        const firstDay = new Date(year, month, 1);
-        const lastDay = new Date(year, month + 1, 0);
-        const daysInMonth = lastDay.getDate();
-        const startingDayOfWeek = firstDay.getDay();
-
-        const days = [];
-        const prevMonth = new Date(year, month - 1, 0);
-        for (let i = startingDayOfWeek - 1; i >= 0; i--) {
-            days.push({ date: new Date(year, month - 1, prevMonth.getDate() - i), isCurrentMonth: false });
-        }
-
-        for (let day = 1; day <= daysInMonth; day++) {
-            const currentDate = new Date(year, month, day);
-            const today = new Date();
-            today.setHours(0, 0, 0, 0);
-            days.push({
-                date: currentDate,
-                isCurrentMonth: true,
-                isToday: today.toDateString() === currentDate.toDateString(),
-                isSelected: date && currentDate.toDateString() === date.toDateString(),
-                isDisabled: currentDate < today
-            });
-        }
-
-        const remainingDays = 42 - days.length;
-        for (let day = 1; day <= remainingDays; day++) {
-            const currentDate = new Date(year, month + 1, day);
-            const today = new Date();
-            today.setHours(0, 0, 0, 0);
-            days.push({
-                date: currentDate,
-                isCurrentMonth: false,
-                isDisabled: currentDate < today
-            });
-        }
-        return days;
-    };
-
-    return (
-        <Popover open={isOpen} onOpenChange={setIsOpen}>
-            <PopoverTrigger asChild>
-                <Button
-                    variant="outline"
-                    disabled={disabled}
-                    className={cn(
-                        "w-full justify-start text-left font-normal flex h-10 rounded-md border border-input px-3 py-2 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50 hover:bg-white",
-                        !date && "text-muted-foreground"
-                    )}
-                >
-                    <CalendarIcon className="mr-2 h-4 w-4" />
-                    {date ? formatDisplayDate(date) : <span>Pick a date</span>}
-                </Button>
-            </PopoverTrigger>
-            <PopoverContent className="w-auto p-4 shadow-lg border rounded-lg z-[9999]" align="start" side="bottom" sideOffset={4}>
-                <div className="w-80">
-                    <div className="flex items-center justify-between mb-4">
-                        <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => navigateMonth(-1)}>
-                            <ChevronLeft className="h-4 w-4" />
-                        </Button>
-                        <div className="flex items-center gap-2">
-                            <span className="font-semibold text-sm">{monthNames[visibleDate.getMonth()]} {visibleDate.getFullYear()}</span>
-                        </div>
-                        <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => navigateMonth(1)}>
-                            <ChevronRight className="h-4 w-4" />
-                        </Button>
-                    </div>
-                    <div className="grid grid-cols-7 gap-1 mb-2">
-                        {["Su", "Mo", "Tu", "We", "Th", "Fr", "Sa"].map((day) => (
-                            <div key={day} className="h-8 flex items-center justify-center text-xs font-medium text-muted-foreground">
-                                {day}
-                            </div>
-                        ))}
-                    </div>
-                    <div className="grid grid-cols-7 gap-1">
-                        {getDaysInMonth(visibleDate).map((day, index) => (
-                            <Button
-                                key={index}
-                                variant="ghost"
-                                size="icon"
-                                disabled={(day as any).isDisabled}
-                                className={cn(
-                                    "h-8 w-8 text-sm font-normal",
-                                    !day.isCurrentMonth && "text-muted-foreground opacity-30",
-                                    (day as any).isToday && "bg-accent text-accent-foreground font-semibold",
-                                    (day as any).isSelected && "bg-primary text-primary-foreground font-semibold",
-                                    day.isCurrentMonth && !(day as any).isDisabled && "hover:bg-accent hover:text-accent-foreground",
-                                    (day as any).isDisabled && "cursor-not-allowed opacity-20"
-                                )}
-                                onClick={() => !(day as any).isDisabled && handleDateSelect(day.date)}
-                            >
-                                {day.date.getDate()}
-                            </Button>
-                        ))}
-                    </div>
-                </div>
-            </PopoverContent>
-        </Popover>
-    );
-}
 
 const getStatusBadge = (status: MRStatus) => {
     switch (status) {
@@ -271,6 +145,7 @@ const MRExecution = () => {
     const [searchTerm, setSearchTerm] = useState("");
     const [filterDate, setFilterDate] = useState<Date | undefined>(undefined);
     const [filterStatus, setFilterStatus] = useState<string>("Requested MR");
+    const [filterWorkCenter, setFilterWorkCenter] = useState<string>("all");
     const [currentPage, setCurrentPage] = useState(1);
     const [itemsPerPage, setItemsPerPage] = useState(10);
 
@@ -321,8 +196,9 @@ const MRExecution = () => {
 
         const matchesDate = filterDate ? mr.mrDate === format(filterDate, "dd-MM-yyyy") : true;
         const matchesStatus = filterStatus === "all" ? true : mr.status === filterStatus;
+        const matchesWorkCenter = filterWorkCenter === "all" ? true : mr.workCenter === filterWorkCenter;
 
-        return matchesSearch && matchesDate && matchesStatus;
+        return matchesSearch && matchesDate && matchesStatus && matchesWorkCenter;
     });
 
     const totalPages = Math.ceil(filteredMRs.length / itemsPerPage);
@@ -462,58 +338,47 @@ const MRExecution = () => {
                 <h1 className="text-3xl font-bold tracking-tight text-slate-900">MR Execution</h1>
             </div>
 
-            <div className="flex flex-col sm:flex-row items-end gap-4 bg-card p-4 rounded-lg border shadow-sm">
-                <div className="w-full sm:flex-1">
-                    <Label className="mb-1.5 block text-xs font-medium text-muted-foreground uppercase tracking-wider">Search</Label>
-                    <div className="relative">
-                        <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
-                        <Input
-                            placeholder="Search by Code, Location, WorkCenter or Dept..."
-                            className="pl-9 h-10"
-                            value={searchTerm}
-                            onChange={(e) => {
-                                setSearchTerm(e.target.value);
-                                setCurrentPage(1);
-                            }}
-                        />
-                    </div>
-                </div>
-                <div className="w-full sm:w-56">
-                    <Label className="mb-1.5 block text-xs font-medium text-muted-foreground uppercase tracking-wider">Filter By Date</Label>
-                    <div className="flex gap-2">
-                        <DatePicker date={filterDate} setDate={(date) => {
+            <AppListToolbar
+                search={{
+                    value: searchTerm,
+                    onChange: (val) => {
+                        setSearchTerm(val);
+                        setCurrentPage(1);
+                    },
+                    placeholder: "Search by Code, Location, WorkCenter or Dept..."
+                }}
+                filters={[
+                    {
+                        type: 'select',
+                        label: 'WorkCenter',
+                        value: filterWorkCenter,
+                        options: [{ label: "All Work Centers", value: "all" }, ...mockWorkCenters.map(wc => wc.name)],
+                        onChange: setFilterWorkCenter,
+                        searchable: true
+                    },
+                    {
+                        type: 'date',
+                        label: 'Date',
+                        value: filterDate,
+                        onChange: (date) => {
                             setFilterDate(date);
                             setCurrentPage(1);
-                        }} />
-                        {filterDate && (
-                            <Button variant="ghost" size="icon" className="h-10 w-10 shrink-0" onClick={() => {
-                                setFilterDate(undefined);
-                                setCurrentPage(1);
-                            }}>
-                                <Trash2 className="h-4 w-4 text-muted-foreground" />
-                            </Button>
-                        )}
-                    </div>
-                </div>
-                <div className="w-full sm:w-48">
-                    <Label className="mb-1.5 block text-xs font-medium text-muted-foreground uppercase tracking-wider">Filter By Status</Label>
-                    <Select value={filterStatus} onValueChange={(val) => {
-                        setFilterStatus(val);
-                        setCurrentPage(1);
-                    }}>
-                        <SelectTrigger className="h-10">
-                            <SelectValue placeholder="All Status" />
-                        </SelectTrigger>
-                        <SelectContent>
-                            <SelectItem value="all">All Status</SelectItem>
-                            <SelectItem value="Requested MR">Requested MR</SelectItem>
-                            <SelectItem value="MR in Fullfillment">MR in Fullfillment</SelectItem>
-                            <SelectItem value="FullFilled MR">FullFilled MR</SelectItem>
-                            <SelectItem value="MR Closed">MR Closed</SelectItem>
-                        </SelectContent>
-                    </Select>
-                </div>
-            </div>
+                        },
+                        showClear: !!filterDate
+                    },
+                    {
+                        type: 'select',
+                        label: 'Status',
+                        value: filterStatus,
+                        options: [{ label: "All Status", value: "all" }, "Requested MR", "MR in Fullfillment", "FullFilled MR", "MR Closed"],
+                        onChange: (val) => {
+                            setFilterStatus(val);
+                            setCurrentPage(1);
+                        },
+                        searchable: true
+                    }
+                ]}
+            />
 
             <Card>
                 <CardContent className="pt-6">
@@ -528,7 +393,7 @@ const MRExecution = () => {
                                     <TableHead className="font-semibold text-xs uppercase tracking-wider">Department</TableHead>
                                     <TableHead className="font-semibold text-xs uppercase tracking-wider">Requested By</TableHead>
                                     <TableHead className="font-semibold text-xs uppercase tracking-wider text-center">Status</TableHead>
-                                    <TableHead className="text-right font-semibold text-xs uppercase tracking-wider pr-6">Actions</TableHead>
+                                    <TableHead className="text-center w-[100px]">Actions</TableHead>
                                 </TableRow>
                             </TableHeader>
                             <TableBody>
@@ -548,16 +413,20 @@ const MRExecution = () => {
                                             <TableCell>{request.department}</TableCell>
                                             <TableCell>{request.requestedBy}</TableCell>
                                             <TableCell className="text-center">{getStatusBadge(request.status)}</TableCell>
-                                            <TableCell className="text-right pr-6">
-                                                <Button
-                                                    variant="ghost"
-                                                    size="sm"
-                                                    className="h-8"
-                                                    onClick={() => handleOpenConfig(request)}
-                                                >
-                                                    <Settings2 className="h-4 w-4 mr-1" />
-                                                    Configure
-                                                </Button>
+                                            <TableCell className="text-center">
+                                                <TableActionButtons
+                                                    customActions={
+                                                        <Button
+                                                            variant="ghost"
+                                                            size="sm"
+                                                            className="h-8 text-primary hover:text-primary hover:bg-primary/10"
+                                                            onClick={() => handleOpenConfig(request)}
+                                                        >
+                                                            <Settings2 className="h-4 w-4 mr-1" />
+                                                            Configure
+                                                        </Button>
+                                                    }
+                                                />
                                             </TableCell>
                                         </TableRow>
                                     ))

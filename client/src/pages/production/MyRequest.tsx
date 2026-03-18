@@ -54,8 +54,11 @@ import {
   CommandItem,
 } from "@/components/ui/command";
 import { Badge } from "@/components/ui/badge";
-import { Plus, Search, Eye, Pencil, ChevronLeft, ChevronRight, ChevronsUpDown, Check } from "lucide-react";
+import { Plus, Search, ChevronLeft, ChevronRight, ChevronsUpDown, Check, Calendar as CalendarIcon, ChevronDown, X } from "lucide-react";
 import { DataTablePagination } from "@/components/shared/DataTablePagination";
+import { TableActionButtons } from "@/components/shared/TableActionButtons";
+import { AppListToolbar, FilterField } from "@/components/shared/AppListToolbar";
+import { format, parse, isValid } from "date-fns";
 import { useToast } from "@/hooks/use-toast";
 import { cn } from "@/lib/utils";
 import { 
@@ -122,7 +125,7 @@ interface SearchableSelectProps {
   disabled?: boolean;
 }
 
-function SearchableSelect({
+function LocalSearchableSelect({
   label,
   value,
   options,
@@ -183,6 +186,316 @@ function SearchableSelect({
         </PopoverContent>
       </Popover>
     </div>
+  );
+}
+
+// ============================================================================
+// LOCAL DATE PICKER COMPONENT
+// ============================================================================
+
+interface LocalDatePickerProps {
+  date?: Date | string;
+  setDate: (date?: Date) => void;
+  disabled?: boolean;
+  minDate?: Date;
+  placeholder?: string;
+}
+
+function LocalDatePicker({
+  date,
+  setDate,
+  disabled = false,
+  minDate,
+  placeholder = "Pick a date"
+}: LocalDatePickerProps) {
+  const [isOpen, setIsOpen] = useState(false);
+  const [viewMode, setViewMode] = useState<"day" | "month" | "year">("day");
+  
+  // Convert string date to Date object if needed
+  const parsedDate = typeof date === 'string' ? (date ? new Date(date) : undefined) : date;
+  const [visibleDate, setVisibleDate] = useState(() => parsedDate || new Date());
+
+  const monthNames = [
+    "January", "February", "March", "April", "May", "June",
+    "July", "August", "September", "October", "November", "December"
+  ];
+
+  const monthNamesShort = [
+    "Jan", "Feb", "Mar", "Apr", "May", "Jun",
+    "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"
+  ];
+
+  const formatDisplayDate = (d: Date | undefined) => {
+    if (!d || !isValid(d)) return placeholder;
+    if (!d) return "Pick a date";
+    try {
+      return format(d, "dd-MM-yyyy");
+    } catch (error) {
+      return "Pick a date";
+    }
+  };
+
+  const handleDateSelect = (selectedDate: Date) => {
+    setDate(selectedDate);
+    setIsOpen(false);
+    setViewMode("day");
+  };
+
+  const handleMonthSelect = (monthIndex: number) => {
+    const newDate = new Date(visibleDate.getFullYear(), monthIndex, 1);
+    setVisibleDate(newDate);
+    setViewMode("day");
+  };
+
+  const handleYearSelect = (year: number) => {
+    const newDate = new Date(year, visibleDate.getMonth(), 1);
+    setVisibleDate(newDate);
+    setViewMode("month");
+  };
+
+  const navigateMonth = (direction: number) => {
+    const newDate = new Date(visibleDate.getFullYear(), visibleDate.getMonth() + direction, 1);
+    setVisibleDate(newDate);
+  };
+
+  const getDaysInMonth = (date: Date) => {
+    const year = date.getFullYear();
+    const month = date.getMonth();
+    const firstDay = new Date(year, month, 1);
+    const lastDay = new Date(year, month + 1, 0);
+    const daysInMonth = lastDay.getDate();
+    const startingDayOfWeek = firstDay.getDay();
+
+    const days = [];
+
+    const prevMonth = new Date(year, month - 1, 0);
+    for (let i = startingDayOfWeek - 1; i >= 0; i--) {
+      days.push({
+        date: new Date(year, month - 1, prevMonth.getDate() - i),
+        isCurrentMonth: false,
+        isToday: false,
+        isSelected: false
+      });
+    }
+
+    for (let day = 1; day <= daysInMonth; day++) {
+      const currentDate = new Date(year, month, day);
+      const today = new Date();
+      const isToday = currentDate.toDateString() === today.toDateString();
+      const isSelected = parsedDate && currentDate.toDateString() === parsedDate.toDateString();
+
+      days.push({
+        date: currentDate,
+        isCurrentMonth: true,
+        isToday,
+        isSelected
+      });
+    }
+
+    const remainingDays = 42 - days.length;
+    for (let day = 1; day <= remainingDays; day++) {
+      days.push({
+        date: new Date(year, month + 1, day),
+        isCurrentMonth: false,
+        isToday: false,
+        isSelected: false
+      });
+    }
+
+    return days;
+  };
+
+  const renderDayView = () => {
+    const days = getDaysInMonth(visibleDate);
+    const weekDays = ["Su", "Mo", "Tu", "We", "Th", "Fr", "Sa"];
+
+    return (
+      <div className="w-80">
+        <div className="flex items-center justify-between mb-4">
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-8 w-8"
+            onClick={() => navigateMonth(-1)}
+          >
+            <ChevronLeft className="h-4 w-4" />
+          </Button>
+
+          <div className="flex items-center gap-2">
+            <Button
+              variant="ghost"
+              className="font-semibold text-sm"
+              onClick={() => setViewMode("month")}
+            >
+              {monthNames[visibleDate.getMonth()]}
+              <ChevronDown className="ml-1 h-3 w-3" />
+            </Button>
+            <Button
+              variant="ghost"
+              className="font-semibold text-sm"
+              onClick={() => setViewMode("year")}
+            >
+              {visibleDate.getFullYear()}
+              <ChevronDown className="ml-1 h-3 w-3" />
+            </Button>
+          </div>
+
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-8 w-8"
+            onClick={() => navigateMonth(1)}
+          >
+            <ChevronRight className="h-4 w-4" />
+          </Button>
+        </div>
+
+        <div className="grid grid-cols-7 gap-1 mb-2">
+          {weekDays.map((day) => (
+            <div key={day} className="h-8 flex items-center justify-center text-xs font-medium text-muted-foreground">
+              {day}
+            </div>
+          ))}
+        </div>
+
+        <div className="grid grid-cols-7 gap-1">
+          {days.map((day, index) => (
+            <Button
+              key={index}
+              variant="ghost"
+              size="icon"
+              className={cn(
+                "h-8 w-8 text-sm font-normal",
+                !day.isCurrentMonth && "text-muted-foreground opacity-50",
+                day.isToday && "bg-accent text-accent-foreground font-semibold",
+                day.isSelected && "bg-primary text-primary-foreground font-semibold",
+                day.isCurrentMonth && "hover:bg-accent hover:text-accent-foreground"
+              )}
+              onClick={() => handleDateSelect(day.date)}
+            >
+              {day.date.getDate()}
+            </Button>
+          ))}
+        </div>
+      </div>
+    );
+  };
+
+  const renderMonthView = () => {
+    return (
+      <div className="w-80">
+        <div className="flex items-center justify-between mb-4">
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-8 w-8"
+            onClick={() => setViewMode("day")}
+          >
+            <ChevronLeft className="h-4 w-4" />
+          </Button>
+          <h3 className="font-semibold">{visibleDate.getFullYear()}</h3>
+          <Button
+            variant="ghost"
+            className="font-semibold text-sm"
+            onClick={() => setViewMode("year")}
+          >
+            {visibleDate.getFullYear()}
+            <ChevronDown className="ml-1 h-3 w-3" />
+          </Button>
+        </div>
+
+        <div className="grid grid-cols-3 gap-2">
+          {monthNamesShort.map((month, index) => (
+            <Button
+              key={month}
+              variant="ghost"
+              className={cn(
+                "h-10 text-sm font-normal",
+                index === visibleDate.getMonth() && "bg-primary text-primary-foreground font-semibold"
+              )}
+              onClick={() => handleMonthSelect(index)}
+            >
+              {month}
+            </Button>
+          ))}
+        </div>
+      </div>
+    );
+  };
+
+  const renderYearView = () => {
+    const currentYear = visibleDate.getFullYear();
+    const startYear = Math.floor(currentYear / 12) * 12;
+    const years = Array.from({ length: 12 }, (_, i) => startYear + i);
+
+    return (
+      <div className="w-80">
+        <div className="flex items-center justify-between mb-4">
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-8 w-8"
+            onClick={() => {
+              const newStartYear = startYear - 12;
+              setVisibleDate(new Date(newStartYear, visibleDate.getMonth(), 1));
+            }}
+          >
+            <ChevronLeft className="h-4 w-4" />
+          </Button>
+          <h3 className="font-semibold">{startYear} - {startYear + 11}</h3>
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-8 w-8"
+            onClick={() => {
+              const newStartYear = startYear + 12;
+              setVisibleDate(new Date(newStartYear, visibleDate.getMonth(), 1));
+            }}
+          >
+            <ChevronRight className="h-4 w-4" />
+          </Button>
+        </div>
+
+        <div className="grid grid-cols-3 gap-2">
+          {years.map((year) => (
+            <Button
+              key={year}
+              variant="ghost"
+              className={cn(
+                "h-10 text-sm font-normal",
+                year === currentYear && "bg-primary text-primary-foreground font-semibold"
+              )}
+              onClick={() => handleYearSelect(year)}
+            >
+              {year}
+            </Button>
+          ))}
+        </div>
+      </div>
+    );
+  };
+
+  return (
+    <Popover open={isOpen} onOpenChange={setIsOpen}>
+      <PopoverTrigger asChild>
+        <Button
+          variant="outline"
+          disabled={disabled}
+          className={cn(
+            "w-full justify-start text-left font-normal flex h-9 rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50 hover:bg-transparent",
+            !parsedDate && "text-muted-foreground"
+          )}
+        >
+          <CalendarIcon className="mr-2 h-4 w-4" />
+          {parsedDate ? formatDisplayDate(parsedDate) : <span>Pick a date</span>}
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent className="w-auto p-4 shadow-lg border rounded-lg z-[9999]" align="start" side="bottom" sideOffset={4}>
+        {viewMode === "day" && renderDayView()}
+        {viewMode === "month" && renderMonthView()}
+        {viewMode === "year" && renderYearView()}
+      </PopoverContent>
+    </Popover>
   );
 }
 
@@ -274,7 +587,8 @@ export default function MyRequest() {
   // Pagination state - using DataTablePagination component
   const [itemsPerPage, setItemsPerPage] = useState(10);
   const [statusFilter, setStatusFilter] = useState("Requested to Warehouse");
-  const [operationFilter, setOperationFilter] = useState("All");
+  const [operationFilter, setOperationFilter] = useState("all");
+  const [shiftFilter, setShiftFilter] = useState("all");
 
   // Modal state
   const [isViewModalOpen, setIsViewModalOpen] = useState(false);
@@ -537,12 +851,10 @@ export default function MyRequest() {
   const filteredRequests = mrRequests.filter(item => {
     const matchesSearch = item.mrNo.toLowerCase().includes(searchTerm.toLowerCase()) ||
       item.operation.toLowerCase().includes(searchTerm.toLowerCase());
-    let matchesStatus = true;
-    if (statusFilter !== "All") {
-      matchesStatus = item.status === statusFilter;
-    }
-    const matchesOperation = operationFilter === "All" || item.operation === operationFilter;
-    return matchesSearch && matchesStatus && matchesOperation;
+    const matchesStatus = statusFilter === "all" || item.status === statusFilter;
+    const matchesOperation = operationFilter === "all" || item.operation === operationFilter;
+    const matchesShift = shiftFilter === "all" || item.shift === shiftFilter;
+    return matchesSearch && matchesStatus && matchesOperation && matchesShift;
   });
 
   const totalPages = Math.ceil(filteredRequests.length / itemsPerPage);
@@ -561,7 +873,7 @@ export default function MyRequest() {
   // Reset to page 1 when filters change
   useEffect(() => {
     setCurrentPage(1);
-  }, [searchTerm, statusFilter, operationFilter]);
+  }, [searchTerm, statusFilter, operationFilter, shiftFilter]);
 
   // ============================================================================
   // RENDER - LISTING VIEW WITH MODAL FORM
@@ -576,51 +888,58 @@ export default function MyRequest() {
         </p>
       </div>
 
-      <div className="flex flex-col sm:flex-row items-end gap-4 bg-card p-4 rounded-lg border shadow-sm">
-        <div className="w-full sm:flex-1">
-          <Label className="mb-1.5 block text-xs font-medium text-muted-foreground uppercase tracking-wider">Search</Label>
-          <div className="relative">
-            <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
-            <Input
-              placeholder="Search by MR Number or Operation..."
-              className="pl-9 h-10"
-              value={searchTerm}
-              onChange={(e) => {
-                setSearchTerm(e.target.value);
-                setCurrentPage(1);
-              }}
-            />
-          </div>
-        </div>
-        <div className="w-full sm:w-48">
-          <SearchableSelect
-            label="Operation"
-            value={operationFilter}
-            options={["All", ...OPERATIONS]}
-            onChange={(value) => {
-              setOperationFilter(value);
+      <AppListToolbar
+        search={{
+          value: searchTerm,
+          onChange: (val) => {
+            setSearchTerm(val);
+            setCurrentPage(1);
+          },
+          placeholder: "Search by MR Number or Operation..."
+        }}
+        filters={[
+          {
+            type: 'select',
+            label: 'Operation',
+            value: operationFilter,
+            options: [{ label: "All Operations", value: "all" }, ...OPERATIONS],
+            onChange: (val) => {
+              setOperationFilter(val);
               setCurrentPage(1);
-            }}
-          />
-        </div>
-        <div className="w-full sm:w-48">
-          <SearchableSelect
-            label="Status"
-            value={statusFilter}
-            options={["Requested to Warehouse", "Issued by Warehouse", "Received by Production"]}
-            onChange={(value) => {
-              setStatusFilter(value);
+            },
+            searchable: true
+          },
+          {
+            type: 'select',
+            label: 'Shift',
+            value: shiftFilter,
+            options: [{ label: "All Shifts", value: "all" }, "Morning", "Night"],
+            onChange: (val) => {
+              setShiftFilter(val);
               setCurrentPage(1);
-            }}
-          />
-        </div>
-        <div className="w-full sm:w-auto">
-          <Button onClick={handleOpenNewForm} className="w-full sm:w-auto">
-            <Plus className="mr-2 h-4 w-4" />
-            My Request
-          </Button>
-        </div>
-      </div>
+            },
+            searchable: true
+          },
+          {
+            type: 'select',
+            label: 'Status',
+            value: statusFilter,
+            options: [{ label: "All Status", value: "all" }, "Requested to Warehouse", "Issued by Warehouse", "Received by Production"],
+            onChange: (val) => {
+              setStatusFilter(val);
+              setCurrentPage(1);
+            },
+            searchable: true
+          }
+        ]}
+        actions={[
+          {
+            label: "My Request",
+            icon: <Plus className="h-4 w-4" />,
+            onClick: handleOpenNewForm
+          }
+        ]}
+      />
 
       {/* Table Card - UI matches Materials reference */}
       <Card>
@@ -636,7 +955,7 @@ export default function MyRequest() {
                   <TableHead className="font-semibold text-xs uppercase tracking-wider">Work Center</TableHead>
                   <TableHead className="font-semibold text-xs uppercase tracking-wider">Warehouse</TableHead>
                   <TableHead className="font-semibold text-xs uppercase tracking-wider">Status</TableHead>
-                  <TableHead className="text-right font-semibold text-xs uppercase tracking-wider pr-6">Action</TableHead>
+                  <TableHead className="text-center font-bold text-[11px] tracking-wider py-4">Actions</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -668,27 +987,11 @@ export default function MyRequest() {
                           {request.status}
                         </Badge>
                       </TableCell>
-                      <TableCell className="text-right pr-6">
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          className="h-8"
-                          onClick={() => handleView(request.id)}
-                        >
-                          <Eye className="h-4 w-4 mr-1" />
-                          View
-                        </Button>
-                        {request.status === "Requested to Warehouse" && (
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            className="h-8 text-primary"
-                            onClick={() => handleEdit(request.id)}
-                          >
-                            <Pencil className="h-4 w-4 mr-1" />
-                            Edit
-                          </Button>
-                        )}
+                      <TableCell className="text-center py-4">
+                        <TableActionButtons
+                          onView={() => handleView(request.id)}
+                          onEdit={request.status === "Requested to Warehouse" ? () => handleEdit(request.id) : undefined}
+                        />
                       </TableCell>
                     </TableRow>
                   ))
@@ -917,45 +1220,53 @@ export default function MyRequest() {
               </CardHeader>
               <CardContent>
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-                  <div className="space-y-2">
-                    <Label>MR Number</Label>
-                    <Input value={formData.mrNo} readOnly className="bg-muted" />
-                  </div>
+                  {editingId && (
+                    <div className="space-y-2">
+                      <Label>MR Number</Label>
+                      <Input value={formData.mrNo} readOnly className="bg-muted" />
+                    </div>
+                  )}
                   <div className="space-y-2">
                     <Label>Date</Label>
-                    <Input type="date" value={formData.date} onChange={(e) => setFormData({ ...formData, date: e.target.value })} />
+                    <LocalDatePicker
+                      date={formData.date}
+                      setDate={(d: Date | undefined) => setFormData({ ...formData, date: d ? format(d, 'yyyy-MM-dd') : '' })}
+                    />
                   </div>
                   <div className="space-y-2">
                     <Label>Required By Date <span className="text-red-500">*</span></Label>
-                    <Input type="date" value={formData.requiredByDate} onChange={(e) => setFormData({ ...formData, requiredByDate: e.target.value })} />
+                    <LocalDatePicker
+                      date={formData.requiredByDate}
+                      setDate={(d: Date | undefined) => setFormData({ ...formData, requiredByDate: d ? format(d, 'yyyy-MM-dd') : '' })}
+                    />
                   </div>
-                  <SearchableSelect
+                  <LocalSearchableSelect
                     label="Operation"
                     required
                     value={formData.operation}
                     options={OPERATIONS}
                     onChange={handleOperationChange}
                   />
-                  <SearchableSelect
+                  <LocalSearchableSelect
                     label="Work Center"
                     required
                     value={formData.workCenter}
                     options={WORK_CENTERS}
-                    onChange={(val) => setFormData({ ...formData, workCenter: val })}
+                    onChange={(val: string) => setFormData({ ...formData, workCenter: val })}
                   />
-                  <SearchableSelect
+                  <LocalSearchableSelect
                     label="Warehouse"
                     required
                     value={formData.warehouse}
                     options={WAREHOUSES}
                     onChange={handleWarehouseChange}
                   />
-                  <SearchableSelect
+                  <LocalSearchableSelect
                     label="Shift"
                     required
                     value={formData.shift}
                     options={["Morning", "Night"]}
-                    onChange={(val) => setFormData({ ...formData, shift: val })}
+                    onChange={(val: string) => setFormData({ ...formData, shift: val })}
                   />
                 </div>
 

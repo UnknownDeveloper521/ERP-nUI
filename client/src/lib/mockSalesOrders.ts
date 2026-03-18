@@ -31,6 +31,7 @@ export interface DispatchEntry {
     dispatchQty: number;
     dispatchDate: string;
     note: string;
+    serialNumbers?: string[];
 }
 
 export interface SOData {

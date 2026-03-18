@@ -5,6 +5,8 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
+import { DataTablePagination } from "@/components/shared/DataTablePagination";
+import { AppListToolbar } from "@/components/shared/AppListToolbar";
 import {
     Select,
     SelectContent,
@@ -12,6 +14,7 @@ import {
     SelectTrigger,
     SelectValue,
 } from "@/components/ui/select";
+import { Card, CardContent } from "@/components/ui/card";
 import {
     Popover,
     PopoverContent,
@@ -56,6 +59,8 @@ import {
 import { Calendar } from "@/components/ui/calendar";
 import { cn } from "@/lib/utils";
 import { useToast } from "@/hooks/use-toast";
+import { TableActionButtons } from "@/components/shared/TableActionButtons";
+import { Eye, Pencil } from "lucide-react";
 import { WorkersWagePeriod, mockWagePeriods } from "@/lib/workerPayrollSharedData";
 
 
@@ -66,7 +71,6 @@ export default function WorkersWagePeriodPage() {
     const [periods, setPeriods] = useState<WorkersWagePeriod[]>(mockWagePeriods);
     const [searchQuery, setSearchQuery] = useState("");
     const [statusFilter, setStatusFilter] = useState("All");
-    const [openStatusDropdown, setOpenStatusDropdown] = useState(false);
     const [isCreateOpen, setIsCreateOpen] = useState(false);
     const [editingId, setEditingId] = useState<string | null>(null);
     const [isMonthOpen, setIsMonthOpen] = useState(false);
@@ -74,7 +78,7 @@ export default function WorkersWagePeriodPage() {
     const [yearNavStart, setYearNavStart] = useState(new Date().getFullYear() - 1);
     const [currentPage, setCurrentPage] = useState(1);
     const [isDeleteOpen, setIsDeleteOpen] = useState(false);
-    const itemsPerPage = 10;
+    const [itemsPerPage, setItemsPerPage] = useState(10);
 
     // Form State
     const [selectedMonth, setSelectedMonth] = useState<string>("");
@@ -290,156 +294,108 @@ export default function WorkersWagePeriodPage() {
     ];
 
     return (
-        <div className="space-y-6">
-            <div>
-                <h1 className="text-2xl font-bold tracking-tight">Workers Wage Periods</h1>
-                <p className="text-sm text-muted-foreground mt-1">Manage weekly wage periods for factory workers.</p>
+        <div className="h-full flex flex-col gap-6">
+            <div className="flex flex-col gap-1">
+                <h1 className="text-3xl font-bold tracking-tight">Workers Wage Periods</h1>
+                <p className="text-muted-foreground text-sm">Manage weekly wage periods for factory workers.</p>
             </div>
 
-            <div className="flex flex-col sm:flex-row justify-between items-center gap-4">
-                <div className="flex items-center gap-2 w-full sm:w-auto ml-0 sm:ml-4">
-                    <div className="relative w-full sm:w-72 flex items-center h-10 border border-zinc-400 rounded-md bg-background focus-within:ring-1 focus-within:ring-ring focus-within:ring-inset">
-                        <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground pointer-events-none" />
-                        <Input
-                            placeholder="Search period (e.g. Feb-2026)"
-                            value={searchQuery}
-                            onChange={(e) => setSearchQuery(e.target.value)}
-                            className="pl-9 border-none shadow-none focus-visible:ring-0 bg-transparent h-full w-full"
-                        />
-                    </div>
-                    <Popover open={openStatusDropdown} onOpenChange={setOpenStatusDropdown}>
-                        <PopoverTrigger asChild>
-                            <Button
-                                variant="outline"
-                                role="combobox"
-                                aria-expanded={openStatusDropdown}
-                                className="w-[200px] justify-between h-10 font-normal border-input"
-                            >
-                                <span className={cn(statusFilter === "All" && "text-muted-foreground")}>
-                                    {statusFilter === "All" ? "All Status" : statusFilter}
-                                </span>
-                                <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
-                            </Button>
-                        </PopoverTrigger>
-                        <PopoverContent className="w-[200px] p-0" align="start">
-                            <Command>
-                                <CommandInputBorderless placeholder="Search status..." className="h-9" />
-                                <CommandList className="max-h-[250px] overflow-y-auto">
-                                    <CommandEmpty>No status found.</CommandEmpty>
-                                    <CommandGroup>
-                                        {["All", "Open", "Locked", "Processed", "Paid"].map((status) => (
-                                            <CommandItem
-                                                key={status}
-                                                value={status}
-                                                onSelect={(currentValue) => {
-                                                    setStatusFilter(currentValue === "all" ? "All" : currentValue.charAt(0).toUpperCase() + currentValue.slice(1));
-                                                    setOpenStatusDropdown(false);
-                                                }}
-                                                className="cursor-pointer"
-                                            >
-                                                <Check
-                                                    className={cn(
-                                                        "mr-2 h-4 w-4",
-                                                        statusFilter === status ? "opacity-100" : "opacity-0"
-                                                    )}
-                                                />
-                                                {status === "All" ? "All Status" : status}
-                                            </CommandItem>
-                                        ))}
-                                    </CommandGroup>
-                                </CommandList>
-                            </Command>
-                        </PopoverContent>
-                    </Popover>
-                </div>
-                <Button onClick={() => {
-                    resetForm();
-                    setIsCreateOpen(true);
-                }}>
-                    <Plus className="mr-2 h-4 w-4" /> Create Wage Period
-                </Button>
-            </div>
+            <AppListToolbar
+                search={{
+                    placeholder: "Search period (e.g. Feb-2026)",
+                    value: searchQuery,
+                    onChange: setSearchQuery
+                }}
+                filters={[
+                    {
+                        type: "select",
+                        label: "Status Filter",
+                        value: statusFilter,
+                        onChange: setStatusFilter,
+                        options: [
+                            { label: "All Status", value: "All" },
+                            { label: "Open", value: "Open" },
+                            { label: "Locked", value: "Locked" },
+                            { label: "Processed", value: "Processed" },
+                            { label: "Paid", value: "Paid" }
+                        ],
+                        searchable: true
+                    }
+                ]}
+                actions={[
+                    {
+                        label: "Create Wage Period",
+                        icon: <Plus className="mr-2 h-4 w-4" />,
+                        onClick: () => {
+                            resetForm();
+                            setIsCreateOpen(true);
+                        }
+                    }
+                ]}
+            />
 
-            <div className="rounded-md border bg-card shadow-sm">
-                <Table>
-                    <TableHeader>
-                        <TableRow>
-                            <TableHead>Period</TableHead>
-                            <TableHead>Start Date</TableHead>
-                            <TableHead>End Date</TableHead>
-                            <TableHead>Status</TableHead>
-                            <TableHead className="text-right">Actions</TableHead>
-                        </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                        {paginatedPeriods.length === 0 ? (
-                            <TableRow>
-                                <TableCell colSpan={5} className="h-32 text-center text-muted-foreground">
-                                    No wage periods found.
-                                </TableCell>
-                            </TableRow>
-                        ) : (
-                            paginatedPeriods.map((period) => (
-                                <TableRow key={period.id}>
-                                    <TableCell className="font-medium">{period.periodName}</TableCell>
-                                    <TableCell>{format(parse(period.startDate, 'yyyy-MM-dd', new Date()), 'dd MMM yyyy')}</TableCell>
-                                    <TableCell>{format(parse(period.endDate, 'yyyy-MM-dd', new Date()), 'dd MMM yyyy')}</TableCell>
-                                    <TableCell>
-                                        <Badge variant={
-                                            period.status === 'Open' ? 'outline' :
-                                                period.status === 'Locked' ? 'secondary' :
-                                                    period.status === 'Processed' ? 'default' : 'secondary'
-                                        } className={cn(
-                                            period.status === 'Open' && "bg-blue-50 text-blue-700 border-blue-200",
-                                            period.status === 'Locked' && "bg-amber-50 text-amber-700 border-amber-200",
-                                            period.status === 'Processed' && "bg-purple-50 text-purple-700 border-purple-200",
-                                            period.status === 'Paid' && "bg-green-50 text-green-700 border-green-200"
-                                        )}>
-                                            {period.status}
-                                        </Badge>
-                                    </TableCell>
-                                    <TableCell className="text-right">
-                                        <div className="flex justify-end gap-2">
-                                            <Button
-                                                variant="ghost"
-                                                size="icon"
-                                                onClick={() => handleEdit(period)}
-                                                title="Edit Period"
-                                            >
-                                                <Edit className="h-4 w-4" />
-                                            </Button>
-                                        </div>
-                                    </TableCell>
+            <Card>
+                <CardContent className="pt-6">
+                    <div className="rounded-md border">
+                        <Table>
+                            <TableHeader>
+                                <TableRow className="bg-muted/50">
+                                    <TableHead>Period</TableHead>
+                                    <TableHead>Start Date</TableHead>
+                                    <TableHead>End Date</TableHead>
+                                    <TableHead>Status</TableHead>
+                                    <TableHead className="text-center w-[100px]">Actions</TableHead>
                                 </TableRow>
-                            ))
-                        )}
-                    </TableBody>
-                </Table>
-            </div>
-
-            <div className="flex justify-between items-center px-1 py-4">
-                <div className="text-sm text-muted-foreground">
-                    Showing {filteredPeriods.length === 0 ? 0 : (currentPage - 1) * itemsPerPage + 1} to {Math.min(currentPage * itemsPerPage, filteredPeriods.length)} of {filteredPeriods.length} entries
-                </div>
-                <div className="flex gap-2">
-                    <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
-                        disabled={currentPage === 1}
-                    >
-                        <ChevronLeft className="h-4 w-4" />
-                    </Button>
-                    <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
-                        disabled={currentPage === totalPages || totalPages === 0}
-                    >
-                        <ChevronRight className="h-4 w-4" />
-                    </Button>
-                </div>
-            </div>
+                            </TableHeader>
+                            <TableBody>
+                                {paginatedPeriods.length === 0 ? (
+                                    <TableRow>
+                                        <TableCell colSpan={5} className="h-32 text-center text-muted-foreground italic">
+                                            No wage periods found.
+                                        </TableCell>
+                                    </TableRow>
+                                ) : (
+                                    paginatedPeriods.map((period) => (
+                                        <TableRow key={period.id} className="hover:bg-muted/30 transition-colors">
+                                            <TableCell className="font-medium text-sm">{period.periodName}</TableCell>
+                                            <TableCell className="text-sm">{format(parse(period.startDate, 'yyyy-MM-dd', new Date()), 'dd MMM yyyy')}</TableCell>
+                                            <TableCell className="text-sm">{format(parse(period.endDate, 'yyyy-MM-dd', new Date()), 'dd MMM yyyy')}</TableCell>
+                                            <TableCell>
+                                                <Badge variant={
+                                                    period.status === 'Open' ? 'outline' :
+                                                        period.status === 'Locked' ? 'secondary' :
+                                                            period.status === 'Processed' ? 'default' : 'secondary'
+                                                } className={cn(
+                                                    "text-xs",
+                                                    period.status === 'Open' && "bg-blue-50 text-blue-700 border-blue-200",
+                                                    period.status === 'Locked' && "bg-amber-50 text-amber-700 border-amber-200",
+                                                    period.status === 'Processed' && "bg-purple-50 text-purple-700 border-purple-200",
+                                                    period.status === 'Paid' && "bg-green-50 text-green-700 border-green-200"
+                                                )}>
+                                                    {period.status}
+                                                </Badge>
+                                            </TableCell>
+                                            <TableCell className="text-center">
+                                                <TableActionButtons
+                                                    onEdit={() => handleEdit(period)}
+                                                />
+                                            </TableCell>
+                                        </TableRow>
+                                    ))
+                                )}
+                            </TableBody>
+                        </Table>
+                    </div>
+                    <DataTablePagination
+                        currentPage={currentPage}
+                        totalPages={totalPages}
+                        totalItems={filteredPeriods.length}
+                        itemsPerPage={itemsPerPage}
+                        onPageChange={setCurrentPage}
+                        onItemsPerPageChange={setItemsPerPage}
+                    />
+                </CardContent>
+            </Card>
 
             <Dialog open={isCreateOpen} onOpenChange={(open) => {
                 if (!open) resetForm();

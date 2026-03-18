@@ -46,13 +46,22 @@ import {
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Switch } from "@/components/ui/switch";
 import { Checkbox } from "@/components/ui/checkbox";
-import { Search, Plus, Edit, ChevronLeft, ChevronRight, ChevronsUpDown, Check } from "lucide-react";
+import { Search, Plus, Edit, ChevronLeft, ChevronRight, ChevronsUpDown, Check, Eye, Pencil } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { cn } from "@/lib/utils";
-
+import { TableActionButtons } from "@/components/shared/TableActionButtons";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { DataTablePagination } from "@/components/shared/DataTablePagination";
+import { AppListToolbar } from "@/components/shared/AppListToolbar";
 // --- Types ---
 
-type ComponentType = "earning" | "deduction" | "reimbursement";
+type ComponentType = "earnings" | "deductions";
 
 // Unified interface for all component types
 interface SalaryComp {
@@ -73,12 +82,6 @@ interface SalaryComp {
   // Deduction specific
   deductionType?: string; // Dropdown value
   frequency?: "one-time" | "recurring";
-
-  // Reimbursement specific
-  reimbursementType?: string;
-  maxAmount?: number;
-  attachmentRequired?: boolean;
-  taxable?: boolean;
 }
 
 // --- Mock Data ---
@@ -95,7 +98,7 @@ const initialComponents: SalaryComp[] = [
   {
     id: "1",
     code: "BASIC",
-    type: "earning",
+    type: "earnings",
     name: "Basic Salary",
     active: true,
     showInPayslip: true,
@@ -107,23 +110,12 @@ const initialComponents: SalaryComp[] = [
   {
     id: "2",
     code: "PF",
-    type: "deduction",
+    type: "deductions",
     name: "Provident Fund",
     active: true,
     showInPayslip: true,
     deductionType: "Provident Fund",
     frequency: "recurring"
-  },
-  {
-    id: "3",
-    code: "FUEL",
-    type: "reimbursement",
-    name: "Fuel Reimbursement",
-    active: true,
-    reimbursementType: "Fuel Reimbursement",
-    maxAmount: 5000,
-    attachmentRequired: true,
-    taxable: false
   }
 ];
 
@@ -140,7 +132,7 @@ export default function SalaryComponent() {
 
   // activeTab: Controls which sub-tab is currently visible (Earnings / Deductions / Reimbursements)
   // Used to filter the table data and determine which form to show in the modal.
-  const [activeTab, setActiveTab] = useState<ComponentType>("earning");
+  const [activeTab, setActiveTab] = useState<ComponentType>("earnings");
 
   // --- Sync Route to State ---
 
@@ -155,7 +147,8 @@ export default function SalaryComponent() {
   // currentPage: Tracks pagination for the data table.
   // Used to slice the filtered data array for display.
   const [currentPage, setCurrentPage] = useState(1);
-  const itemsPerPage = 10;
+  const [itemsPerPage, setItemsPerPage] = useState(10);
+  const [filterStatus, setFilterStatus] = useState<string>("All");
 
   // Modal State - Controlled modal states for each type
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -173,13 +166,11 @@ export default function SalaryComponent() {
   // If true, enables a text input for the user to type a custom earning name.
   const [isCustomEarning, setIsCustomEarning] = useState(false);
   const [isCustomDeduction, setIsCustomDeduction] = useState(false);
-  const [isCustomReimbursement, setIsCustomReimbursement] = useState(false);
   const [openDeleteDialog, setOpenDeleteDialog] = useState(false);
 
   // Dropdown states for searchable components
   const [openEarningTypeDropdown, setOpenEarningTypeDropdown] = useState(false);
   const [openDeductionTypeDropdown, setOpenDeductionTypeDropdown] = useState(false);
-  const [openReimbursementTypeDropdown, setOpenReimbursementTypeDropdown] = useState(false);
 
   // Dropdown options
   const earningTypeOptions = [
@@ -199,14 +190,6 @@ export default function SalaryComponent() {
     "Custom"
   ];
 
-  const reimbursementTypeOptions = [
-    "Fuel Reimbursement",
-    "Mobile Reimbursement",
-    "Travel Reimbursement",
-    "Meal Reimbursement",
-    "Custom"
-  ];
-
   // --- Helper Logic ---
 
   /**
@@ -218,20 +201,15 @@ export default function SalaryComponent() {
       type: activeTab,
       active: true,
       showInPayslip: true,
-      attachmentRequired: true, // Default for Reimbursement
-      taxable: false,           // Default for Reimbursement
       earningType: "",          // Initialize earning type
       deductionType: "",        // Initialize deduction type
-      reimbursementType: ""     // Initialize reimbursement type
     });
     setIsCustomEarning(false);
     setIsCustomDeduction(false);
-    setIsCustomReimbursement(false);
     setEditingId(null);
     // Reset dropdown states
     setOpenEarningTypeDropdown(false);
     setOpenDeductionTypeDropdown(false);
-    setOpenReimbursementTypeDropdown(false);
   };
 
   /**
@@ -253,16 +231,10 @@ export default function SalaryComponent() {
     setFormData({ ...component });
 
     // specific check for custom earning type logic
-    if (component.type === 'earning' && component.earningType === 'Custom') {
+    if (component.type === 'earnings' && component.earningType === 'Custom') {
       setIsCustomEarning(true);
     } else {
       setIsCustomEarning(false);
-    }
-
-    if (component.type === 'reimbursement' && component.reimbursementType === 'Custom') {
-      setIsCustomReimbursement(true);
-    } else {
-      setIsCustomReimbursement(false);
     }
 
     setIsModalOpen(true);
@@ -275,7 +247,7 @@ export default function SalaryComponent() {
     const currentId = paramsEdit?.id;
 
     // Tab Sync
-    if (currentTab && ['earning', 'deduction', 'reimbursement'].includes(currentTab)) {
+    if (currentTab && ['earnings', 'deductions'].includes(currentTab)) {
       if (currentTab !== activeTab) {
         setActiveTab(currentTab);
         setCurrentPage(1);
@@ -332,20 +304,16 @@ export default function SalaryComponent() {
    * Used to disable the "Save" button if the form is incomplete.
    */
   const isFormValid = () => {
-    if (activeTab === 'earning') {
+    if (activeTab === 'earnings') {
       const hasBasic = formData.code && formData.earningType && formData.name;
       const customValid = isCustomEarning ? !!formData.name : true;
       return !!(hasBasic && customValid);
     }
 
-    if (activeTab === 'deduction') {
+    if (activeTab === 'deductions') {
       const hasBasic = formData.code && formData.deductionType && formData.name && formData.frequency;
       const customValid = isCustomDeduction ? !!formData.name : true;
       return !!(hasBasic && customValid);
-    }
-
-    if (activeTab === 'reimbursement') {
-      return !!(formData.code && formData.name && formData.reimbursementType && (formData.maxAmount || 0) > 0);
     }
 
     return false;
@@ -362,16 +330,6 @@ export default function SalaryComponent() {
     } else {
       setIsCustomEarning(false);
       setFormData(prev => ({ ...prev, earningType: value, name: value })); // Auto-fill name
-    }
-  };
-
-  const handleReimbursementTypeChange = (value: string) => {
-    if (value === "Custom") {
-      setIsCustomReimbursement(true);
-      setFormData(prev => ({ ...prev, reimbursementType: value, name: "" }));
-    } else {
-      setIsCustomReimbursement(false);
-      setFormData(prev => ({ ...prev, reimbursementType: value, name: value }));
     }
   };
 
@@ -414,7 +372,7 @@ export default function SalaryComponent() {
         setComponents(prev => prev.map(c => c.id === editingId ? { ...c, ...formData } as SalaryComp : c));
         toast({
           title: "Success",
-          description: `${activeTab === 'earning' ? 'Earning' : activeTab === 'deduction' ? 'Deduction' : 'Reimbursement'} updated successfully.`
+          description: `${activeTab === 'earnings' ? 'Earning' : 'Deduction'} updated successfully.`
         });
       } else {
         // Create New
@@ -423,7 +381,7 @@ export default function SalaryComponent() {
         setComponents(prev => [...prev, newComponent]);
         toast({
           title: "Success",
-          description: `New ${activeTab} component created successfully.`
+          description: `New ${activeTab === 'earnings' ? 'earnings' : 'deductions'} component created successfully.`
         });
       }
 
@@ -472,10 +430,17 @@ export default function SalaryComponent() {
 
   // 1. Filter by active tab (Earning/Deduction/Reimbursement)
   // 2. Filter by search term (Code or Name)
-  const filteredComponents = components.filter(c =>
-    c.type === activeTab &&
-    (c.name.toLowerCase().includes(searchTerm.toLowerCase()) || c.code.toLowerCase().includes(searchTerm.toLowerCase()))
-  );
+  // 3. Filter by status
+  const filteredComponents = components.filter(c => {
+    const searchLower = searchTerm.toLowerCase();
+    const matchesSearch = c.name.toLowerCase().includes(searchLower) || c.code.toLowerCase().includes(searchLower);
+
+    // Status in component is boolean (active), but UI uses "Active" / "Inactive"
+    const statusString = c.active ? "Active" : "Inactive";
+    const matchesStatus = filterStatus === "All" || statusString === filterStatus;
+
+    return c.type === activeTab && matchesSearch && matchesStatus;
+  });
 
   // Calculate pagination slices
   const totalPages = Math.ceil(filteredComponents.length / itemsPerPage);
@@ -491,7 +456,7 @@ export default function SalaryComponent() {
       {/* Page Header */}
       <div>
         <h1 className="text-3xl font-bold tracking-tight">Salary Components</h1>
-        <p className="text-muted-foreground">Manage earnings, deductions, and reimbursement structures.</p>
+        <p className="text-muted-foreground">Manage earnings and deductions.</p>
       </div>
 
       {/* Sub-Tabs Navigation */}
@@ -501,195 +466,164 @@ export default function SalaryComponent() {
             */}
       <div className="flex space-x-2 border-b">
         <button
-          onClick={() => setLocation("/hr-setup/salary-component/earning")}
+          onClick={() => setLocation("/hr-setup/salary-component/earnings")}
           className={cn(
             "px-4 py-2 text-sm font-medium border-b-2 transition-colors",
-            activeTab === "earning" ? "border-primary text-primary" : "border-transparent text-muted-foreground hover:text-foreground"
+            activeTab === "earnings" ? "border-primary text-primary" : "border-transparent text-muted-foreground hover:text-foreground"
           )}
         >
           Earnings
         </button>
         <button
-          onClick={() => setLocation("/hr-setup/salary-component/deduction")}
+          onClick={() => setLocation("/hr-setup/salary-component/deductions")}
           className={cn(
             "px-4 py-2 text-sm font-medium border-b-2 transition-colors",
-            activeTab === "deduction" ? "border-primary text-primary" : "border-transparent text-muted-foreground hover:text-foreground"
+            activeTab === "deductions" ? "border-primary text-primary" : "border-transparent text-muted-foreground hover:text-foreground"
           )}
         >
           Deductions
         </button>
-        <button
-          onClick={() => setLocation("/hr-setup/salary-component/reimbursement")}
-          className={cn(
-            "px-4 py-2 text-sm font-medium border-b-2 transition-colors",
-            activeTab === "reimbursement" ? "border-primary text-primary" : "border-transparent text-muted-foreground hover:text-foreground"
-          )}
-        >
-          Reimbursements
-        </button>
       </div>
 
       {/* Action Bar: Search & Add Button */}
-      <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
-        <div className="relative w-full sm:w-72 ml-2 flex items-center h-10 border border-zinc-400 rounded-md bg-background focus-within:ring-1 focus-within:ring-ring focus-within:ring-inset">
-          <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground pointer-events-none" />
-          <Input
-            placeholder="Search components..."
-            value={searchTerm}
-            onChange={(e) => setSearchTerm(e.target.value)}
-            className="pl-9 border-none shadow-none focus-visible:ring-0 bg-transparent h-full w-full"
-          />
+      <div className="flex flex-col sm:flex-row items-end gap-4 bg-card p-4 rounded-lg border shadow-sm">
+        <div className="w-full sm:flex-1">
+          <Label className="mb-1.5 block text-[10px] font-bold text-muted-foreground uppercase tracking-wider">
+            Search
+          </Label>
+          <div className="relative">
+            <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
+            <Input
+              placeholder="Search components..."
+              className="pl-9 h-10"
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
+            />
+          </div>
         </div>
-        <Button onClick={() => setLocation(`/hr-setup/salary-component/${activeTab}/new`)}>
-          <Plus className="mr-2 h-4 w-4" />
-          {activeTab === 'earning' ? 'Add Earning' : activeTab === 'deduction' ? 'Add Deduction' : 'Add Reimbursement'}
+        <div className="w-full sm:w-48">
+          <Label className="mb-1.5 block text-[10px] font-bold text-muted-foreground uppercase tracking-wider">
+            Status
+          </Label>
+          <Select value={filterStatus} onValueChange={setFilterStatus}>
+            <SelectTrigger className="h-10">
+              <SelectValue placeholder="All Status" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="All">All Status</SelectItem>
+              <SelectItem value="Active">Active</SelectItem>
+              <SelectItem value="Inactive">Inactive</SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
+        <Button onClick={() => setLocation(`/hr-setup/salary-component/${activeTab}/new`)} className="h-10">
+          <Plus className="h-4 w-4 mr-2" />
+          {activeTab === 'earnings' ? 'Add Earning' : 'Add Deduction'}
         </Button>
       </div>
 
       {/* Main Content Card with Table */}
       <Card>
-        <CardContent className="p-0">
-          <Table>
-            <TableHeader>
-              <TableRow>
-                {/* Dynamic Table Headers based on Active Tab */}
-                {activeTab === "earning" && (
-                  <>
-                    <TableHead>Code</TableHead>
-                    <TableHead>Name</TableHead>
-
-                    <TableHead>Payslip</TableHead>
-                    <TableHead>Status</TableHead>
-                    <TableHead>Actions</TableHead>
-                  </>
-                )}
-                {activeTab === "deduction" && (
-                  <>
-                    <TableHead>Code</TableHead>
-                    <TableHead>Name</TableHead>
-                    <TableHead>Frequency</TableHead>
-                    <TableHead>Payslip</TableHead>
-                    <TableHead>Status</TableHead>
-                    <TableHead>Actions</TableHead>
-                  </>
-                )}
-                {activeTab === "reimbursement" && (
-                  <>
-                    <TableHead>Code</TableHead>
-                    <TableHead>Name</TableHead>
-                    <TableHead>Type</TableHead>
-                    <TableHead>Max Limit</TableHead>
-                    <TableHead>Status</TableHead>
-                    <TableHead>Actions</TableHead>
-                  </>
-                )}
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {paginatedData.length === 0 ? (
-                <TableRow>
-                  <TableCell colSpan={6} className="h-24 text-center">
-                    No components found.
-                  </TableCell>
-                </TableRow>
-              ) : paginatedData.map((item) => (
-                <TableRow key={item.id}>
-                  {/* --- Row Rendering Logic --- */}
-
-                  {/* Earning Row */}
-                  {activeTab === "earning" && (
+        <CardContent className="pt-6">
+          <div className="rounded-md border">
+            <Table>
+              <TableHeader>
+                <TableRow className="bg-muted/50">
+                  {/* Dynamic Table Headers based on Active Tab */}
+                  {activeTab === "earnings" && (
                     <>
-                      <TableCell className="font-medium">{item.code}</TableCell>
-                      <TableCell>{item.name}</TableCell>
+                      <TableHead>Code</TableHead>
+                      <TableHead>Name</TableHead>
 
-                      <TableCell>
-                        {item.showInPayslip ? <Badge variant="secondary">Yes</Badge> : <Badge variant="outline">No</Badge>}
-                      </TableCell>
-                      <TableCell>
-                        <Badge className={item.active ? "bg-green-100 text-green-700 hover:bg-green-100" : "bg-red-100 text-red-700 hover:bg-red-100"}>
-                          {item.active ? "Active" : "Inactive"}
-                        </Badge>
-                      </TableCell>
-                      <TableCell className="flex items-center gap-2">
-                        <Button variant="ghost" size="icon" onClick={() => setLocation(`/hr-setup/salary-component/${activeTab}/${item.id}`)}>
-                          <Edit className="h-4 w-4" />
-                        </Button>
-                      </TableCell>
+                      <TableHead>Payslip</TableHead>
+                      <TableHead>Status</TableHead>
+                      <TableHead className="text-center w-[100px]">Actions</TableHead>
                     </>
                   )}
-
-                  {/* Deduction Row */}
-                  {activeTab === "deduction" && (
+                  {activeTab === "deductions" && (
                     <>
-                      <TableCell className="font-medium">{item.code}</TableCell>
-                      <TableCell>{item.name}</TableCell>
-                      <TableCell className="capitalize">{item.frequency}</TableCell>
-                      <TableCell>
-                        {item.showInPayslip ? <Badge variant="secondary">Yes</Badge> : <Badge variant="outline">No</Badge>}
-                      </TableCell>
-                      <TableCell>
-                        <Badge className={item.active ? "bg-green-100 text-green-700 hover:bg-green-100" : "bg-red-100 text-red-700 hover:bg-red-100"}>
-                          {item.active ? "Active" : "Inactive"}
-                        </Badge>
-                      </TableCell>
-                      <TableCell className="flex items-center gap-2">
-                        <Button variant="ghost" size="icon" onClick={() => setLocation(`/hr-setup/salary-component/${activeTab}/${item.id}`)}>
-                          <Edit className="h-4 w-4" />
-                        </Button>
-                      </TableCell>
-                    </>
-                  )}
-
-                  {/* Reimbursement Row */}
-                  {activeTab === "reimbursement" && (
-                    <>
-                      <TableCell className="font-medium">{item.code}</TableCell>
-                      <TableCell>{item.name}</TableCell>
-                      <TableCell>{item.reimbursementType}</TableCell>
-                      <TableCell>USh{item.maxAmount}/mo</TableCell>
-                      <TableCell>
-                        <Badge className={item.active ? "bg-green-100 text-green-700 hover:bg-green-100" : "bg-red-100 text-red-700 hover:bg-red-100"}>
-                          {item.active ? "Active" : "Inactive"}
-                        </Badge>
-                      </TableCell>
-                      <TableCell className="flex items-center gap-2">
-                        <Button variant="ghost" size="icon" onClick={() => setLocation(`/hr-setup/salary-component/${activeTab}/${item.id}`)}>
-                          <Edit className="h-4 w-4" />
-                        </Button>
-                      </TableCell>
+                      <TableHead>Code</TableHead>
+                      <TableHead>Name</TableHead>
+                      <TableHead>Frequency</TableHead>
+                      <TableHead>Payslip</TableHead>
+                      <TableHead>Status</TableHead>
+                      <TableHead className="text-center w-[100px]">Actions</TableHead>
                     </>
                   )}
                 </TableRow>
-              ))}
-            </TableBody>
-          </Table>
+              </TableHeader>
+              <TableBody>
+                {paginatedData.length === 0 ? (
+                  <TableRow>
+                    <TableCell colSpan={6} className="h-24 text-center">
+                      No components found.
+                    </TableCell>
+                  </TableRow>
+                ) : paginatedData.map((item) => (
+                  <TableRow key={item.id} className="hover:bg-muted/30 transition-colors">
+                    {/* --- Row Rendering Logic --- */}
+
+                    {/* Earning Row */}
+                    {activeTab === "earnings" && (
+                      <>
+                        <TableCell className="font-medium">{item.code}</TableCell>
+                        <TableCell>{item.name}</TableCell>
+
+                        <TableCell>
+                          {item.showInPayslip ? <Badge variant="secondary">Yes</Badge> : <Badge variant="outline">No</Badge>}
+                        </TableCell>
+                        <TableCell>
+                          <Badge className={item.active ? "bg-green-100 text-green-700 hover:bg-green-100" : "bg-red-100 text-red-700 hover:bg-red-100"}>
+                            {item.active ? "Active" : "Inactive"}
+                          </Badge>
+                        </TableCell>
+                        <TableCell className="text-center">
+                          <TableActionButtons
+                            onEdit={() => setLocation(`/hr-setup/salary-component/${activeTab}/${item.id}`)}
+                          />
+                        </TableCell>
+                      </>
+                    )}
+
+                    {/* Deduction Row */}
+                    {activeTab === "deductions" && (
+                      <>
+                        <TableCell className="font-medium">{item.code}</TableCell>
+                        <TableCell>{item.name}</TableCell>
+                        <TableCell className="capitalize">{item.frequency}</TableCell>
+                        <TableCell>
+                          {item.showInPayslip ? <Badge variant="secondary">Yes</Badge> : <Badge variant="outline">No</Badge>}
+                        </TableCell>
+                        <TableCell>
+                          <Badge className={item.active ? "bg-green-100 text-green-700 hover:bg-green-100" : "bg-red-100 text-red-700 hover:bg-red-100"}>
+                            {item.active ? "Active" : "Inactive"}
+                          </Badge>
+                        </TableCell>
+                        <TableCell className="text-center">
+                          <TableActionButtons
+                            onEdit={() => setLocation(`/hr-setup/salary-component/${activeTab}/${item.id}`)}
+                          />
+                        </TableCell>
+                      </>
+                    )}
+
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </div>
+
+          <DataTablePagination
+            currentPage={currentPage}
+            totalPages={totalPages}
+            totalItems={filteredComponents.length}
+            itemsPerPage={itemsPerPage}
+            onPageChange={setCurrentPage}
+            onItemsPerPageChange={setItemsPerPage}
+            options={[10, 15, 30, 50]}
+          />
         </CardContent>
       </Card>
-
-      {/* Pagination Controls */}
-      <div className="flex justify-between items-center px-1 py-4">
-        <div className="text-sm text-muted-foreground">
-          Showing {(currentPage - 1) * itemsPerPage + 1} to {Math.min(currentPage * itemsPerPage, filteredComponents.length)} of {filteredComponents.length} entries
-        </div>
-        <div className="flex gap-2">
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
-            disabled={currentPage === 1}
-          >
-            <ChevronLeft className="h-4 w-4" />
-          </Button>
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
-            disabled={currentPage === totalPages || totalPages === 0}
-          >
-            <ChevronRight className="h-4 w-4" />
-          </Button>
-        </div>
-      </div>
 
       {/* --- Manage Modal (Add/Edit) --- */}
       <Dialog open={isModalOpen} onOpenChange={(open) => {
@@ -702,16 +636,16 @@ export default function SalaryComponent() {
         <DialogContent className="sm:max-w-[600px]">
           <DialogHeader>
             <DialogTitle>
-              {editingId ? "Edit" : "New"} {activeTab === 'earning' ? 'Earning' : activeTab === 'deduction' ? 'Deduction' : 'Reimbursement'}
+              {editingId ? "Edit" : "New"} {activeTab === 'earnings' ? 'Earning' : 'Deduction'}
             </DialogTitle>
           </DialogHeader>
 
           <div className="space-y-4 py-2">
             {/* 
                             FORM: Earnings
-                            Only shown when activeTab === "earning"
+                            Only shown when activeTab === "earnings"
                         */}
-            {activeTab === 'earning' && (
+            {activeTab === 'earnings' && (
               <div className="space-y-4">
                 <div className="grid grid-cols-2 gap-4">
                   <div className="space-y-2">
@@ -811,7 +745,7 @@ export default function SalaryComponent() {
                             FORM: Deductions
                             Only shown when activeTab === "deduction"
                         */}
-            {activeTab === 'deduction' && (
+            {activeTab === 'deductions' && (
               <div className="space-y-4">
                 <div className="space-y-2">
                   <Label>Code <span className="text-red-500">*</span></Label>
@@ -916,113 +850,6 @@ export default function SalaryComponent() {
               </div>
             )}
 
-            {/* 
-                            FORM: Reimbursements
-                            Only shown when activeTab === "reimbursement"
-                            Note: No calculation type or Pay type needed here.
-                        */}
-            {activeTab === 'reimbursement' && (
-              <div className="space-y-4">
-                <div className="grid grid-cols-2 gap-4">
-                  <div className="space-y-2">
-                    <Label>Code <span className="text-red-500">*</span></Label>
-                    <Input
-                      value={formData.code || ""}
-                      onChange={(e) => setFormData({ ...formData, code: e.target.value.toUpperCase() })}
-                      placeholder="e.g. FUEL"
-                    />
-                  </div>
-                  <div className="space-y-2">
-                    <Label>Reimbursement Type <span className="text-red-500">*</span></Label>
-                    <Popover open={openReimbursementTypeDropdown} onOpenChange={setOpenReimbursementTypeDropdown}>
-                      <PopoverTrigger asChild>
-                        <Button
-                          variant="outline"
-                          role="combobox"
-                          aria-expanded={openReimbursementTypeDropdown}
-                          className="w-full justify-between h-10 font-normal border-input"
-                        >
-                          <span className={cn(!formData.reimbursementType && "text-muted-foreground", formData.reimbursementType === "Custom" && "text-blue-600 font-medium")}>
-                            {formData.reimbursementType === "Custom"
-                              ? "+ New Custom Reimbursement"
-                              : formData.reimbursementType || "Select Type"}
-                          </span>
-                          <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
-                        </Button>
-                      </PopoverTrigger>
-                      <PopoverContent className="w-[var(--radix-popover-trigger-width)] p-0" align="start">
-                        <Command>
-                          <CommandInputBorderless placeholder="Search reimbursement type..." className="h-9" />
-                          <CommandList className="max-h-[250px] overflow-y-auto">
-                            <CommandEmpty>No reimbursement type found.</CommandEmpty>
-                            <CommandGroup>
-                              {reimbursementTypeOptions.map((type) => (
-                                <CommandItem
-                                  key={type}
-                                  value={type}
-                                  onSelect={() => {
-                                    handleReimbursementTypeChange(type);
-                                    setOpenReimbursementTypeDropdown(false);
-                                  }}
-                                  className={cn("cursor-pointer", type === "Custom" && "text-blue-600 font-medium")}
-                                >
-                                  <Check
-                                    className={cn(
-                                      "mr-2 h-4 w-4",
-                                      formData.reimbursementType === type ? "opacity-100" : "opacity-0"
-                                    )}
-                                  />
-                                  {type === "Custom" ? "+ New Custom Reimbursement" : type}
-                                </CommandItem>
-                              ))}
-                            </CommandGroup>
-                          </CommandList>
-                        </Command>
-                      </PopoverContent>
-                    </Popover>
-                  </div>
-                </div>
-
-                <div className="space-y-2">
-                  <Label>Reimbursement Name <span className="text-red-500">*</span></Label>
-                  <Input
-                    value={formData.name || ""}
-                    onChange={(e) => setFormData({ ...formData, name: e.target.value })}
-                    disabled={!isCustomReimbursement}
-                  />
-                </div>
-
-                <div className="space-y-2">
-                  <Label>Maximum Reimbursable Amount (₹ / month) <span className="text-red-500">*</span></Label>
-                  <Input
-                    type="number"
-                    value={formData.maxAmount || ""}
-                    onChange={(e) => setFormData({ ...formData, maxAmount: parseFloat(e.target.value) })}
-                    placeholder="0.00"
-                  />
-                </div>
-
-                <div className="grid grid-cols-2 gap-4 pt-2">
-                  <div className="flex items-center space-x-2">
-                    <Checkbox
-                      id="attach-req"
-                      checked={formData.attachmentRequired}
-                      onCheckedChange={(c) => setFormData({ ...formData, attachmentRequired: c as boolean })}
-                    />
-                    <Label htmlFor="attach-req">Attachment Required</Label>
-                  </div>
-                  <div className="flex items-center space-x-2">
-                    <Checkbox
-                      id="taxable-req"
-                      checked={formData.taxable}
-                      onCheckedChange={(c) => setFormData({ ...formData, taxable: c as boolean })}
-                    />
-                    <Label htmlFor="taxable-req">Taxable</Label>
-                  </div>
-                </div>
-              </div>
-            )}
-
             <div className="flex items-center space-x-2 pt-4">
               <Switch
                 id="is-active"
@@ -1050,7 +877,7 @@ export default function SalaryComponent() {
                 onClick={handleSave}
                 disabled={!isFormValid() || isSaving}
               >
-                {isSaving ? 'Saving...' : `Save ${activeTab === 'earning' ? 'Earning' : activeTab === 'deduction' ? 'Deduction' : 'Reimbursement'}`}
+                {isSaving ? 'Saving...' : `Save ${activeTab === 'earnings' ? 'Earning' : 'Deduction'}`}
               </Button>
             </div>
           </DialogFooter>

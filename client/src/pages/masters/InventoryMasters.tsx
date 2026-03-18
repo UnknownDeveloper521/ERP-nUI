@@ -12,7 +12,7 @@ import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Plus, Search, Pencil, Trash2, ChevronsUpDown, Check } from "lucide-react";
+import { Plus, Search, ChevronsUpDown, Check } from "lucide-react";
 import {
     Dialog,
     DialogContent,
@@ -21,6 +21,16 @@ import {
     DialogHeader,
     DialogTitle,
 } from "@/components/ui/dialog";
+import {
+    AlertDialog,
+    AlertDialogAction,
+    AlertDialogCancel,
+    AlertDialogContent,
+    AlertDialogDescription,
+    AlertDialogFooter,
+    AlertDialogHeader,
+    AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { Label } from "@/components/ui/label";
 import {
     Select,
@@ -48,6 +58,8 @@ import {
 } from "@/components/ui/popover";
 import { cn } from "@/lib/utils";
 import { DataTablePagination } from "@/components/shared/DataTablePagination";
+import { TableActionButtons } from "@/components/shared/TableActionButtons";
+import { AppListToolbar } from "@/components/shared/AppListToolbar";
 import { mockWarehouses, mockLocations } from "@/lib/masterMockData";
 
 // --- Types & Interfaces ---
@@ -192,6 +204,8 @@ export default function InventoryMasters() {
     const [bins, setBins] = useState<Bin[]>(initialBins);
 
     const [isDialogOpen, setIsDialogOpen] = useState(false);
+    const [isDeleteAlertOpen, setIsDeleteAlertOpen] = useState(false);
+    const [itemToDeleteID, setItemToDeleteID] = useState<number | null>(null);
     const [editingId, setEditingId] = useState<number | null>(null);
     const [formData, setFormData] = useState<any>({});
 
@@ -258,19 +272,28 @@ export default function InventoryMasters() {
     };
 
     const handleDeleteClick = (id: number) => {
-        if (confirm("Are you sure? This action cannot be undone.")) {
-            if (selectedMaster === "Warehouses") {
-                // Check if used in bins
-                if (bins.some(b => b.warehouse_id === id)) {
-                    toast({ variant: "destructive", title: "Cannot Delete", description: "Warehouse is used in Bins." });
-                    return;
-                }
-                setWarehouses(prev => prev.filter(item => item.id !== id));
-            } else {
-                setBins(prev => prev.filter(item => item.id !== id));
+        setItemToDeleteID(id);
+        setIsDeleteAlertOpen(true);
+    };
+
+    const confirmDelete = () => {
+        if (itemToDeleteID === null) return;
+
+        if (selectedMaster === "Warehouses") {
+            // Check if used in bins
+            if (bins.some(b => b.warehouse_id === itemToDeleteID)) {
+                toast({ variant: "destructive", title: "Cannot Delete", description: "Warehouse is used in Bins." });
+                setIsDeleteAlertOpen(false);
+                setItemToDeleteID(null);
+                return;
             }
-            toast({ title: "Deleted", description: "Record deleted successfully." });
+            setWarehouses(prev => prev.filter(item => item.id !== itemToDeleteID));
+        } else {
+            setBins(prev => prev.filter(item => item.id !== itemToDeleteID));
         }
+        toast({ title: "Deleted", description: "Record deleted successfully." });
+        setIsDeleteAlertOpen(false);
+        setItemToDeleteID(null);
     };
 
     const handleSave = () => {
@@ -337,7 +360,7 @@ export default function InventoryMasters() {
                             <TableHead>Department</TableHead>
                             <TableHead className="text-center">Bins</TableHead>
                             <TableHead>Status</TableHead>
-                            <TableHead className="text-right">Actions</TableHead>
+                            <TableHead className="text-center w-[100px]">Actions</TableHead>
                         </TableRow>
                     </TableHeader>
                     <TableBody>
@@ -362,15 +385,11 @@ export default function InventoryMasters() {
                                             </Badge>
                                         </TableCell>
                                         <TableCell><StatusBadge status={item.status} /></TableCell>
-                                        <TableCell className="text-right">
-                                            <div className="flex justify-end gap-2">
-                                                <Button variant="ghost" size="icon" className="h-8 w-8 hover:bg-muted" onClick={() => handleEditClick(item)}>
-                                                    <Pencil className="h-4 w-4" />
-                                                </Button>
-                                                <Button variant="ghost" size="icon" className="h-8 w-8 text-destructive hover:bg-destructive/10" onClick={() => handleDeleteClick(item.id)}>
-                                                    <Trash2 className="h-4 w-4" />
-                                                </Button>
-                                            </div>
+                                        <TableCell className="text-center">
+                                            <TableActionButtons
+                                                onEdit={() => handleEditClick(item)}
+                                                onDelete={() => handleDeleteClick(item.id)}
+                                            />
                                         </TableCell>
                                     </TableRow>
                                 );
@@ -389,7 +408,7 @@ export default function InventoryMasters() {
                             <TableHead>Warehouse</TableHead>
                             <TableHead>Type</TableHead>
                             <TableHead>Status</TableHead>
-                            <TableHead className="text-right">Actions</TableHead>
+                            <TableHead className="text-center w-[100px]">Actions</TableHead>
                         </TableRow>
                     </TableHeader>
                     <TableBody>
@@ -409,15 +428,11 @@ export default function InventoryMasters() {
                                         <TableCell>{whName}</TableCell>
                                         <TableCell>{item.type || "-"}</TableCell>
                                         <TableCell><StatusBadge status={item.status} /></TableCell>
-                                        <TableCell className="text-right">
-                                            <div className="flex justify-end gap-2">
-                                                <Button variant="ghost" size="icon" className="h-8 w-8 hover:bg-muted" onClick={() => handleEditClick(item)}>
-                                                    <Pencil className="h-4 w-4" />
-                                                </Button>
-                                                <Button variant="ghost" size="icon" className="h-8 w-8 text-destructive hover:bg-destructive/10" onClick={() => handleDeleteClick(item.id)}>
-                                                    <Trash2 className="h-4 w-4" />
-                                                </Button>
-                                            </div>
+                                        <TableCell className="text-center">
+                                            <TableActionButtons
+                                                onEdit={() => handleEditClick(item)}
+                                                onDelete={() => handleDeleteClick(item.id)}
+                                            />
                                         </TableCell>
                                     </TableRow>
                                 );
@@ -565,57 +580,45 @@ export default function InventoryMasters() {
                 </div>
 
                 <div className="flex-1 flex flex-col gap-6 mt-6 overflow-y-auto pr-2 pb-6 custom-scrollbar">
-                    {/* Top Control Bar */}
-                    <div className="flex flex-col sm:flex-row items-center gap-4 bg-card p-4 rounded-lg border shadow-sm">
-
-
-                        {/* Filters */}
-                        {selectedMaster === "Bins" && (
-                            <div className="w-full sm:w-1/6">
-                                <Label className="mb-1.5 block text-xs font-medium text-muted-foreground uppercase tracking-wider">Warehouse</Label>
-                                <Select value={filterWarehouse} onValueChange={setFilterWarehouse}>
-                                    <SelectTrigger className="h-10"><SelectValue /></SelectTrigger>
-                                    <SelectContent>
-                                        <SelectItem value="All">All Warehouses</SelectItem>
-                                        {warehouses.map(w => (
-                                            <SelectItem key={w.id} value={w.id.toString()}>{w.name}</SelectItem>
-                                        ))}
-                                    </SelectContent>
-                                </Select>
-                            </div>
-                        )}
-                        <div className="w-full sm:w-1/6">
-                            <Label className="mb-1.5 block text-xs font-medium text-muted-foreground uppercase tracking-wider">Status</Label>
-                            <Select value={filterStatus} onValueChange={setFilterStatus}>
-                                <SelectTrigger className="h-10"><SelectValue /></SelectTrigger>
-                                <SelectContent>
-                                    <SelectItem value="All">All Status</SelectItem>
-                                    <SelectItem value="Active">Active</SelectItem>
-                                    <SelectItem value="Inactive">Inactive</SelectItem>
-                                </SelectContent>
-                            </Select>
-                        </div>
-
-                        <div className="w-full sm:w-1/4">
-                            <Label className="mb-1.5 block text-xs font-medium text-muted-foreground uppercase tracking-wider">Search</Label>
-                            <div className="relative">
-                                <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
-                                <Input
-                                    placeholder={`Search ${selectedMaster.toLowerCase()}...`}
-                                    className="pl-9 h-10"
-                                    value={searchTerm}
-                                    onChange={(e) => setSearchTerm(e.target.value)}
-                                />
-                            </div>
-                        </div>
-
-                        <div className="w-full sm:w-auto ml-auto mt-auto pt-5">
-                            <Button onClick={handleAddClick} className="w-full sm:w-auto">
-                                <Plus className="mr-2 h-4 w-4" />
-                                Add {selectedMaster === "Warehouses" ? "Warehouse" : "Bin"}
-                            </Button>
-                        </div>
-                    </div>
+                    <AppListToolbar
+                        search={{
+                            placeholder: `Search ${selectedMaster.toLowerCase()}...`,
+                            value: searchTerm,
+                            onChange: setSearchTerm
+                        }}
+                        filters={[
+                            ...(selectedMaster === "Bins" ? [{
+                                type: "select" as const,
+                                label: "Warehouse",
+                                value: filterWarehouse,
+                                onChange: setFilterWarehouse,
+                                options: [
+                                    { label: "All Warehouses", value: "All" },
+                                    ...warehouses.map(w => ({ label: w.name, value: w.id.toString() }))
+                                ],
+                                searchable: true
+                            }] : []),
+                            {
+                                type: "select" as const,
+                                label: "Status",
+                                value: filterStatus,
+                                onChange: setFilterStatus,
+                                options: [
+                                    { label: "All Status", value: "All" },
+                                    { label: "Active", value: "Active" },
+                                    { label: "Inactive", value: "Inactive" }
+                                ],
+                                searchable: true
+                            }
+                        ]}
+                        actions={[
+                            {
+                                label: `Create ${selectedMaster === "Warehouses" ? "Warehouse" : "Bin"}`,
+                                icon: <Plus className="mr-2 h-4 w-4" />,
+                                onClick: handleAddClick
+                            }
+                        ]}
+                    />
 
                     {/* Main Table Content */}
                     <Card>
@@ -644,7 +647,7 @@ export default function InventoryMasters() {
             <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
                 <DialogContent className="sm:max-w-[600px] max-h-[90vh] flex flex-col p-0 gap-0">
                     <DialogHeader className="p-6 pb-2">
-                        <DialogTitle>{editingId ? "Edit" : "Add New"} {selectedMaster === "Warehouses" ? "Warehouse" : "Bin"}</DialogTitle>
+                        <DialogTitle>{editingId ? "Edit" : "Create"} {selectedMaster === "Warehouses" ? "Warehouse" : "Bin"}</DialogTitle>
                         <DialogDescription>
                             Configure the details for this {selectedMaster === "Warehouses" ? "warehouse" : "bin"}.
                         </DialogDescription>
@@ -660,6 +663,23 @@ export default function InventoryMasters() {
                     </DialogFooter>
                 </DialogContent>
             </Dialog>
+
+            <AlertDialog open={isDeleteAlertOpen} onOpenChange={setIsDeleteAlertOpen}>
+                <AlertDialogContent>
+                    <AlertDialogHeader>
+                        <AlertDialogTitle>Delete Record</AlertDialogTitle>
+                        <AlertDialogDescription>
+                            Are you sure you want to delete this record? This action cannot be undone.
+                        </AlertDialogDescription>
+                    </AlertDialogHeader>
+                    <AlertDialogFooter>
+                        <AlertDialogCancel>Cancel</AlertDialogCancel>
+                        <AlertDialogAction onClick={confirmDelete} className="bg-destructive text-destructive-foreground hover:bg-destructive/90">
+                            Delete
+                        </AlertDialogAction>
+                    </AlertDialogFooter>
+                </AlertDialogContent>
+            </AlertDialog>
         </div>
     );
 }

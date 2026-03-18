@@ -46,24 +46,12 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import {
-  Popover,
-  PopoverContent,
-  PopoverTrigger,
-} from "@/components/ui/popover";
-import {
-  Command,
-  CommandList,
-  CommandEmpty,
-  CommandGroup,
-  CommandItem,
-  CommandInputBorderless,
-} from "@/components/ui/command";
 import { Badge } from "@/components/ui/badge";
-import { Eye, Search, ChevronsUpDown, Check } from "lucide-react";
+import { TableActionButtons } from "@/components/shared/TableActionButtons";
 import { useToast } from "@/hooks/use-toast";
 import { cn } from "@/lib/utils";
 import { DataTablePagination } from "@/components/shared/DataTablePagination";
+import { AppListToolbar } from "@/components/shared/AppListToolbar";
 import { 
     type BatchRecord, 
     type BatchItem as QCItem, 
@@ -72,80 +60,6 @@ import {
     updateBatchRecord 
 } from "@/lib/batchSharedData";
 
-// ============================================================================
-// SEARCHABLE SELECT COMPONENT
-// ============================================================================
-
-interface SearchableSelectProps {
-  value: string;
-  onValueChange: (value: string) => void;
-  options: { value: string; label: string }[];
-  placeholder?: string;
-  searchPlaceholder?: string;
-  emptyText?: string;
-  className?: string;
-}
-
-function SearchableSelect({
-  value,
-  onValueChange,
-  options,
-  placeholder = "Select...",
-  searchPlaceholder = "Search...",
-  emptyText = "No results found.",
-  className,
-}: SearchableSelectProps) {
-  const [open, setOpen] = useState(false);
-
-  return (
-    <Popover open={open} onOpenChange={setOpen}>
-      <PopoverTrigger asChild>
-        <Button
-          variant="outline"
-          role="combobox"
-          aria-expanded={open}
-          className={cn("w-full justify-between h-10 font-normal", className)}
-        >
-          <span className={cn(!value && "text-muted-foreground")}>
-            {value
-              ? options.find((option) => option.value === value)?.label
-              : placeholder}
-          </span>
-          <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
-        </Button>
-      </PopoverTrigger>
-      <PopoverContent className="w-[var(--radix-popover-trigger-width)] p-0" align="start">
-        <Command>
-          <CommandInputBorderless placeholder={searchPlaceholder} className="h-9" />
-          <CommandList className="max-h-[200px] overflow-y-auto">
-            <CommandEmpty>{emptyText}</CommandEmpty>
-            <CommandGroup>
-              {options.map((option) => (
-                <CommandItem
-                  key={option.value}
-                  value={option.value}
-                  onSelect={(currentValue) => {
-                    onValueChange(currentValue);
-                    setOpen(false);
-                  }}
-                  className="cursor-pointer"
-                >
-                  <Check
-                    className={cn(
-                      "mr-2 h-4 w-4",
-                      value === option.value ? "opacity-100" : "opacity-0"
-                    )}
-                  />
-                  {option.label}
-                </CommandItem>
-              ))}
-            </CommandGroup>
-          </CommandList>
-        </Command>
-      </PopoverContent>
-    </Popover>
-  );
-}
 
 // ============================================================================
 // TYPE DEFINITIONS
@@ -252,6 +166,7 @@ export default function BatchQC() {
   const [viewingBatch, setViewingBatch] = useState<BatchQC | null>(null);
   const [editableItems, setEditableItems] = useState<QCItem[]>([]);
   const [editableQCParameters, setEditableQCParameters] = useState<QCParameter[]>([]);
+  const [isReadOnly, setIsReadOnly] = useState(false);
   const [validationErrors, setValidationErrors] = useState<Record<number, string>>({});
   const [remarks, setRemarks] = useState<string>("");
 
@@ -274,7 +189,7 @@ export default function BatchQC() {
   // HANDLERS
   // ============================================================================
 
-  const handleViewBatch = (batch: BatchQC) => {
+  const handleViewBatch = (batch: BatchQC, mode: "view" | "edit" = "view") => {
     // Check if operation requires QC
     const operationParams = OPERATION_QC_PARAMETERS[batch.operation];
 
@@ -290,7 +205,9 @@ export default function BatchQC() {
 
     setEditableItems((batch.outputItems || []).map((item: any) => ({
       ...item,
-      verifiedQty: item.verifiedQty ?? (item.qtyProduced || 0)
+      verifiedQty: mode === "edit" 
+        ? (item.verifiedQty ?? (item.qtyProduced || 0))
+        : item.verifiedQty
     })));
 
     // Load QC parameters based on operation
@@ -302,6 +219,7 @@ export default function BatchQC() {
     setValidationErrors({});
     setRemarks(batch.remarks || "");
     setViewingBatch(batch);
+    setIsReadOnly(mode === "view");
     setIsViewModalOpen(true);
   };
 
@@ -441,71 +359,39 @@ export default function BatchQC() {
         </p>
       </div>
 
-      {/* Search and Filter Section */}
-      <div className="flex flex-col sm:flex-row items-end gap-4 bg-card p-4 rounded-lg border shadow-sm">
-        <div className="w-full sm:flex-1">
-          <Label className="mb-1.5 block text-xs font-medium text-muted-foreground uppercase tracking-wider">
-            Search
-          </Label>
-          <div className="relative">
-            <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
-            <Input
-              placeholder="Search by Batch No / Operation / Work Center..."
-              className="pl-9 h-10"
-              value={searchTerm}
-              onChange={(e) => setSearchTerm(e.target.value)}
-            />
-          </div>
-        </div>
-
-        <div className="w-full sm:w-48">
-          <Label className="mb-1.5 block text-xs font-medium text-muted-foreground uppercase tracking-wider">
-            Operation
-          </Label>
-          <SearchableSelect
-            value={operationFilter}
-            onValueChange={setOperationFilter}
-            options={[
-              { value: "All", label: "All" },
-              ...uniqueOperations.map(op => ({ value: op, label: op }))
-            ]}
-            placeholder="Select Operation"
-            searchPlaceholder="Search operation..."
-          />
-        </div>
-
-        <div className="w-full sm:w-48">
-          <Label className="mb-1.5 block text-xs font-medium text-muted-foreground uppercase tracking-wider">
-            Work Center
-          </Label>
-          <SearchableSelect
-            value={workCenterFilter}
-            onValueChange={setWorkCenterFilter}
-            options={[
-              { value: "All", label: "All" },
-              ...uniqueWorkCenters.map(wc => ({ value: wc, label: wc }))
-            ]}
-            placeholder="Select Work Center"
-            searchPlaceholder="Search work center..."
-          />
-        </div>
-
-        <div className="w-full sm:w-48">
-          <Label className="mb-1.5 block text-xs font-medium text-muted-foreground uppercase tracking-wider">
-            Status
-          </Label>
-          <SearchableSelect
-            value={statusFilter}
-            onValueChange={(value) => setStatusFilter(value as "Sent for QC" | "Verified")}
-            options={[
-              { value: "Sent for QC", label: "Sent for QC" },
-              { value: "Verified", label: "Verified QC" },
-            ]}
-            placeholder="Select Status"
-            searchPlaceholder="Search status..."
-          />
-        </div>
-      </div>
+      <AppListToolbar
+        search={{
+          value: searchTerm,
+          onChange: setSearchTerm,
+          placeholder: "Search by Batch No / Operation / Work Center..."
+        }}
+        filters={[
+          {
+            type: 'select',
+            label: 'Operation',
+            value: operationFilter,
+            options: ["All", ...uniqueOperations],
+            onChange: setOperationFilter,
+            searchable: true
+          },
+          {
+            type: 'select',
+            label: 'Work Center',
+            value: workCenterFilter,
+            options: ["All", ...uniqueWorkCenters],
+            onChange: setWorkCenterFilter,
+            searchable: true
+          },
+          {
+            type: 'select',
+            label: 'Status',
+            value: statusFilter,
+            options: ["Sent for QC", "Verified"],
+            onChange: (val) => setStatusFilter(val as "Sent for QC" | "Verified"),
+            searchable: true
+          }
+        ]}
+      />
 
       {/* Batches Table */}
       <Card>
@@ -516,15 +402,17 @@ export default function BatchQC() {
                 <TableRow className="bg-muted/50">
                   <TableHead>Batch No</TableHead>
                   <TableHead>Batch Date</TableHead>
+                  <TableHead>Operation</TableHead>
+                  <TableHead>Work Center</TableHead>
                   <TableHead>Shift</TableHead>
                   <TableHead>Status</TableHead>
-                  <TableHead className="text-right">Action</TableHead>
+                  <TableHead className="text-center w-[100px]">Actions</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {paginatedData.length === 0 ? (
                   <TableRow>
-                    <TableCell colSpan={5} className="h-24 text-center text-muted-foreground">
+                    <TableCell colSpan={7} className="h-24 text-center text-muted-foreground">
                       No batches found.
                     </TableCell>
                   </TableRow>
@@ -533,21 +421,19 @@ export default function BatchQC() {
                     <TableRow key={batch.id}>
                       <TableCell className="font-medium font-mono">{batch.batchNo}</TableCell>
                       <TableCell>{formatDate(batch.date)}</TableCell>
+                      <TableCell>{batch.operation}</TableCell>
+                      <TableCell>{batch.workCenter}</TableCell>
                       <TableCell>{batch.shift}</TableCell>
                       <TableCell>
                         <Badge variant={(batch.qcStatus === "Sent for QC" || batch.status === "Sent for QC") ? "default" : "secondary"}>
                           {batch.qcStatus || (batch.status === "Sent for QC" ? "Sent for QC" : batch.status)}
                         </Badge>
                       </TableCell>
-                      <TableCell className="text-right">
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          className="h-8 w-8 hover:bg-muted"
-                          onClick={() => handleViewBatch(batch)}
-                        >
-                          <Eye className="h-4 w-4" />
-                        </Button>
+                      <TableCell className="text-center">
+                        <TableActionButtons
+                          onView={() => handleViewBatch(batch, "view")}
+                          onEdit={(batch.qcStatus === "Sent for QC" || batch.status === "Sent for QC") ? () => handleViewBatch(batch, "edit") : undefined}
+                        />
                       </TableCell>
                     </TableRow>
                   ))
@@ -576,6 +462,9 @@ export default function BatchQC() {
           setViewingBatch(null);
           setEditableItems([]);
           setEditableQCParameters([]);
+          setValidationErrors({});
+          setRemarks("");
+          setIsReadOnly(false);
         } else {
           setIsViewModalOpen(true);
         }
@@ -583,12 +472,12 @@ export default function BatchQC() {
         <DialogContent className="sm:max-w-[800px] max-h-[90vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle>
-              {(viewingBatch?.qcStatus === "Sent for QC" || viewingBatch?.status === "Sent for QC") ? "Verify Quality Check" : "QC Verification Details"}
+              {isReadOnly ? "QC Verification Details" : "Verify Quality Check"}
             </DialogTitle>
             <DialogDescription>
-              {(viewingBatch?.qcStatus === "Sent for QC" || viewingBatch?.status === "Sent for QC")
-                ? "Review and verify the produced quantities for this batch"
-                : "View verified quality check details"}
+              {isReadOnly
+                ? "View verified quality check details"
+                : "Review and verify the produced quantities for this batch"}
             </DialogDescription>
           </DialogHeader>
           {viewingBatch && (
@@ -621,7 +510,7 @@ export default function BatchQC() {
                     {viewingBatch.qcStatus || (viewingBatch.status === "Sent for QC" ? "Sent for QC" : viewingBatch.status)}
                   </Badge>
                 </div>
-                {viewingBatch.qcStatus === "Verified" && (
+                {(viewingBatch.qcStatus === "Verified" || (isReadOnly && viewingBatch.qcVerifiedBy)) && (
                   <>
                     <div>
                       <Label className="text-xs text-muted-foreground">Verified By</Label>
@@ -681,25 +570,29 @@ export default function BatchQC() {
                           <TableCell>{item.itemName}</TableCell>
                           <TableCell>{item.uom}</TableCell>
                           <TableCell className="text-right">{item.qtyProduced || 0}</TableCell>
-                          <TableCell className="text-right">
-                            {(viewingBatch.qcStatus === "Sent for QC" || viewingBatch.status === "Sent for QC") ? (
+                          <TableCell className="text-right font-mono">
+                            {!isReadOnly ? (
                               <div className="flex flex-col items-end gap-1">
                                 <Input
                                   type="number"
                                   value={item.verifiedQty ?? (item.qtyProduced || 0)}
                                   onChange={(e) => handleVerifiedQtyChange(item.id as any, e.target.value)}
-                                  className={`w-28 h-9 text-right ${validationErrors[item.id as any] ? 'border-destructive' : ''}`}
+                                  className={`w-28 h-9 text-right font-bold ${validationErrors[item.id as any] ? 'border-destructive focus-visible:ring-destructive/20' : 'focus-visible:ring-primary/20'}`}
                                   min="0"
                                   max={item.qtyProduced || 0}
                                 />
                                 {validationErrors[item.id as any] && (
-                                  <span className="text-xs text-destructive">
+                                  <span className="text-[10px] text-destructive font-bold">
                                     {validationErrors[item.id as any]}
                                   </span>
                                 )}
                               </div>
                             ) : (
-                              <span>{item.verifiedQty}</span>
+                              <span className="font-bold">
+                                {item.verifiedQty !== undefined && item.verifiedQty !== null 
+                                  ? item.verifiedQty 
+                                  : <span className="text-muted-foreground font-normal italic">Pending</span>}
+                              </span>
                             )}
                           </TableCell>
                         </TableRow>
@@ -711,24 +604,24 @@ export default function BatchQC() {
 
               {/* Remarks Field */}
               <div>
-                <Label className="text-sm font-semibold mb-2 block">Remarks</Label>
-                {(viewingBatch.qcStatus === "Sent for QC" || viewingBatch.status === "Sent for QC") ? (
+                <Label className="text-sm font-semibold mb-2 block text-primary">Remarks</Label>
+                {!isReadOnly ? (
                   <Textarea
                     value={remarks}
                     onChange={(e) => setRemarks(e.target.value)}
                     placeholder="Enter any remarks or observations..."
-                    className="min-h-[100px]"
+                    className="min-h-[100px] resize-none focus-visible:ring-primary/20"
                   />
                 ) : (
-                  <div className="rounded-md border p-3 bg-muted/50 min-h-[100px]">
-                    {remarks || <span className="text-muted-foreground italic">No remarks</span>}
+                  <div className="rounded-md border p-3 bg-muted/30 min-h-[100px] text-sm leading-relaxed">
+                    {remarks || <span className="text-muted-foreground italic">No remarks recorded</span>}
                   </div>
                 )}
               </div>
             </div>
           )}
-          <DialogFooter>
-            {(viewingBatch?.qcStatus === "Sent for QC" || viewingBatch?.status === "Sent for QC") ? (
+          <DialogFooter className="border-t pt-4">
+            {!isReadOnly ? (
               <div className="flex justify-end gap-3 w-full">
                 <Button variant="outline" onClick={() => setIsViewModalOpen(false)}>
                   Cancel

@@ -31,13 +31,13 @@ import { Badge } from "@/components/ui/badge";
 import {
     Search,
     Plus,
-    Eye,
     ChevronLeft,
     ChevronRight,
     Trash2,
     Calendar as CalendarIcon,
     ChevronDown,
 } from "lucide-react";
+import { TableActionButtons } from "@/components/shared/TableActionButtons";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { useToast } from "@/hooks/use-toast";
 import { cn } from "@/lib/utils";
@@ -297,7 +297,7 @@ export default function Leads() {
                                 <TableHead className="font-bold uppercase text-[11px] tracking-wider">Customer</TableHead>
                                 <TableHead className="font-bold uppercase text-[11px] tracking-wider">Contact</TableHead>
                                 <TableHead className="font-bold uppercase text-[11px] tracking-wider text-center">Status</TableHead>
-                                <TableHead className="text-right font-bold uppercase text-[11px] tracking-wider pr-6">Actions</TableHead>
+                                <TableHead className="font-bold text-[11px] tracking-wider text-center">Actions</TableHead>
                             </TableRow>
                         </TableHeader>
                         <TableBody>
@@ -308,10 +308,10 @@ export default function Leads() {
                                     <TableCell className="text-sm">{lead.customerName}</TableCell>
                                     <TableCell className="text-sm">{lead.contactPerson}</TableCell>
                                     <TableCell className="text-center">{getStatusBadge(lead.status)}</TableCell>
-                                    <TableCell className="text-right pr-6">
-                                        <Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground hover:text-primary transition-all" onClick={() => { setViewingLead(lead); setIsViewModalOpen(true); }}>
-                                            <Eye className="h-4 w-4" />
-                                        </Button>
+                                    <TableCell className="text-center">
+                                        <TableActionButtons
+                                            onView={() => { setViewingLead(lead); setIsViewModalOpen(true); }}
+                                        />
                                     </TableCell>
                                 </TableRow>
                             )) : (

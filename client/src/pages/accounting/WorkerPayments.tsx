@@ -1,8 +1,8 @@
 import React, { useState, useMemo } from "react";
 import { format } from "date-fns";
 import {
-    Search, Eye, CheckCircle, ChevronLeft, ChevronRight, ChevronDown, ChevronsUpDown, Check,
-    Calendar as CalendarIcon, X, Download, FileText
+    Search, Eye, CheckCircle, ChevronLeft, ChevronRight, ChevronsUpDown, Check,
+    Calendar as CalendarIcon, Download
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -37,6 +37,7 @@ import {
     TableHeader,
     TableRow,
 } from "@/components/ui/table";
+import { TableActionButtons } from "@/components/shared/TableActionButtons";
 import {
     Dialog,
     DialogContent,
@@ -45,6 +46,9 @@ import {
     DialogFooter,
     DialogDescription,
 } from "@/components/ui/dialog";
+import { AppListToolbar } from "@/components/shared/AppListToolbar";
+import { SearchableSelect } from "@/components/shared/SearchableSelect";
+import { DatePicker } from "@/components/shared/DatePicker";
 import { cn } from "@/lib/utils";
 import { useToast } from "@/hooks/use-toast";
 import {
@@ -56,89 +60,7 @@ import {
 
 
 
-// Helper Component: Searchable Select
-interface SearchableOption {
-    value: string;
-    label: string;
-}
-
-interface SearchableSelectProps {
-    label?: string;
-    value?: string;
-    options: (string | SearchableOption)[];
-    onValueChange?: (val: string) => void;
-    disabled?: boolean;
-    placeholder?: string;
-    searchPlaceholder?: string;
-}
-
-function SearchableSelect({
-    label,
-    value,
-    options,
-    onValueChange,
-    disabled = false,
-    placeholder,
-    searchPlaceholder
-}: SearchableSelectProps) {
-    const [open, setOpen] = useState(false);
-
-    const normalizedOptions = useMemo(() => {
-        return options.map(opt =>
-            typeof opt === 'string' ? { value: opt, label: opt } : opt
-        );
-    }, [options]);
-
-    const displayValue = useMemo(() => {
-        if (!value) return "";
-        return normalizedOptions.find(opt => opt.value === value)?.label || value;
-    }, [value, normalizedOptions]);
-
-    return (
-        <div className="space-y-2">
-            {label && <Label className="text-sm font-medium">{label}</Label>}
-            <Popover open={open} onOpenChange={setOpen}>
-                <PopoverTrigger asChild>
-                    <Button
-                        variant="outline"
-                        role="combobox"
-                        className="w-full justify-between h-10 font-normal border-input"
-                        disabled={disabled}
-                    >
-                        <span className={cn(!value && "text-muted-foreground", "truncate")}>
-                            {displayValue || placeholder || `Select ${label}`}
-                        </span>
-                        <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
-                    </Button>
-                </PopoverTrigger>
-                <PopoverContent className="w-[var(--radix-popover-trigger-width)] p-0" align="start">
-                    <Command>
-                        <CommandInputBorderless placeholder={searchPlaceholder || "Search..."} className="h-9" />
-                        <CommandList>
-                            <CommandEmpty>No results found.</CommandEmpty>
-                            <CommandGroup>
-                                {normalizedOptions.map((item) => (
-                                    <CommandItem
-                                        key={item.value}
-                                        value={item.value}
-                                        onSelect={() => {
-                                            if (onValueChange) onValueChange(item.value);
-                                            setOpen(false);
-                                        }}
-                                        className="cursor-pointer"
-                                    >
-                                        <Check className={cn("mr-2 h-4 w-4", value === item.value ? "opacity-100" : "opacity-0")} />
-                                        {item.label}
-                                    </CommandItem>
-                                ))}
-                            </CommandGroup>
-                        </CommandList>
-                    </Command>
-                </PopoverContent>
-            </Popover>
-        </div>
-    );
-}
+// removed local SearchableSelect helper - using shared one
 
 export default function WorkerPaymentsPage() {
     const { toast } = useToast();
@@ -200,44 +122,39 @@ export default function WorkerPaymentsPage() {
                 <p className="text-muted-foreground">Process and verify worker wage payments</p>
             </div>
 
-            {/* Filters */}
-            <div className="flex flex-col sm:flex-row items-end gap-4 bg-card p-4 rounded-lg border shadow-sm">
-                <div className="w-full sm:flex-1">
-                    <Label className="mb-1.5 block text-xs font-medium text-muted-foreground uppercase tracking-wider">Search</Label>
-                    <div className="relative">
-                        <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
-                        <Input
-                            placeholder="Search by Period / Dept..."
-                            className="pl-9 h-10"
-                            value={searchQuery}
-                            onChange={(e) => setSearchQuery(e.target.value)}
-                        />
-                    </div>
-                </div>
-
-                <div className="w-full sm:w-48">
-                    <Label className="mb-1.5 block text-xs font-medium text-muted-foreground uppercase tracking-wider">Department</Label>
-                    <SearchableSelect
-                        value={departmentFilter}
-                        onValueChange={setDepartmentFilter}
-                        options={["All", "Production", "Logistics", "Packaging", "Maintenance"]}
-                    />
-                </div>
-
-                <div className="w-full sm:w-48">
-                    <Label className="mb-1.5 block text-xs font-medium text-muted-foreground uppercase tracking-wider">Date</Label>
-                    <DatePicker date={dateFilter} setDate={setDateFilter} />
-                </div>
-
-                <div className="w-full sm:w-48">
-                    <Label className="mb-1.5 block text-xs font-medium text-muted-foreground uppercase tracking-wider">Status</Label>
-                    <SearchableSelect
-                        value={statusFilter}
-                        onValueChange={setStatusFilter}
-                        options={["All", "Submitted Wages", "Paid Wages"]}
-                    />
-                </div>
-            </div>
+            {/* Toolbar */}
+            <AppListToolbar
+                search={{
+                    placeholder: "Search by Period / Dept...",
+                    value: searchQuery,
+                    onChange: (val) => setSearchQuery(val)
+                }}
+                filters={[
+                    {
+                        type: 'select',
+                        label: "Department",
+                        value: departmentFilter,
+                        onChange: setDepartmentFilter,
+                        options: ["All", "Production", "Logistics", "Packaging", "Maintenance"],
+                        searchable: true
+                    },
+                    {
+                        type: 'date',
+                        label: "Date",
+                        value: dateFilter,
+                        onChange: setDateFilter,
+                        placeholder: "Pick a date"
+                    },
+                    {
+                        type: 'select',
+                        label: "Status",
+                        value: statusFilter,
+                        onChange: setStatusFilter,
+                        options: ["All", "Submitted Wages", "Paid Wages"],
+                        searchable: true
+                    }
+                ]}
+            />
 
             {/* Table */}
             <Card>
@@ -252,7 +169,7 @@ export default function WorkerPaymentsPage() {
                                     <TableHead className="text-center">Workers</TableHead>
                                     <TableHead className="text-right">Total Net Wage</TableHead>
                                     <TableHead className="text-center">Status</TableHead>
-                                    <TableHead className="text-right pr-6">Action</TableHead>
+                                    <TableHead className="text-center w-[100px]">Actions</TableHead>
                                 </TableRow>
                             </TableHeader>
                             <TableBody>
@@ -279,16 +196,21 @@ export default function WorkerPaymentsPage() {
                                                     {wage.status === "Submitted Wages" ? "Submitted" : "Paid"}
                                                 </Badge>
                                             </TableCell>
-                                            <TableCell className="text-right pr-6">
-                                                <Button
-                                                    variant="ghost"
-                                                    size="sm"
-                                                    onClick={() => handleView(wage)}
-                                                    className="h-8 text-primary hover:bg-primary/5 font-semibold text-xs"
-                                                >
-                                                    <Eye className="mr-2 h-3.5 w-3.5" />
-                                                    {wage.status === "Submitted Wages" ? "Process" : "View"}
-                                                </Button>
+                                            <TableCell className="text-center">
+                                                <TableActionButtons
+                                                    onView={wage.status !== "Submitted Wages" ? () => handleView(wage) : undefined}
+                                                    customActions={wage.status === "Submitted Wages" ? (
+                                                        <Button
+                                                            variant="ghost"
+                                                            size="sm"
+                                                            onClick={() => handleView(wage)}
+                                                            className="h-8 text-primary hover:bg-primary/5 font-semibold text-xs"
+                                                        >
+                                                            <Eye className="mr-2 h-4 w-4" />
+                                                            Process
+                                                        </Button>
+                                                    ) : undefined}
+                                                />
                                             </TableCell>
                                         </TableRow>
                                     ))
@@ -474,78 +396,4 @@ export default function WorkerPaymentsPage() {
     );
 }
 
-// Reusable DatePicker
-function DatePicker({ date, setDate }: { date?: Date, setDate: (d?: Date) => void }) {
-    const [isOpen, setIsOpen] = useState(false);
-    const [viewMode, setViewMode] = useState<"day" | "month" | "year">("day");
-    const [visibleDate, setVisibleDate] = useState(() => date || new Date());
-
-    const monthNames = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
-    const monthNamesShort = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-
-    const getDaysInMonth = (date: Date) => {
-        const year = date.getFullYear();
-        const month = date.getMonth();
-        const firstDay = new Date(year, month, 1);
-        const lastDay = new Date(year, month + 1, 0);
-        const days = [];
-        for (let i = firstDay.getDay() - 1; i >= 0; i--) days.push({ date: new Date(year, month - 1, new Date(year, month, 0).getDate() - i), isCurrentMonth: false });
-        for (let i = 1; i <= lastDay.getDate(); i++) days.push({ date: new Date(year, month, i), isCurrentMonth: true });
-        while (days.length % 7 !== 0) days.push({ date: new Date(year, month + 1, days.length - lastDay.getDate() - firstDay.getDay() + 2), isCurrentMonth: false });
-        return days;
-    };
-
-    const renderDayView = () => (
-        <div className="w-80 p-4">
-            <div className="flex justify-between items-center mb-4">
-                <Button variant="ghost" size="icon" onClick={() => setVisibleDate(new Date(visibleDate.getFullYear(), visibleDate.getMonth() - 1))}><ChevronLeft className="h-4 w-4" /></Button>
-                <div className="flex gap-2">
-                    <Button variant="ghost" onClick={() => setViewMode("month")}>{monthNames[visibleDate.getMonth()]}</Button>
-                    <Button variant="ghost" onClick={() => setViewMode("year")}>{visibleDate.getFullYear()}</Button>
-                </div>
-                <Button variant="ghost" size="icon" onClick={() => setVisibleDate(new Date(visibleDate.getFullYear(), visibleDate.getMonth() + 1))}><ChevronRight className="h-4 w-4" /></Button>
-            </div>
-            <div className="grid grid-cols-7 text-center text-xs font-bold mb-2">
-                {["Su", "Mo", "Tu", "We", "Th", "Fr", "Sa"].map(d => <div key={d}>{d}</div>)}
-            </div>
-            <div className="grid grid-cols-7 gap-1">
-                {getDaysInMonth(visibleDate).map((d, i) => (
-                    <Button
-                        key={i}
-                        variant="ghost"
-                        className={cn("h-8 w-8 p-0 text-sm", !d.isCurrentMonth && "text-muted-foreground opacity-50", date?.toDateString() === d.date.toDateString() && "bg-primary text-primary-foreground")}
-                        onClick={() => { setDate(d.date); setIsOpen(false); }}
-                    >
-                        {d.date.getDate()}
-                    </Button>
-                ))}
-            </div>
-        </div>
-    );
-
-    return (
-        <Popover open={isOpen} onOpenChange={setIsOpen}>
-            <PopoverTrigger asChild>
-                <Button variant="outline" className={cn("w-full justify-start text-left font-normal h-10", !date && "text-muted-foreground")}>
-                    <CalendarIcon className="mr-2 h-4 w-4" />
-                    {date ? format(date, "dd/MM/yyyy") : <span>Pick a date</span>}
-                </Button>
-            </PopoverTrigger>
-            <PopoverContent className="w-auto p-0" align="start">
-                {viewMode === "day" ? renderDayView() : viewMode === "month" ? (
-                    <div className="grid grid-cols-3 gap-2 p-4 w-80">
-                        {monthNamesShort.map((m, i) => (
-                            <Button key={m} variant="ghost" onClick={() => { setVisibleDate(new Date(visibleDate.getFullYear(), i, 1)); setViewMode("day"); }}>{m}</Button>
-                        ))}
-                    </div>
-                ) : (
-                    <div className="grid grid-cols-3 gap-2 p-4 w-80 h-60 overflow-y-auto">
-                        {Array.from({ length: 50 }, (_, i) => 2020 + i).map(y => (
-                            <Button key={y} variant="ghost" onClick={() => { setVisibleDate(new Date(y, visibleDate.getMonth(), 1)); setViewMode("month"); }}>{y}</Button>
-                        ))}
-                    </div>
-                )}
-            </PopoverContent>
-        </Popover>
-    );
-}
+// removed local DatePicker component - using shared one

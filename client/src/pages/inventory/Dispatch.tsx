@@ -3,7 +3,6 @@ import { format } from "date-fns";
 import { Card, CardContent } from "@/components/ui/card";
 import {
     Search,
-    Eye,
     ChevronLeft,
     ChevronRight,
     FileText,
@@ -15,13 +14,13 @@ import {
     Paperclip,
     Plus,
     Settings2,
-    Edit,
     AlertCircle,
     Download,
     LayoutGrid,
     Trash2
 } from "lucide-react";
 import { DataTablePagination } from "@/components/shared/DataTablePagination";
+import { TableActionButtons } from "@/components/shared/TableActionButtons";
 import {
     Table,
     TableBody,
@@ -58,6 +57,9 @@ import { Textarea } from "@/components/ui/textarea";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { cn } from "@/lib/utils";
 import { useToast } from "@/hooks/use-toast";
+import { AppListToolbar } from "@/components/shared/AppListToolbar";
+import { SearchableSelect } from "@/components/shared/SearchableSelect";
+import { DatePicker } from "@/components/shared/DatePicker";
 
 import {
     getSalesOrders,
@@ -84,301 +86,8 @@ import {
 // REUSABLE COMPONENTS
 // ============================================================================
 
-function DatePicker({ date, setDate, disabled = false }: {
-    date?: Date,
-    setDate: (d?: Date) => void,
-    disabled?: boolean
-}) {
-    const [isOpen, setIsOpen] = useState(false);
-    const [viewMode, setViewMode] = useState<"day" | "month" | "year">("day");
-    const [visibleDate, setVisibleDate] = useState(() => date || new Date());
+// Local DatePicker removed in favor of shared component
 
-    const monthNames = [
-        "January", "February", "March", "April", "May", "June",
-        "July", "August", "September", "October", "November", "December"
-    ];
-
-    const monthNamesShort = [
-        "Jan", "Feb", "Mar", "Apr", "May", "Jun",
-        "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"
-    ];
-
-    const formatDisplayDate = (date: Date | undefined) => {
-        if (!date) return "Pick a date";
-        try {
-            return format(date, "dd-MM-yyyy");
-        } catch (error) {
-            return "Pick a date";
-        }
-    };
-
-    const handleDateSelect = (selectedDate: Date) => {
-        setDate(selectedDate);
-        setIsOpen(false);
-        setViewMode("day");
-    };
-
-    const handleMonthSelect = (monthIndex: number) => {
-        const newDate = new Date(visibleDate.getFullYear(), monthIndex, 1);
-        setVisibleDate(newDate);
-        setViewMode("day");
-    };
-
-    const handleYearSelect = (year: number) => {
-        const newDate = new Date(year, visibleDate.getMonth(), 1);
-        setVisibleDate(newDate);
-        setViewMode("month");
-    };
-
-    const navigateMonth = (direction: number) => {
-        const newDate = new Date(visibleDate.getFullYear(), visibleDate.getMonth() + direction, 1);
-        setVisibleDate(newDate);
-    };
-
-    const getDaysInMonth = (date: Date) => {
-        const year = date.getFullYear();
-        const month = date.getMonth();
-        const firstDay = new Date(year, month, 1);
-        const lastDay = new Date(year, month + 1, 0);
-        const daysInMonth = lastDay.getDate();
-        const startingDayOfWeek = firstDay.getDay();
-
-        const days = [];
-
-        // Previous month days
-        const prevMonth = new Date(year, month - 1, 0);
-        for (let i = startingDayOfWeek - 1; i >= 0; i--) {
-            const dayDate = new Date(year, month - 1, prevMonth.getDate() - i);
-            days.push({
-                date: dayDate,
-                isCurrentMonth: false,
-                isToday: false,
-                isSelected: false
-            });
-        }
-
-        // Current month days
-        for (let day = 1; day <= daysInMonth; day++) {
-            const currentDate = new Date(year, month, day);
-            const isToday = new Date().toDateString() === currentDate.toDateString();
-            const isSelected = date && currentDate.toDateString() === date.toDateString();
-
-            days.push({
-                date: currentDate,
-                isCurrentMonth: true,
-                isToday,
-                isSelected
-            });
-        }
-
-        // Next month days
-        const remainingDays = 42 - days.length;
-        for (let day = 1; day <= remainingDays; day++) {
-            const dayDate = new Date(year, month + 1, day);
-            days.push({
-                date: dayDate,
-                isCurrentMonth: false,
-                isToday: false,
-                isSelected: false
-            });
-        }
-
-        return days;
-    };
-
-    const renderDayView = () => {
-        const days = getDaysInMonth(visibleDate);
-        const weekDays = ["Su", "Mo", "Tu", "We", "Th", "Fr", "Sa"];
-
-        return (
-            <div className="w-80">
-                <div className="flex items-center justify-between mb-4">
-                    <Button
-                        variant="ghost"
-                        size="icon"
-                        className="h-8 w-8"
-                        onClick={() => navigateMonth(-1)}
-                    >
-                        <ChevronLeft className="h-4 w-4" />
-                    </Button>
-
-                    <div className="flex items-center gap-2">
-                        <Button
-                            variant="ghost"
-                            className="font-semibold text-sm"
-                            onClick={() => setViewMode("month")}
-                        >
-                            {monthNames[visibleDate.getMonth()]}
-                            <ChevronDown className="ml-1 h-3 w-3" />
-                        </Button>
-                        <Button
-                            variant="ghost"
-                            className="font-semibold text-sm"
-                            onClick={() => setViewMode("year")}
-                        >
-                            {visibleDate.getFullYear()}
-                            <ChevronDown className="ml-1 h-3 w-3" />
-                        </Button>
-                    </div>
-
-                    <Button
-                        variant="ghost"
-                        size="icon"
-                        className="h-8 w-8"
-                        onClick={() => navigateMonth(1)}
-                    >
-                        <ChevronRight className="h-4 w-4" />
-                    </Button>
-                </div>
-
-                <div className="grid grid-cols-7 gap-1 mb-2">
-                    {weekDays.map((day) => (
-                        <div key={day} className="h-8 flex items-center justify-center text-xs font-medium text-muted-foreground">
-                            {day}
-                        </div>
-                    ))}
-                </div>
-
-                <div className="grid grid-cols-7 gap-1">
-                    {days.map((day, index) => (
-                        <Button
-                            key={index}
-                            variant="ghost"
-                            size="icon"
-                            className={cn(
-                                "h-8 w-8 text-sm font-normal",
-                                !day.isCurrentMonth && "text-muted-foreground opacity-50",
-                                day.isToday && "bg-accent text-accent-foreground font-semibold",
-                                day.isSelected && "bg-primary text-primary-foreground font-semibold",
-                                day.isCurrentMonth && "hover:bg-accent hover:text-accent-foreground"
-                            )}
-                            onClick={() => handleDateSelect(day.date)}
-                        >
-                            {day.date.getDate()}
-                        </Button>
-                    ))}
-                </div>
-            </div>
-        );
-    };
-
-    const renderMonthView = () => {
-        return (
-            <div className="w-80">
-                <div className="flex items-center justify-between mb-4">
-                    <Button
-                        variant="ghost"
-                        size="icon"
-                        className="h-8 w-8"
-                        onClick={() => setViewMode("day")}
-                    >
-                        <ChevronLeft className="h-4 w-4" />
-                    </Button>
-                    <h3 className="font-semibold">{visibleDate.getFullYear()}</h3>
-                    <Button
-                        variant="ghost"
-                        className="font-semibold text-sm"
-                        onClick={() => setViewMode("year")}
-                    >
-                        {visibleDate.getFullYear()}
-                        <ChevronDown className="ml-1 h-3 w-3" />
-                    </Button>
-                </div>
-
-                <div className="grid grid-cols-3 gap-2">
-                    {monthNamesShort.map((month, index) => (
-                        <Button
-                            key={month}
-                            variant="ghost"
-                            className={cn(
-                                "h-10 text-sm font-normal",
-                                index === visibleDate.getMonth() && "bg-primary text-primary-foreground font-semibold"
-                            )}
-                            onClick={() => handleMonthSelect(index)}
-                        >
-                            {month}
-                        </Button>
-                    ))}
-                </div>
-            </div>
-        );
-    };
-
-    const renderYearView = () => {
-        const currentYear = visibleDate.getFullYear();
-        const startYear = Math.floor(currentYear / 12) * 12;
-        const years = Array.from({ length: 12 }, (_, i) => startYear + i);
-
-        return (
-            <div className="w-80">
-                <div className="flex items-center justify-between mb-4">
-                    <Button
-                        variant="ghost"
-                        size="icon"
-                        className="h-8 w-8"
-                        onClick={() => {
-                            const newStartYear = startYear - 12;
-                            setVisibleDate(new Date(newStartYear, visibleDate.getMonth(), 1));
-                        }}
-                    >
-                        <ChevronLeft className="h-4 w-4" />
-                    </Button>
-                    <h3 className="font-semibold">{startYear} - {startYear + 11}</h3>
-                    <Button
-                        variant="ghost"
-                        size="icon"
-                        className="h-8 w-8"
-                        onClick={() => {
-                            const newStartYear = startYear + 12;
-                            setVisibleDate(new Date(newStartYear, visibleDate.getMonth(), 1));
-                        }}
-                    >
-                        <ChevronRight className="h-4 w-4" />
-                    </Button>
-                </div>
-
-                <div className="grid grid-cols-3 gap-2">
-                    {years.map((year) => (
-                        <Button
-                            key={year}
-                            variant="ghost"
-                            className={cn(
-                                "h-10 text-sm font-normal",
-                                year === currentYear && "bg-primary text-primary-foreground font-semibold"
-                            )}
-                            onClick={() => handleYearSelect(year)}
-                        >
-                            {year}
-                        </Button>
-                    ))}
-                </div>
-            </div>
-        );
-    };
-
-    return (
-        <Popover open={isOpen} onOpenChange={setIsOpen}>
-            <PopoverTrigger asChild>
-                <Button
-                    variant="outline"
-                    disabled={disabled}
-                    className={cn(
-                        "w-full justify-start text-left font-normal flex h-10 rounded-md border border-input px-3 py-2 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50 hover:bg-white",
-                        !date && "text-muted-foreground"
-                    )}
-                >
-                    <CalendarIcon className="mr-2 h-4 w-4" />
-                    {date ? formatDisplayDate(date) : <span>Pick a date</span>}
-                </Button>
-            </PopoverTrigger>
-            <PopoverContent className="w-auto p-4 shadow-lg border rounded-lg z-[9999]" align="start" side="bottom" sideOffset={4}>
-                {viewMode === "day" && renderDayView()}
-                {viewMode === "month" && renderMonthView()}
-                {viewMode === "year" && renderYearView()}
-            </PopoverContent>
-        </Popover>
-    );
-}
 
 
 
@@ -476,7 +185,7 @@ export default function Dispatch() {
         const matchesSearch = order.soNumber.toLowerCase().includes(searchTerm.toLowerCase()) ||
             order.customerName.toLowerCase().includes(searchTerm.toLowerCase());
 
-        const matchesStatus = statusFilter === "All" || order.status === statusFilter;
+        const matchesStatus = statusFilter === "all" || order.status === statusFilter;
 
         let matchesDate = true;
         if (dateFilter) {
@@ -967,57 +676,29 @@ export default function Dispatch() {
             </div>
 
             <div className="flex flex-col gap-6">
-                <div className="flex flex-col sm:flex-row items-end gap-4 bg-card p-4 rounded-lg border shadow-sm">
-                    <div className="w-full sm:w-1/3">
-                        <Label className="text-xs font-medium text-muted-foreground uppercase tracking-wider mb-1.5 block">Search</Label>
-                        <div className="relative">
-                            <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
-                            <Input
-                                placeholder="Search by SO Number or Customer..."
-                                className="pl-9 h-10"
-                                value={searchTerm}
-                                onChange={(e) => setSearchTerm(e.target.value)}
-                            />
-                        </div>
-                    </div>
-
-                    <div className="w-full sm:w-1/4">
-                        <Label className="text-xs font-medium text-muted-foreground uppercase tracking-wider mb-1.5 block">Status</Label>
-                        <Select value={statusFilter} onValueChange={(v) => setStatusFilter(v)}>
-                            <SelectTrigger className="h-10">
-                                <SelectValue placeholder="Filter by Status" />
-                            </SelectTrigger>
-                            <SelectContent>
-                                <SelectItem value="All">All Statuses</SelectItem>
-                                <SelectItem value="Dispatch Pending">Dispatch Pending</SelectItem>
-                                <SelectItem value="Dispatched">Dispatched</SelectItem>
-                            </SelectContent>
-                        </Select>
-                    </div>
-
-                    <div className="w-full sm:w-48">
-                        <Label className="text-xs font-medium text-muted-foreground uppercase tracking-wider mb-1.5 block">Date</Label>
-                        <div className="flex gap-2">
-                            <div className="flex-1">
-                                <DatePicker
-                                    date={dateFilter}
-                                    setDate={setDateFilter}
-                                />
-                            </div>
-                            {dateFilter && (
-                                <Button
-                                    variant="ghost"
-                                    size="icon"
-                                    onClick={() => setDateFilter(undefined)}
-                                    className="h-10 w-10 shrink-0"
-                                    title="Clear date filter"
-                                >
-                                    <X className="h-4 w-4" />
-                                </Button>
-                            )}
-                        </div>
-                    </div>
-                </div>
+                <AppListToolbar
+                    search={{
+                        value: searchTerm,
+                        onChange: setSearchTerm,
+                        placeholder: "Search by SO Number or Customer..."
+                    }}
+                    filters={[
+                        {
+                            type: 'select',
+                            label: 'Status',
+                            value: statusFilter,
+                            options: [{ label: "All Status", value: "all" }, "Dispatch Pending", "Dispatched"],
+                            onChange: (val) => setStatusFilter(val),
+                            searchable: true
+                        },
+                        {
+                            type: 'date',
+                            label: 'Date',
+                            value: dateFilter,
+                            onChange: setDateFilter
+                        }
+                    ]}
+                />
 
                 <Card>
                     <CardContent className="pt-6">
@@ -1031,7 +712,7 @@ export default function Dispatch() {
                                         <TableHead className="font-bold uppercase text-[11px] tracking-wider py-4">Customer Name</TableHead>
                                         <TableHead className="font-bold uppercase text-[11px] tracking-wider py-4">Delivery Date</TableHead>
                                         <TableHead className="font-bold uppercase text-[11px] tracking-wider py-4 text-center">Status</TableHead>
-                                        <TableHead className="text-right font-bold uppercase text-[11px] tracking-wider py-4 pr-6">Actions</TableHead>
+                                        <TableHead className="text-center w-[100px]">Actions</TableHead>
                                     </TableRow>
                                 </TableHeader>
                                 <TableBody>
@@ -1060,29 +741,11 @@ export default function Dispatch() {
                                                     {order.deliveryDate ? (order.deliveryDate.includes('-') ? format(new Date(order.deliveryDate), "dd-MM-yyyy") : order.deliveryDate) : "-"}
                                                 </TableCell>
                                                 <TableCell className="py-4 text-center">{getDispatchStatusBadge(order.status as any)}</TableCell>
-                                                <TableCell className="py-4 text-right pr-6">
-                                                    <div className="flex justify-end items-center gap-1">
-                                                        <Button
-                                                            variant="ghost"
-                                                            size="icon"
-                                                            className="h-8 w-8 text-muted-foreground hover:text-primary transition-colors"
-                                                            onClick={() => handleOpenOrder(order, false)}
-                                                            title="View"
-                                                        >
-                                                            <Eye className="h-4 w-4" />
-                                                        </Button>
-                                                        {order.status !== "Dispatched" && (
-                                                            <Button
-                                                                variant="ghost"
-                                                                size="icon"
-                                                                className="h-8 w-8 text-muted-foreground hover:text-emerald-600 transition-colors"
-                                                                onClick={() => handleOpenOrder(order, true)}
-                                                                title="Edit"
-                                                            >
-                                                                <Edit className="h-4 w-4" />
-                                                            </Button>
-                                                        )}
-                                                    </div>
+                                                <TableCell className="py-4 text-center">
+                                                    <TableActionButtons
+                                                        onView={() => handleOpenOrder(order, false)}
+                                                        onEdit={order.status !== "Dispatched" ? () => handleOpenOrder(order, true) : undefined}
+                                                    />
                                                 </TableCell>
                                             </TableRow>
                                         ))
@@ -1398,7 +1061,7 @@ export default function Dispatch() {
                                                     <TableHead className="font-bold text-[10px] py-3 uppercase tracking-wider pl-4">Item</TableHead>
                                                     <TableHead className="font-bold text-[10px] py-3 uppercase tracking-wider text-center">Dispatch Qty</TableHead>
                                                     <TableHead className="font-bold text-[10px] py-3 uppercase tracking-wider">Note</TableHead>
-                                                    {isEditMode && <TableHead className="text-right font-bold text-[10px] py-3 uppercase tracking-wider pr-4">Actions</TableHead>}
+                                                    {isEditMode && <TableHead className="text-center font-bold text-[10px] py-3 tracking-wider">Actions</TableHead>}
                                                 </TableRow>
                                             </TableHeader>
                                             <TableBody>

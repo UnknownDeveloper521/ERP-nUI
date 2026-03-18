@@ -17,6 +17,7 @@ export type SMRStatus = "Draft Req." | "Requested Req." | "Issued Req. by WH" | 
 // SMR Item in the request
 export interface SMRItem {
     id: number | string;
+    itemCode: string;
     itemName: string;
     uom: string;
     type: "SFG" | "FG";
@@ -47,6 +48,7 @@ export interface SMRRequest {
 // Master item from inventory
 export interface MasterItem {
     id: string;
+    itemCode: string;
     name: string;
     type: "SFG" | "FG";
     uom: string;
@@ -63,15 +65,17 @@ export const mockDepartments = masterDepartments.map(dept => dept.name);
 
 // Combine SFG and FG items with additional properties for SMR
 export const MOCK_SMR_ITEMS: MasterItem[] = [
-    ...mockSemiFinishedGoods.map(item => ({
+    ...mockSemiFinishedGoods.map((item, idx) => ({
         id: item.id,
+        itemCode: `SFG-${String(idx + 1).padStart(3, '0')}`,
         name: item.name,
         type: "SFG" as const,
         uom: "PCS",
         availableStock: Math.floor(Math.random() * 500) + 50
     })),
-    ...mockFinishedGoods.map(item => ({
+    ...mockFinishedGoods.map((item, idx) => ({
         id: item.id,
+        itemCode: `FG-${String(idx + 1).padStart(3, '0')}`,
         name: item.name,
         type: "FG" as const,
         uom: "PCS",
@@ -97,8 +101,8 @@ export const mockSMRRequests: SMRRequest[] = [
         requestedBy: "John Doe",
         status: "Draft Req.",
         items: [
-            { id: 1, itemName: "Purified Lead", uom: "KG", type: "SFG", availableStock: 500, qtyNeeded: 100 },
-            { id: 2, itemName: "Battery Cases", uom: "PCS", type: "SFG", availableStock: 200, qtyNeeded: 50 },
+            { id: 1, itemCode: "SFG-001", itemName: "Purified Lead", uom: "KG", type: "SFG", availableStock: 500, qtyNeeded: 100 },
+            { id: 2, itemCode: "SFG-002", itemName: "Battery Cases", uom: "PCS", type: "SFG", availableStock: 200, qtyNeeded: 50 },
         ]
     },
     {
@@ -111,7 +115,7 @@ export const mockSMRRequests: SMRRequest[] = [
         requestedBy: "Jane Smith",
         status: "Requested Req.",
         items: [
-            { id: 3, itemName: "Terminals", uom: "NOS", type: "SFG", availableStock: 1000, qtyNeeded: 200 },
+            { id: 3, itemCode: "SFG-005", itemName: "Terminals", uom: "NOS", type: "SFG", availableStock: 1000, qtyNeeded: 200 },
         ]
     },
     {
@@ -126,8 +130,8 @@ export const mockSMRRequests: SMRRequest[] = [
         issuedDate: "2026-03-04",
         issuedBy: "Warehouse Manager",
         items: [
-            { id: 4, itemName: "GSV 7", uom: "PCS", type: "FG", availableStock: 50, qtyNeeded: 10, requestedQty: 10, issueQty: 10 },
-            { id: 5, itemName: "Separators", uom: "PCS", type: "SFG", availableStock: 300, qtyNeeded: 150, requestedQty: 150, issueQty: 150 },
+            { id: 4, itemCode: "FG-001", itemName: "GSV 7", uom: "PCS", type: "FG", availableStock: 50, qtyNeeded: 10, requestedQty: 10, issueQty: 10 },
+            { id: 5, itemCode: "SFG-004", itemName: "Separators", uom: "PCS", type: "SFG", availableStock: 300, qtyNeeded: 150, requestedQty: 150, issueQty: 150 },
         ]
     },
     {
@@ -144,7 +148,7 @@ export const mockSMRRequests: SMRRequest[] = [
         receivedDate: "02-03-2026",
         receivedBy: "Service Center Manager",
         items: [
-            { id: 6, itemName: "GSV 8", uom: "PCS", type: "FG", availableStock: 40, qtyNeeded: 5, requestedQty: 5, issueQty: 5 },
+            { id: 6, itemCode: "FG-002", itemName: "GSV 8", uom: "PCS", type: "FG", availableStock: 40, qtyNeeded: 5, requestedQty: 5, issueQty: 5 },
         ]
     },
     {
@@ -157,7 +161,7 @@ export const mockSMRRequests: SMRRequest[] = [
         requestedBy: "Current User",
         status: "Requested Req.",
         items: [
-            { id: 7, itemName: "Battery Cases", uom: "PCS", type: "SFG", availableStock: 99, qtyNeeded: 100 },
+            { id: 7, itemCode: "SFG-002", itemName: "Battery Cases", uom: "PCS", type: "SFG", availableStock: 99, qtyNeeded: 100 },
         ]
     }
 ];
@@ -198,8 +202,12 @@ export const updateSMRRequest = (id: number, updates: Partial<SMRRequest>): SMRR
 };
 
 /**
- * Get SMR request by ID
+ * Delete an SMR request from shared data
  */
-export const getSMRRequestById = (id: number): SMRRequest | undefined => {
-    return mockSMRRequests.find(req => req.id === id);
+export const deleteSMRRequest = (id: number): SMRRequest[] => {
+    const index = mockSMRRequests.findIndex(req => req.id === id);
+    if (index !== -1) {
+        mockSMRRequests.splice(index, 1);
+    }
+    return [...mockSMRRequests];
 };

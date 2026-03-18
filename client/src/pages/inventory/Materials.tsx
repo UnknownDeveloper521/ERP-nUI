@@ -43,8 +43,12 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { Search, ChevronLeft, ChevronRight, ChevronsUpDown, Check, CalendarIcon, X, ChevronDown } from "lucide-react";
 import { DataTablePagination } from "@/components/shared/DataTablePagination";
+import { TableActionButtons } from "@/components/shared/TableActionButtons";
 import { useToast } from "@/hooks/use-toast";
 import { cn } from "@/lib/utils";
+import { AppListToolbar } from "@/components/shared/AppListToolbar";
+import { SearchableSelect } from "@/components/shared/SearchableSelect";
+import { DatePicker } from "@/components/shared/DatePicker";
 import { 
     type MRRequest, 
     type MRItem, 
@@ -72,382 +76,14 @@ const formatDate = (date: Date | string): string => {
 // ============================================================================
 
 const WORK_CENTERS = ["Lead Furnace Center", "Plastic Casing Center", "Grid Generation Center", "Assembly Line"];
+const SHIFTS = ["Morning", "Afternoon", "Night"];
+const STATUS_OPTIONS = ["Requested to Warehouse", "Issued by Warehouse", "Received by Production"];
 
 // ============================================================================
 // DATE PICKER COMPONENT (Standardized)
 // ============================================================================
 
-function DatePicker({ date, setDate, disabled = false, minDate, blockedDates }: {
-    date?: Date,
-    setDate: (d?: Date) => void,
-    disabled?: boolean,
-    minDate?: Date,
-    blockedDates?: Date[]
-}) {
-    const [isOpen, setIsOpen] = useState(false);
-    const [viewMode, setViewMode] = useState<"day" | "month" | "year">("day");
-    const [visibleDate, setVisibleDate] = useState(() => date || new Date());
-
-    const monthNames = [
-        "January", "February", "March", "April", "May", "June",
-        "July", "August", "September", "October", "November", "December"
-    ];
-
-    const monthNamesShort = [
-        "Jan", "Feb", "Mar", "Apr", "May", "Jun",
-        "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"
-    ];
-
-    const formatDisplayDate = (date: Date | undefined) => {
-        if (!date) return "Pick a date";
-        try {
-            return format(date, "dd-MM-yyyy");
-        } catch (error) {
-            return "Pick a date";
-        }
-    };
-
-    const handleDateSelect = (selectedDate: Date) => {
-        const selected = new Date(selectedDate);
-        selected.setHours(0, 0, 0, 0);
-
-        let isBeforeMinDate = false;
-        if (minDate) {
-            const minimumDate = new Date(minDate);
-            minimumDate.setHours(0, 0, 0, 0);
-            isBeforeMinDate = selected < minimumDate;
-        }
-
-        const isBlocked = blockedDates?.some(blockedDate => {
-            const blocked = new Date(blockedDate);
-            blocked.setHours(0, 0, 0, 0);
-            return blocked.getTime() === selected.getTime();
-        });
-
-        if (!isBeforeMinDate && !isBlocked) {
-            setDate(selectedDate);
-            setIsOpen(false);
-            setViewMode("day");
-        }
-    };
-
-    const handleMonthSelect = (monthIndex: number) => {
-        const newDate = new Date(visibleDate.getFullYear(), monthIndex, 1);
-        setVisibleDate(newDate);
-        setViewMode("day");
-    };
-
-    const handleYearSelect = (year: number) => {
-        const newDate = new Date(year, visibleDate.getMonth(), 1);
-        setVisibleDate(newDate);
-        setViewMode("month");
-    };
-
-    const navigateMonth = (direction: number) => {
-        const newDate = new Date(visibleDate.getFullYear(), visibleDate.getMonth() + direction, 1);
-        setVisibleDate(newDate);
-    };
-
-    const getDaysInMonth = (date: Date) => {
-        const year = date.getFullYear();
-        const month = date.getMonth();
-        const firstDay = new Date(year, month, 1);
-        const lastDay = new Date(year, month + 1, 0);
-        const daysInMonth = lastDay.getDate();
-        const startingDayOfWeek = firstDay.getDay();
-
-        const days = [];
-        let minimumDate: Date | null = null;
-        if (minDate) {
-            minimumDate = new Date(minDate);
-            minimumDate.setHours(0, 0, 0, 0);
-        }
-
-        const prevMonth = new Date(year, month - 1, 0);
-        for (let i = startingDayOfWeek - 1; i >= 0; i--) {
-            const dayDate = new Date(year, month - 1, prevMonth.getDate() - i);
-            dayDate.setHours(0, 0, 0, 0);
-            days.push({
-                date: dayDate,
-                isCurrentMonth: false,
-                isToday: false,
-                isSelected: false,
-                isPast: minimumDate ? dayDate < minimumDate : false
-            });
-        }
-
-        for (let day = 1; day <= daysInMonth; day++) {
-            const currentDate = new Date(year, month, day);
-            currentDate.setHours(0, 0, 0, 0);
-            const isToday = new Date().toDateString() === currentDate.toDateString();
-            const isSelected = date && currentDate.toDateString() === date.toDateString();
-            const isPast = minimumDate ? currentDate < minimumDate : false;
-
-            const isBlocked = blockedDates?.some(blockedDate => {
-                const blocked = new Date(blockedDate);
-                blocked.setHours(0, 0, 0, 0);
-                return blocked.getTime() === currentDate.getTime();
-            });
-
-            days.push({
-                date: currentDate,
-                isCurrentMonth: true,
-                isToday,
-                isSelected,
-                isPast: isPast || isBlocked
-            });
-        }
-
-        const remainingDays = 42 - days.length;
-        for (let day = 1; day <= remainingDays; day++) {
-            const dayDate = new Date(year, month + 1, day);
-            dayDate.setHours(0, 0, 0, 0);
-            days.push({
-                date: dayDate,
-                isCurrentMonth: false,
-                isToday: false,
-                isSelected: false,
-                isPast: minimumDate ? dayDate < minimumDate : false
-            });
-        }
-
-        return days;
-    };
-
-    const renderDayView = () => {
-        const days = getDaysInMonth(visibleDate);
-        const weekDays = ["Su", "Mo", "Tu", "We", "Th", "Fr", "Sa"];
-
-        return (
-            <div className="w-80">
-                <div className="flex items-center justify-between mb-4">
-                    <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => navigateMonth(-1)}>
-                        <ChevronLeft className="h-4 w-4" />
-                    </Button>
-                    <div className="flex items-center gap-2">
-                        <Button variant="ghost" className="font-semibold text-sm" onClick={() => setViewMode("month")}>
-                            {monthNames[visibleDate.getMonth()]}
-                            <ChevronDown className="ml-1 h-3 w-3" />
-                        </Button>
-                        <Button variant="ghost" className="font-semibold text-sm" onClick={() => setViewMode("year")}>
-                            {visibleDate.getFullYear()}
-                            <ChevronDown className="ml-1 h-3 w-3" />
-                        </Button>
-                    </div>
-                    <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => navigateMonth(1)}>
-                        <ChevronRight className="h-4 w-4" />
-                    </Button>
-                </div>
-                <div className="grid grid-cols-7 gap-1 mb-2">
-                    {weekDays.map((day) => (
-                        <div key={day} className="h-8 flex items-center justify-center text-xs font-medium text-muted-foreground">
-                            {day}
-                        </div>
-                    ))}
-                </div>
-                <div className="grid grid-cols-7 gap-1">
-                    {days.map((day, index) => (
-                        <Button
-                            key={index}
-                            variant="ghost"
-                            size="icon"
-                            disabled={day.isPast}
-                            className={cn(
-                                "h-8 w-8 text-sm font-normal",
-                                !day.isCurrentMonth && "text-muted-foreground opacity-50",
-                                day.isToday && "bg-accent text-accent-foreground font-semibold",
-                                day.isSelected && "bg-primary text-primary-foreground font-semibold",
-                                day.isCurrentMonth && !day.isPast && "hover:bg-accent hover:text-accent-foreground",
-                                day.isPast && "opacity-30 cursor-not-allowed text-muted-foreground"
-                            )}
-                            onClick={() => !day.isPast && handleDateSelect(day.date)}
-                        >
-                            {day.date.getDate()}
-                        </Button>
-                    ))}
-                </div>
-            </div>
-        );
-    };
-
-    const renderMonthView = () => {
-        return (
-            <div className="w-80">
-                <div className="flex items-center justify-between mb-4">
-                    <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => setViewMode("day")}>
-                        <ChevronLeft className="h-4 w-4" />
-                    </Button>
-                    <h3 className="font-semibold">{visibleDate.getFullYear()}</h3>
-                    <Button variant="ghost" className="font-semibold text-sm" onClick={() => setViewMode("year")}>
-                        {visibleDate.getFullYear()}
-                        <ChevronDown className="ml-1 h-3 w-3" />
-                    </Button>
-                </div>
-                <div className="grid grid-cols-3 gap-2">
-                    {monthNamesShort.map((month, index) => (
-                        <Button
-                            key={month}
-                            variant="ghost"
-                            className={cn(
-                                "h-10 text-sm font-normal",
-                                index === visibleDate.getMonth() && "bg-primary text-primary-foreground font-semibold"
-                            )}
-                            onClick={() => handleMonthSelect(index)}
-                        >
-                            {month}
-                        </Button>
-                    ))}
-                </div>
-            </div>
-        );
-    };
-
-    const renderYearView = () => {
-        const currentYear = visibleDate.getFullYear();
-        const startYear = Math.floor(currentYear / 12) * 12;
-        const years = Array.from({ length: 12 }, (_, i) => startYear + i);
-
-        return (
-            <div className="w-80">
-                <div className="flex items-center justify-between mb-4">
-                    <Button
-                        variant="ghost"
-                        size="icon"
-                        className="h-8 w-8"
-                        onClick={() => {
-                            const newStartYear = startYear - 12;
-                            setVisibleDate(new Date(newStartYear, visibleDate.getMonth(), 1));
-                        }}
-                    >
-                        <ChevronLeft className="h-4 w-4" />
-                    </Button>
-                    <h3 className="font-semibold">{startYear} - {startYear + 11}</h3>
-                    <Button
-                        variant="ghost"
-                        size="icon"
-                        className="h-8 w-8"
-                        onClick={() => {
-                            const newStartYear = startYear + 12;
-                            setVisibleDate(new Date(newStartYear, visibleDate.getMonth(), 1));
-                        }}
-                    >
-                        <ChevronRight className="h-4 w-4" />
-                    </Button>
-                </div>
-                <div className="grid grid-cols-3 gap-2">
-                    {years.map((year) => (
-                        <Button
-                            key={year}
-                            variant="ghost"
-                            className={cn(
-                                "h-10 text-sm font-normal",
-                                year === currentYear && "bg-primary text-primary-foreground font-semibold"
-                            )}
-                            onClick={() => handleYearSelect(year)}
-                        >
-                            {year}
-                        </Button>
-                    ))}
-                </div>
-            </div>
-        );
-    };
-
-    return (
-        <Popover open={isOpen} onOpenChange={setIsOpen}>
-            <PopoverTrigger asChild>
-                <Button
-                    variant="outline"
-                    disabled={disabled}
-                    className={cn(
-                        "w-full justify-start text-left font-normal flex h-10 rounded-md border border-input px-3 py-2 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50",
-                        !date && "text-muted-foreground"
-                    )}
-                >
-                    <CalendarIcon className="mr-2 h-4 w-4" />
-                    {date ? formatDisplayDate(date) : <span>Pick a date</span>}
-                </Button>
-            </PopoverTrigger>
-            <PopoverContent className="w-auto p-4 shadow-lg border rounded-lg z-[9999]" align="start" side="bottom" sideOffset={4}>
-                {viewMode === "day" && renderDayView()}
-                {viewMode === "month" && renderMonthView()}
-                {viewMode === "year" && renderYearView()}
-            </PopoverContent>
-        </Popover>
-    );
-}
-
-// ============================================================================
-// SEARCHABLE SELECT COMPONENT
-// ============================================================================
-
-interface SearchableSelectProps {
-    label: string;
-    value?: string;
-    options: string[];
-    onChange: (val: string) => void;
-    required?: boolean;
-}
-
-function SearchableSelect({ label, value, options, onChange, required = false }: SearchableSelectProps) {
-    const [open, setOpen] = useState(false);
-
-    return (
-        <div className="space-y-2">
-            <Label className="text-xs font-medium text-muted-foreground uppercase tracking-wider">{label}</Label>
-            <Popover open={open} onOpenChange={setOpen}>
-                <PopoverTrigger asChild>
-                    <Button
-                        variant="outline"
-                        role="combobox"
-                        aria-expanded={open}
-                        className="w-full justify-between h-10 font-normal border-input"
-                    >
-                        <span className={cn(!value && "text-muted-foreground")}>
-                            {value || `Select ${label}`}
-                        </span>
-                        <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
-                    </Button>
-                </PopoverTrigger>
-                <PopoverContent className="w-[var(--radix-popover-trigger-width)] p-0" align="start">
-                    <Command>
-                        <CommandInputBorderless placeholder={`Search ${label.toLowerCase()}...`} className="h-9" />
-                        <CommandList className="max-h-[200px] overflow-y-auto">
-                            <CommandEmpty>No results found.</CommandEmpty>
-                            <CommandGroup>
-                                <CommandItem
-                                    value=""
-                                    onSelect={() => {
-                                        onChange("");
-                                        setOpen(false);
-                                    }}
-                                    className="cursor-pointer"
-                                >
-                                    <Check className={cn("mr-2 h-4 w-4", !value ? "opacity-100" : "opacity-0")} />
-                                    All {label}s
-                                </CommandItem>
-                                {options.map((item) => (
-                                    <CommandItem
-                                        key={item}
-                                        value={item}
-                                        onSelect={() => {
-                                            onChange(item);
-                                            setOpen(false);
-                                        }}
-                                        className="cursor-pointer"
-                                    >
-                                        <Check className={cn("mr-2 h-4 w-4", value === item ? "opacity-100" : "opacity-0")} />
-                                        {item}
-                                    </CommandItem>
-                                ))}
-                            </CommandGroup>
-                        </CommandList>
-                    </Command>
-                </PopoverContent>
-            </Popover>
-        </div>
-    );
-}
+// Local DatePicker and SearchableSelect removed in favor of shared components
 
 // ============================================================================
 // MAIN COMPONENT
@@ -481,7 +117,8 @@ export default function Materials() {
     const [materialRequests, setMaterialRequests] = useState<MRRequest[]>(mockMRRequests);
     const [searchTerm, setSearchTerm] = useState("");
     const [statusFilter, setStatusFilter] = useState("Requested to Warehouse");
-    const [workCenterFilter, setWorkCenterFilter] = useState("");
+    const [workCenterFilter, setWorkCenterFilter] = useState("all");
+    const [shiftFilter, setShiftFilter] = useState("all");
     const [dateFilter, setDateFilter] = useState<Date | undefined>(undefined);
     const [currentPage, setCurrentPage] = useState(1);
     const [itemsPerPage, setItemsPerPage] = useState(10);
@@ -495,8 +132,9 @@ export default function Materials() {
     const filteredRequests = materialRequests.filter(mr => {
         const matchesSearch = mr.mrNo.toLowerCase().includes(searchTerm.toLowerCase()) ||
             mr.requestedBy.toLowerCase().includes(searchTerm.toLowerCase());
-        const matchesStatus = statusFilter === "All" || mr.status === statusFilter;
-        const matchesWorkCenter = !workCenterFilter || mr.workCenter === workCenterFilter;
+        const matchesStatus = statusFilter === "all" || mr.status === statusFilter;
+        const matchesWorkCenter = workCenterFilter === "all" || mr.workCenter === workCenterFilter;
+        const matchesShift = shiftFilter === "all" || mr.shift === shiftFilter;
 
         let matchesDate = true;
         if (dateFilter) {
@@ -507,7 +145,7 @@ export default function Materials() {
             matchesDate = mrDate.getTime() === filterDate.getTime();
         }
 
-        return matchesSearch && matchesStatus && matchesWorkCenter && matchesDate;
+        return matchesSearch && matchesStatus && matchesWorkCenter && matchesShift && matchesDate;
     });
 
     const totalPages = Math.ceil(filteredRequests.length / itemsPerPage);
@@ -523,7 +161,7 @@ export default function Materials() {
     // Reset to page 1 when filters change
     useEffect(() => {
         setCurrentPage(1);
-    }, [searchTerm, statusFilter, workCenterFilter, dateFilter]);
+    }, [searchTerm, statusFilter, workCenterFilter, shiftFilter, dateFilter]);
 
     const handleOpenDetail = (mr: MRRequest) => {
         // Autofill issuedQty same as requiredQty when opening
@@ -585,67 +223,45 @@ export default function Materials() {
 
     const renderListing = () => (
         <div className="flex flex-col gap-6">
-            <div className="flex flex-col sm:flex-row items-end gap-4 bg-card p-4 rounded-lg border shadow-sm">
-                <div className="w-full sm:w-1/4">
-                    <Label className="text-xs font-medium text-muted-foreground uppercase tracking-wider mb-1.5 block">Search</Label>
-                    <div className="relative">
-                        <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
-                        <Input
-                            placeholder="Search MR No, Requested By..."
-                            className="pl-9 h-10"
-                            value={searchTerm}
-                            onChange={(e) => setSearchTerm(e.target.value)}
-                        />
-                    </div>
-                </div>
-
-                <div className="w-full sm:w-1/5">
-                    <Label className="text-xs font-medium text-muted-foreground uppercase tracking-wider mb-1.5 block">Status</Label>
-                    <Select value={statusFilter} onValueChange={setStatusFilter}>
-                        <SelectTrigger className="h-10">
-                            <SelectValue placeholder="Filter by Status" />
-                        </SelectTrigger>
-                        <SelectContent>
-                            <SelectItem value="All">All Status</SelectItem>
-                            <SelectItem value="Requested to Warehouse">Requested to Warehouse</SelectItem>
-                            <SelectItem value="Issued by Warehouse">Issued by Warehouse</SelectItem>
-                            <SelectItem value="Received by Production">Received by Production</SelectItem>
-                        </SelectContent>
-                    </Select>
-                </div>
-
-                <div className="w-full sm:w-1/4">
-                    <SearchableSelect
-                        label="Work Center"
-                        options={WORK_CENTERS}
-                        value={workCenterFilter}
-                        onChange={setWorkCenterFilter}
-                    />
-                </div>
-
-                <div className="w-full sm:w-1/5">
-                    <Label className="text-xs font-medium text-muted-foreground uppercase tracking-wider mb-1.5 block">Date</Label>
-                    <div className="flex gap-2">
-                        <div className="flex-1">
-                            <DatePicker
-                                date={dateFilter}
-                                setDate={setDateFilter}
-                            />
-                        </div>
-                        {dateFilter && (
-                            <Button
-                                variant="ghost"
-                                size="icon"
-                                onClick={() => setDateFilter(undefined)}
-                                className="h-10 w-10 shrink-0"
-                                title="Clear date filter"
-                            >
-                                <X className="h-4 w-4" />
-                            </Button>
-                        )}
-                    </div>
-                </div>
-            </div>
+            <AppListToolbar
+                search={{
+                    value: searchTerm,
+                    onChange: setSearchTerm,
+                    placeholder: "Search MR No, Requested By..."
+                }}
+                filters={[
+                    {
+                        type: 'select',
+                        label: 'Status',
+                        value: statusFilter,
+                        options: [{ label: "All Status", value: "all" }, ...STATUS_OPTIONS],
+                        onChange: setStatusFilter,
+                        searchable: true
+                    },
+                    {
+                        type: 'select',
+                        label: 'Work Center',
+                        value: workCenterFilter,
+                        options: [{ label: "All Work Centers", value: "all" }, ...WORK_CENTERS],
+                        onChange: setWorkCenterFilter,
+                        searchable: true
+                    },
+                    {
+                        type: 'select',
+                        label: 'Shift',
+                        value: shiftFilter,
+                        options: [{ label: "All Shifts", value: "all" }, ...SHIFTS],
+                        onChange: setShiftFilter,
+                        searchable: true
+                    },
+                    {
+                        type: 'date',
+                        label: 'Date',
+                        value: dateFilter,
+                        onChange: setDateFilter
+                    }
+                ]}
+            />
 
             <Card>
                 <CardContent className="pt-6">
@@ -660,7 +276,7 @@ export default function Materials() {
                                     <TableHead className="font-semibold text-xs uppercase tracking-wider">Work Center</TableHead>
                                     <TableHead className="font-semibold text-xs uppercase tracking-wider">Operation</TableHead>
                                     <TableHead className="font-semibold text-xs uppercase tracking-wider">Status</TableHead>
-                                    <TableHead className="text-right font-semibold text-xs uppercase tracking-wider pr-6">Action</TableHead>
+                                    <TableHead className="text-center w-[100px]">Actions</TableHead>
                                 </TableRow>
                             </TableHeader>
                             <TableBody>
@@ -692,8 +308,13 @@ export default function Materials() {
                                                     {mr.status}
                                                 </Badge>
                                             </TableCell>
-                                            <TableCell className="text-right pr-6">
-                                                <Button variant="outline" size="sm" className="h-8 gap-2" onClick={() => handleOpenDetail(mr)}>
+                                            <TableCell className="text-center">
+                                                <Button
+                                                    variant="outline"
+                                                    size="sm"
+                                                    className="h-8 px-3 text-xs font-medium"
+                                                    onClick={() => handleOpenDetail(mr)}
+                                                >
                                                     Open
                                                 </Button>
                                             </TableCell>

@@ -5,6 +5,9 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
+import { Card, CardContent } from "@/components/ui/card";
+import { DataTablePagination } from "@/components/shared/DataTablePagination";
+import { AppListToolbar } from "@/components/shared/AppListToolbar";
 import {
     Select,
     SelectContent,
@@ -56,6 +59,8 @@ import {
 import { Calendar } from "@/components/ui/calendar";
 import { useToast } from "@/hooks/use-toast";
 import { cn } from "@/lib/utils";
+import { TableActionButtons } from "@/components/shared/TableActionButtons";
+import { Eye, Pencil } from "lucide-react";
 import { PayPeriod, mockPayPeriods } from "@/lib/payrollSharedData";
 
 // Shared types and mock data are imported from @/lib/payrollSharedData
@@ -67,7 +72,6 @@ export default function PayPeriodPage() {
     const [periods, setPeriods] = useState<PayPeriod[]>(mockPayPeriods);
     const [searchQuery, setSearchQuery] = useState("");
     const [statusFilter, setStatusFilter] = useState("All");
-    const [openStatusDropdown, setOpenStatusDropdown] = useState(false);
     const [isCreateOpen, setIsCreateOpen] = useState(false);
     const [editingId, setEditingId] = useState<string | null>(null);
     const [isMonthOpen, setIsMonthOpen] = useState(false);
@@ -75,7 +79,7 @@ export default function PayPeriodPage() {
     const [yearNavStart, setYearNavStart] = useState(new Date().getFullYear() - 1); // Start view around current year
     const [currentPage, setCurrentPage] = useState(1);
     const [isDeleteOpen, setIsDeleteOpen] = useState(false);
-    const itemsPerPage = 10;
+    const [itemsPerPage, setItemsPerPage] = useState(10);
 
     // New Period Form State
     const [selectedMonth, setSelectedMonth] = useState<string>("");
@@ -128,7 +132,7 @@ export default function PayPeriodPage() {
         setNotes("");
         setFormErrors({});
         setEditingId(null);
-        setOriginalPeriod(null); // ⚠️ Clear original period
+        setOriginalPeriod(null); 
     };
 
     const validateForm = (): boolean => {
@@ -406,160 +410,109 @@ export default function PayPeriodPage() {
     ];
 
     return (
-        <div className="space-y-6">
-            {/* Top Header */}
-            <div>
-                <h1 className="text-2xl font-bold tracking-tight">Pay Periods</h1>
-                <p className="text-sm text-muted-foreground mt-1">Manage monthly pay periods and payroll processing status.</p>
+        <div className="h-full flex flex-col gap-6">
+            <div className="flex flex-col gap-1">
+                <h1 className="text-3xl font-bold tracking-tight">Pay Periods</h1>
+                <p className="text-muted-foreground text-sm">Manage monthly pay periods and payroll processing status.</p>
             </div>
 
-            {/* Actions Row */}
-            <div className="flex flex-col sm:flex-row justify-between items-center gap-4">
-                <div className="flex items-center gap-2 w-full sm:w-auto ml-0 sm:ml-4">
-                    <div className="relative w-full sm:w-72 flex items-center h-10 border border-zinc-400 rounded-md bg-background focus-within:ring-1 focus-within:ring-ring focus-within:ring-inset">
-                        <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground pointer-events-none" />
-                        <Input
-                            placeholder="Search period (e.g. Feb-2026)"
-                            value={searchQuery}
-                            onChange={(e) => setSearchQuery(e.target.value)}
-                            className="pl-9 border-none shadow-none focus-visible:ring-0 bg-transparent h-full w-full"
-                        />
-                    </div>
-                    <Popover open={openStatusDropdown} onOpenChange={setOpenStatusDropdown}>
-                        <PopoverTrigger asChild>
-                            <Button
-                                variant="outline"
-                                role="combobox"
-                                aria-expanded={openStatusDropdown}
-                                className="w-[200px] justify-between h-10 font-normal border-input"
-                            >
-                                <span className={cn(statusFilter === "All" && "text-muted-foreground")}>
-                                    {statusFilter === "All" ? "All Status" : statusFilter}
-                                </span>
-                                <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
-                            </Button>
-                        </PopoverTrigger>
-                        <PopoverContent className="w-[200px] p-0" align="start">
-                            <Command>
-                                <CommandInputBorderless placeholder="Search status..." className="h-9" />
-                                <CommandList className="max-h-[250px] overflow-y-auto">
-                                    <CommandEmpty>No status found.</CommandEmpty>
-                                    <CommandGroup>
-                                        {["All", "Open", "Locked", "Processed", "Paid"].map((status) => (
-                                            <CommandItem
-                                                key={status}
-                                                value={status}
-                                                onSelect={(currentValue) => {
-                                                    setStatusFilter(currentValue === "all" ? "All" : currentValue.charAt(0).toUpperCase() + currentValue.slice(1));
-                                                    setOpenStatusDropdown(false);
-                                                }}
-                                                className="cursor-pointer"
-                                            >
-                                                <Check
-                                                    className={cn(
-                                                        "mr-2 h-4 w-4",
-                                                        statusFilter === status ? "opacity-100" : "opacity-0"
-                                                    )}
-                                                />
-                                                {status === "All" ? "All Status" : status}
-                                            </CommandItem>
-                                        ))}
-                                    </CommandGroup>
-                                </CommandList>
-                            </Command>
-                        </PopoverContent>
-                    </Popover>
-                </div>
-                <Button onClick={() => {
-                    resetForm(); // ⚠️ Reset form before opening in create mode
-                    setIsCreateOpen(true);
-                }}>
-                    <Plus className="mr-2 h-4 w-4" /> Create Pay Period
-                </Button>
-            </div>
+            <AppListToolbar
+                search={{
+                    placeholder: "Search period (e.g. Feb-2026)",
+                    value: searchQuery,
+                    onChange: setSearchQuery
+                }}
+                filters={[
+                    {
+                        type: "select",
+                        label: "Status",
+                        value: statusFilter,
+                        onChange: setStatusFilter,
+                        options: [
+                            { label: "All Status", value: "All" },
+                            { label: "Open", value: "Open" },
+                            { label: "Locked", value: "Locked" },
+                            { label: "Processed", value: "Processed" },
+                            { label: "Paid", value: "Paid" }
+                        ],
+                        searchable: true
+                    }
+                ]}
+                actions={[
+                    {
+                        label: "Create Pay Period",
+                        icon: <Plus className="h-4 w-4 mr-2" />,
+                        onClick: () => {
+                            resetForm();
+                            setIsCreateOpen(true);
+                        }
+                    }
+                ]}
+            />
 
-            {/* Table */}
-            <div className="rounded-md border bg-card shadow-sm">
-                <Table>
-                    <TableHeader>
-                        <TableRow>
-                            <TableHead>Period</TableHead>
-                            <TableHead>Start Date</TableHead>
-                            <TableHead>End Date</TableHead>
-                            <TableHead>Status</TableHead>
-                            <TableHead className="text-right">Actions</TableHead>
-                        </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                        {paginatedPeriods.length === 0 ? (
-                            <TableRow>
-                                <TableCell colSpan={5} className="h-32 text-center text-muted-foreground">
-                                    No pay periods found.
-                                </TableCell>
-                            </TableRow>
-                        ) : (
-                            paginatedPeriods.map((period) => (
-                                <TableRow key={period.id}>
-                                    <TableCell className="font-medium">{period.periodName}</TableCell>
-                                    <TableCell>{format(new Date(period.startDate), 'dd-MM-yyyy')}</TableCell>
-                                    <TableCell>{format(new Date(period.endDate), 'dd-MM-yyyy')}</TableCell>
-                                    <TableCell>
-                                        <Badge variant={
-                                            period.status === 'Open' ? 'outline' :
-                                                period.status === 'Locked' ? 'secondary' :
-                                                    period.status === 'Processed' ? 'default' : 'secondary'
-                                        } className={cn(
-                                            period.status === 'Open' && "bg-blue-50 text-blue-700 border-blue-200",
-                                            period.status === 'Locked' && "bg-amber-50 text-amber-700 border-amber-200",
-                                            period.status === 'Processed' && "bg-purple-50 text-purple-700 border-purple-200",
-                                            period.status === 'Paid' && "bg-green-50 text-green-700 border-green-200"
-                                        )}>
-                                            {period.status}
-                                        </Badge>
-                                    </TableCell>
-                                    <TableCell className="text-right">
-                                        <div className="flex justify-end gap-2">
-                                            <Button
-                                                variant="ghost"
-                                                size="icon"
-                                                onClick={() => handleEdit(period)}
-                                                title="Edit Period"
-                                            >
-                                                <Edit className="h-4 w-4" />
-                                            </Button>
-                                        </div>
-                                    </TableCell>
+            <Card>
+                <CardContent className="pt-6">
+                    <div className="rounded-md border">
+                        <Table>
+                            <TableHeader>
+                                <TableRow className="bg-muted/50">
+                                    <TableHead>Period</TableHead>
+                                    <TableHead>Start Date</TableHead>
+                                    <TableHead>End Date</TableHead>
+                                    <TableHead>Status</TableHead>
+                                    <TableHead className="text-center w-[100px]">Actions</TableHead>
                                 </TableRow>
-                            ))
-                        )}
-                    </TableBody>
-                </Table>
-            </div>
+                            </TableHeader>
+                            <TableBody>
+                                {paginatedPeriods.length === 0 ? (
+                                    <TableRow>
+                                        <TableCell colSpan={5} className="h-32 text-center text-muted-foreground italic">
+                                            No pay periods found.
+                                        </TableCell>
+                                    </TableRow>
+                                ) : (
+                                    paginatedPeriods.map((period) => (
+                                        <TableRow key={period.id} className="hover:bg-muted/30 transition-colors">
+                                            <TableCell className="font-medium text-sm">{period.periodName}</TableCell>
+                                            <TableCell className="text-sm">{format(new Date(period.startDate), 'dd-MM-yyyy')}</TableCell>
+                                            <TableCell className="text-sm">{format(new Date(period.endDate), 'dd-MM-yyyy')}</TableCell>
+                                            <TableCell>
+                                                <Badge variant={
+                                                    period.status === 'Open' ? 'outline' :
+                                                        period.status === 'Locked' ? 'secondary' :
+                                                            period.status === 'Processed' ? 'default' : 'secondary'
+                                                } className={cn(
+                                                    "text-xs",
+                                                    period.status === 'Open' && "bg-blue-50 text-blue-700 border-blue-200",
+                                                    period.status === 'Locked' && "bg-amber-50 text-amber-700 border-amber-200",
+                                                    period.status === 'Processed' && "bg-purple-50 text-purple-700 border-purple-200",
+                                                    period.status === 'Paid' && "bg-green-50 text-green-700 border-green-200"
+                                                )}>
+                                                    {period.status}
+                                                </Badge>
+                                            </TableCell>
+                                            <TableCell className="text-center">
+                                                <TableActionButtons
+                                                    onEdit={() => handleEdit(period)}
+                                                />
+                                            </TableCell>
+                                        </TableRow>
+                                    ))
+                                )}
+                            </TableBody>
+                        </Table>
+                    </div>
 
-            {/* Pagination */}
-            <div className="flex justify-between items-center px-1 py-4">
-                <div className="text-sm text-muted-foreground">
-                    Showing {filteredPeriods.length === 0 ? 0 : (currentPage - 1) * itemsPerPage + 1} to {Math.min(currentPage * itemsPerPage, filteredPeriods.length)} of {filteredPeriods.length} entries
-                </div>
-                <div className="flex gap-2">
-                    <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
-                        disabled={currentPage === 1}
-                    >
-                        <ChevronLeft className="h-4 w-4" />
-                    </Button>
-                    <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
-                        disabled={currentPage === totalPages || totalPages === 0}
-                    >
-                        <ChevronRight className="h-4 w-4" />
-                    </Button>
-                </div>
-            </div>
+                    <DataTablePagination
+                        currentPage={currentPage}
+                        totalPages={totalPages}
+                        totalItems={filteredPeriods.length}
+                        itemsPerPage={itemsPerPage}
+                        onPageChange={setCurrentPage}
+                        onItemsPerPageChange={setItemsPerPage}
+                    />
+                </CardContent>
+            </Card>
 
 
             {/* Create Modal */}

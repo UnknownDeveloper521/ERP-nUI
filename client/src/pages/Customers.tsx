@@ -12,8 +12,9 @@ import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Plus, Search, Pencil, Trash2, X } from "lucide-react";
+import { Plus, Search, Trash2, X } from "lucide-react";
 import { DataTablePagination } from "@/components/shared/DataTablePagination";
+import { TableActionButtons } from "@/components/shared/TableActionButtons";
 import {
   Dialog,
   DialogContent,
@@ -32,7 +33,20 @@ import {
 } from "@/components/ui/select";
 import { useToast } from "@/hooks/use-toast";
 import { Badge } from "@/components/ui/badge";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
+import { cn } from "@/lib/utils";
 import { mockStates, mockCities } from "@/lib/masterMockData";
+import { AppListToolbar } from "@/components/shared/AppListToolbar";
+import { SearchableSelect } from "@/components/shared/SearchableSelect";
 
 // --- Types & Interfaces ---
 
@@ -137,6 +151,8 @@ export default function Customers() {
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [editingId, setEditingId] = useState<number | null>(null);
   const [formData, setFormData] = useState<Partial<Customer>>({});
+  const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false);
+  const [customerToDelete, setCustomerToDelete] = useState<number | null>(null);
 
   const filteredCustomers = customers.filter((c) => {
     const searchLower = searchTerm.toLowerCase();
@@ -184,9 +200,17 @@ export default function Customers() {
   };
 
   const handleDeleteClick = (id: number) => {
-    if (confirm("Are you sure? This action cannot be undone.")) {
-      setCustomers(prev => prev.filter(c => c.id !== id));
+    setCustomerToDelete(id);
+    setIsDeleteDialogOpen(true);
+  };
+
+  const confirmDelete = () => {
+    if (customerToDelete !== null) {
+      setCustomers(prev => prev.filter(c => c.id !== customerToDelete));
       toast({ title: "Deleted", description: "Customer deleted successfully." });
+      setCustomerToDelete(null);
+      setIsDeleteDialogOpen(false);
+      setIsDialogOpen(false);
     }
   };
 
@@ -261,40 +285,31 @@ export default function Customers() {
         <p className="text-muted-foreground text-sm">Manage your customers, their locations, and billing details.</p>
       </div>
 
-      <div className="flex flex-col sm:flex-row items-end gap-4 bg-card p-4 rounded-lg border shadow-sm">
-        <div className="w-full sm:flex-1">
-          <Label className="mb-1.5 block text-[10px] font-bold text-muted-foreground uppercase tracking-wider">
-            Search
-          </Label>
-          <div className="relative">
-            <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
-            <Input
-              placeholder="Search by code, name, contact or city..."
-              className="pl-9 h-10"
-              value={searchTerm}
-              onChange={(e) => setSearchTerm(e.target.value)}
-            />
-          </div>
-        </div>
-        <div className="w-full sm:w-48">
-          <Label className="mb-1.5 block text-[10px] font-bold text-muted-foreground uppercase tracking-wider">
-            Status
-          </Label>
-          <Select value={filterStatus} onValueChange={setFilterStatus}>
-            <SelectTrigger className="h-10">
-              <SelectValue placeholder="All Status" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="All">All Status</SelectItem>
-              <SelectItem value="Active">Active</SelectItem>
-              <SelectItem value="Inactive">Inactive</SelectItem>
-            </SelectContent>
-          </Select>
-        </div>
-        <Button onClick={handleAddClick} className="h-10">
-          <Plus className="h-4 w-4 mr-2" /> Add New Customer
-        </Button>
-      </div>
+      <AppListToolbar
+        search={{
+          value: searchTerm,
+          onChange: setSearchTerm,
+          placeholder: "Search by code, name, contact or city..."
+        }}
+        filters={[
+          {
+            type: 'select',
+            label: 'Status',
+            value: filterStatus,
+            options: ["All", "Active", "Inactive"],
+            onChange: setFilterStatus,
+            searchable: true
+          }
+        ]}
+        actions={[
+          {
+            label: 'Add New Customer',
+            icon: <Plus className="h-4 w-4 mr-2" />,
+            onClick: handleAddClick,
+            variant: 'default'
+          }
+        ]}
+      />
 
       <Card>
         <CardContent className="pt-6">
@@ -308,7 +323,7 @@ export default function Customers() {
                   <TableHead>Mobile</TableHead>
                   <TableHead>City</TableHead>
                   <TableHead>Status</TableHead>
-                  <TableHead className="text-right">Actions</TableHead>
+                  <TableHead className="text-center w-[100px]">Actions</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -329,15 +344,10 @@ export default function Customers() {
                       <TableCell>
                         <StatusBadge status={customer.status} />
                       </TableCell>
-                      <TableCell className="text-right">
-                        <div className="flex justify-end gap-1">
-                          <Button variant="ghost" size="icon" className="h-8 w-8 hover:bg-muted" title="Edit" onClick={() => handleEditClick(customer)}>
-                            <Pencil className="h-4 w-4" />
-                          </Button>
-                          <Button variant="ghost" size="icon" className="h-8 w-8 text-destructive hover:bg-destructive/10" title="Delete" onClick={() => handleDeleteClick(customer.id)}>
-                            <Trash2 className="h-4 w-4" />
-                          </Button>
-                        </div>
+                      <TableCell className="text-center">
+                        <TableActionButtons
+                          onEdit={() => handleEditClick(customer)}
+                        />
                       </TableCell>
                     </TableRow>
                   ))
@@ -612,14 +622,45 @@ export default function Customers() {
             </div>
           </div>
 
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setIsDialogOpen(false)}>Cancel</Button>
-            <Button onClick={handleSave} className="bg-primary hover:bg-primary/90">
-              {editingId ? "Update Customer" : "Create Customer"}
-            </Button>
+          <DialogFooter className={cn(editingId ? "sm:justify-between" : "sm:justify-end")}>
+            {editingId && (
+              <Button
+                variant="destructive"
+                onClick={() => handleDeleteClick(editingId)}
+              >
+                <Trash2 className="h-4 w-4 mr-2" />
+                Delete
+              </Button>
+            )}
+            <div className="flex gap-2">
+              <Button variant="outline" onClick={() => setIsDialogOpen(false)}>Cancel</Button>
+              <Button onClick={handleSave} className="bg-primary hover:bg-primary/90">
+                {editingId ? "Update Customer" : "Create Customer"}
+              </Button>
+            </div>
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <AlertDialog open={isDeleteDialogOpen} onOpenChange={setIsDeleteDialogOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete Customer</AlertDialogTitle>
+            <AlertDialogDescription>
+              Are you sure you want to delete this customer? This action cannot be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel onClick={() => setCustomerToDelete(null)}>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={confirmDelete}
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+            >
+              Delete
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

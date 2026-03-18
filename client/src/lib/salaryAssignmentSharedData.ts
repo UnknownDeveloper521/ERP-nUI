@@ -4,15 +4,15 @@
  * ============================================================================
  * 
  * This file provides a centralized data store for salary assignments that
- * syncs between HR Setup → Employee Salary Details and HRMS → Run Payroll.
+ * syncs between HR Setup → Assign Employee Salary and HRMS → Run Payroll.
  * 
- * When assignments are created/updated in Employee Salary Details, they
+ * When assignments are created/updated in Assign Employee Salary, they
  * automatically become available in Run Payroll.
  * 
  * ============================================================================
  */
 
-// Types for Employee Salary Details (HR Setup)
+// Types for Assign Employee Salary (HR Setup)
 export type CalcMode = "FLAT" | "PCT_CTC" | "PCT_BASIC" | "REMAINING";
 export type Category = "earning" | "deduction";
 export type StructureMode = "structure" | "custom";
@@ -161,7 +161,7 @@ export const getSalaryAssignments = (): Assignment[] => {
 };
 
 /**
- * Set salary assignments (used by Employee Salary Details)
+ * Set salary assignments (used by Assign Employee Salary)
  */
 export const setSalaryAssignments = (assignments: Assignment[]): void => {
     salaryAssignments = [...assignments];

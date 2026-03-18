@@ -12,7 +12,17 @@ import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Plus, Search, Pencil, Trash2, ChevronsUpDown, Check } from "lucide-react";
+import { Plus, Search, Trash2, ChevronsUpDown, Check } from "lucide-react";
+import {
+    AlertDialog,
+    AlertDialogAction,
+    AlertDialogCancel,
+    AlertDialogContent,
+    AlertDialogDescription,
+    AlertDialogFooter,
+    AlertDialogHeader,
+    AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import {
     Dialog,
     DialogContent,
@@ -48,6 +58,8 @@ import {
 } from "@/components/ui/popover";
 import { cn } from "@/lib/utils";
 import { DataTablePagination } from "@/components/shared/DataTablePagination";
+import { TableActionButtons } from "@/components/shared/TableActionButtons";
+import { AppListToolbar } from "@/components/shared/AppListToolbar";
 import { mockLocations, mockOperations, mockWorkCenters, allMockMaterials } from "@/lib/masterMockData";
 
 
@@ -275,6 +287,8 @@ export default function ProductionMasters() {
     const [machines, setMachines] = useState<Machine[]>(initialMachines);
 
     const [isDialogOpen, setIsDialogOpen] = useState(false);
+    const [isDeleteAlertOpen, setIsDeleteAlertOpen] = useState(false);
+    const [itemToDeleteID, setItemToDeleteID] = useState<number | null>(null);
     const [editingId, setEditingId] = useState<number | null>(null);
     const [formData, setFormData] = useState<any>({});
 
@@ -491,22 +505,31 @@ export default function ProductionMasters() {
     };
 
     const handleDeleteClick = (id: number) => {
-        if (confirm("Are you sure? This action cannot be undone.")) {
-            if (selectedMaster === "Work Centers") {
-                // Check if used in machines
-                if (machines.some(m => m.work_center_id === id)) {
-                    toast({ variant: "destructive", title: "Cannot Delete", description: "Work Center is used in Machines." });
-                    return;
-                }
-                setWorkCenters(prev => prev.filter(item => item.id !== id));
-            } else if (selectedMaster === "Machines") {
-                // Check if used in operations
-                setMachines(prev => prev.filter(item => item.id !== id));
-            } else if (selectedMaster === "Operations") {
-                setOperations(prev => prev.filter(item => item.id !== id));
+        setItemToDeleteID(id);
+        setIsDeleteAlertOpen(true);
+    };
+
+    const confirmDelete = () => {
+        if (itemToDeleteID === null) return;
+
+        if (selectedMaster === "Work Centers") {
+            // Check if used in machines
+            if (machines.some(m => m.work_center_id === itemToDeleteID)) {
+                toast({ variant: "destructive", title: "Cannot Delete", description: "Work Center is used in Machines." });
+                setIsDeleteAlertOpen(false);
+                setItemToDeleteID(null);
+                return;
             }
-            toast({ title: "Deleted", description: "Record deleted successfully." });
+            setWorkCenters(prev => prev.filter(item => item.id !== itemToDeleteID));
+        } else if (selectedMaster === "Machines") {
+            // Check if used in operations
+            setMachines(prev => prev.filter(item => item.id !== itemToDeleteID));
+        } else if (selectedMaster === "Operations") {
+            setOperations(prev => prev.filter(item => item.id !== itemToDeleteID));
         }
+        toast({ title: "Deleted", description: "Record deleted successfully." });
+        setIsDeleteAlertOpen(false);
+        setItemToDeleteID(null);
     };
 
     const handleSave = () => {
@@ -595,7 +618,6 @@ export default function ProductionMasters() {
 
     const renderTable = () => {
         if (selectedMaster === "Work Centers") {
-            // ... (Work Centers table code from previous step)
             return (
                 <Table>
                     <TableHeader>
@@ -606,7 +628,7 @@ export default function ProductionMasters() {
                             <TableHead>Location</TableHead>
                             <TableHead>Department</TableHead>
                             <TableHead>Status</TableHead>
-                            <TableHead className="text-right">Actions</TableHead>
+                            <TableHead className="text-center w-[100px]">Actions</TableHead>
                         </TableRow>
                     </TableHeader>
                     <TableBody>
@@ -625,15 +647,11 @@ export default function ProductionMasters() {
                                     <TableCell>{item.location}</TableCell>
                                     <TableCell>{item.department}</TableCell>
                                     <TableCell><StatusBadge status={item.status} /></TableCell>
-                                    <TableCell className="text-right">
-                                        <div className="flex justify-end gap-2">
-                                            <Button variant="ghost" size="icon" className="h-8 w-8 hover:bg-muted" onClick={() => handleEditClick(item)}>
-                                                <Pencil className="h-4 w-4" />
-                                            </Button>
-                                            <Button variant="ghost" size="icon" className="h-8 w-8 text-destructive hover:bg-destructive/10" onClick={() => handleDeleteClick(item.id)}>
-                                                <Trash2 className="h-4 w-4" />
-                                            </Button>
-                                        </div>
+                                    <TableCell className="text-center">
+                                        <TableActionButtons
+                                            onEdit={() => handleEditClick(item)}
+                                            onDelete={() => handleDeleteClick(item.id)}
+                                        />
                                     </TableCell>
                                 </TableRow>
                             ))
@@ -642,7 +660,6 @@ export default function ProductionMasters() {
                 </Table>
             );
         } else if (selectedMaster === "Machines") {
-            // ... (Machines table code from previous step)
             return (
                 <Table>
                     <TableHeader>
@@ -652,7 +669,7 @@ export default function ProductionMasters() {
                             <TableHead>Description</TableHead>
                             <TableHead>Work Center</TableHead>
                             <TableHead>Status</TableHead>
-                            <TableHead className="text-right">Actions</TableHead>
+                            <TableHead className="text-center w-[100px]">Actions</TableHead>
                         </TableRow>
                     </TableHeader>
                     <TableBody>
@@ -672,15 +689,11 @@ export default function ProductionMasters() {
                                         <TableCell className="max-w-[200px] truncate">{item.description || "-"}</TableCell>
                                         <TableCell>{wc ? wc.name : "Unknown"}</TableCell>
                                         <TableCell><StatusBadge status={item.status} /></TableCell>
-                                        <TableCell className="text-right">
-                                            <div className="flex justify-end gap-2">
-                                                <Button variant="ghost" size="icon" className="h-8 w-8 hover:bg-muted" onClick={() => handleEditClick(item)}>
-                                                    <Pencil className="h-4 w-4" />
-                                                </Button>
-                                                <Button variant="ghost" size="icon" className="h-8 w-8 text-destructive hover:bg-destructive/10" onClick={() => handleDeleteClick(item.id)}>
-                                                    <Trash2 className="h-4 w-4" />
-                                                </Button>
-                                            </div>
+                                        <TableCell className="text-center">
+                                            <TableActionButtons
+                                                onEdit={() => handleEditClick(item)}
+                                                onDelete={() => handleDeleteClick(item.id)}
+                                            />
                                         </TableCell>
                                     </TableRow>
                                 );
@@ -700,7 +713,7 @@ export default function ProductionMasters() {
                             <TableHead className="text-center">QC Required</TableHead>
                             <TableHead className="text-center">Batchwise Tracking</TableHead>
                             <TableHead>Status</TableHead>
-                            <TableHead className="text-right">Actions</TableHead>
+                            <TableHead className="text-center w-[100px]">Actions</TableHead>
                         </TableRow>
                     </TableHeader>
                     <TableBody>
@@ -734,15 +747,11 @@ export default function ProductionMasters() {
                                             )}
                                         </TableCell>
                                         <TableCell><StatusBadge status={item.status} /></TableCell>
-                                        <TableCell className="text-right">
-                                            <div className="flex justify-end gap-2">
-                                                <Button variant="ghost" size="icon" className="h-8 w-8 hover:bg-muted" onClick={() => handleEditClick(item)}>
-                                                    <Pencil className="h-4 w-4" />
-                                                </Button>
-                                                <Button variant="ghost" size="icon" className="h-8 w-8 text-destructive hover:bg-destructive/10" onClick={() => handleDeleteClick(item.id)}>
-                                                    <Trash2 className="h-4 w-4" />
-                                                </Button>
-                                            </div>
+                                        <TableCell className="text-center">
+                                            <TableActionButtons
+                                                onEdit={() => handleEditClick(item)}
+                                                onDelete={() => handleDeleteClick(item.id)}
+                                            />
                                         </TableCell>
                                     </TableRow>
                                 );
@@ -1366,50 +1375,36 @@ export default function ProductionMasters() {
                 </div>
 
                 <div className="flex-1 flex flex-col gap-6 mt-6 overflow-y-auto pr-2 pb-6 custom-scrollbar">
-                    {/* Top Control Bar */}
-                    <div className="flex flex-col sm:flex-row items-center gap-4 bg-card p-4 rounded-lg border shadow-sm">
-
-
-
-                        {/* Status Filter */}
-                        <div className="w-full sm:w-1/6">
-                            <Label className="mb-1.5 block text-xs font-medium text-muted-foreground uppercase tracking-wider">
-                                Status
-                            </Label>
-                            <Select value={filterStatus} onValueChange={setFilterStatus}>
-                                <SelectTrigger className="h-10"><SelectValue placeholder="All Status" /></SelectTrigger>
-                                <SelectContent>
-                                    <SelectItem value="All">All Status</SelectItem>
-                                    <SelectItem value="Active">Active</SelectItem>
-                                    <SelectItem value="Inactive">Inactive</SelectItem>
-                                </SelectContent>
-                            </Select>
-                        </div>
-
-
-                        <div className="w-full sm:w-1/4">
-                            <Label className="mb-1.5 block text-xs font-medium text-muted-foreground uppercase tracking-wider">
-                                Search
-                            </Label>
-                            <div className="relative">
-                                <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
-                                <Input
-                                    placeholder="Search by code, name..."
-                                    className="pl-9 h-10"
-                                    value={searchTerm}
-                                    onChange={(e) => setSearchTerm(e.target.value)}
-                                />
-                            </div>
-                        </div>
-
-                        <div className="w-full sm:w-auto ml-auto mt-auto pt-5">
-                            <Button onClick={handleAddClick} className="w-full sm:w-auto">
-                                <Plus className="mr-2 h-4 w-4" />
-                                {selectedMaster === "Work Centers" ? "Add Work Center" :
-                                    selectedMaster === "Operations" ? "Add Operation" : "Add Record"}
-                            </Button>
-                        </div>
-                    </div>
+                    <AppListToolbar
+                        search={{
+                            placeholder: "Search by code, name...",
+                            value: searchTerm,
+                            onChange: setSearchTerm
+                        }}
+                        filters={[
+                            {
+                                type: "select" as const,
+                                label: "Status",
+                                value: filterStatus,
+                                onChange: setFilterStatus,
+                                options: [
+                                    { label: "All Status", value: "All" },
+                                    { label: "Active", value: "Active" },
+                                    { label: "Inactive", value: "Inactive" }
+                                ],
+                                searchable: true
+                            }
+                        ]}
+                        actions={[
+                            {
+                                label: selectedMaster === "Work Centers" ? "Create Work Center" :
+                                    selectedMaster === "Machines" ? "Create Machine" :
+                                    selectedMaster === "Operations" ? "Create Operation" : "Create Record",
+                                icon: <Plus className="mr-2 h-4 w-4" />,
+                                onClick: handleAddClick
+                            }
+                        ]}
+                    />
 
                     {/* Main Table Content */}
                     <Card>
@@ -1439,7 +1434,7 @@ export default function ProductionMasters() {
                 <DialogContent className="sm:max-w-[600px] max-h-[90vh] flex flex-col p-0 gap-0">
                     <DialogHeader className="p-6 pb-2">
                         <DialogTitle>
-                            {editingId ? "Edit" : "Add New"}{" "}
+                            {editingId ? "Edit" : "Create"}{" "}
                             {selectedMaster === "Work Centers"
                                 ? "Work Center"
                                 : selectedMaster === "Machines"
@@ -1481,6 +1476,23 @@ export default function ProductionMasters() {
 
                 </DialogContent>
             </Dialog>
+
+            <AlertDialog open={isDeleteAlertOpen} onOpenChange={setIsDeleteAlertOpen}>
+                <AlertDialogContent>
+                    <AlertDialogHeader>
+                        <AlertDialogTitle>Delete Record</AlertDialogTitle>
+                        <AlertDialogDescription>
+                            Are you sure you want to delete this record? This action cannot be undone.
+                        </AlertDialogDescription>
+                    </AlertDialogHeader>
+                    <AlertDialogFooter>
+                        <AlertDialogCancel>Cancel</AlertDialogCancel>
+                        <AlertDialogAction onClick={confirmDelete} className="bg-destructive text-destructive-foreground hover:bg-destructive/90">
+                            Delete
+                        </AlertDialogAction>
+                    </AlertDialogFooter>
+                </AlertDialogContent>
+            </AlertDialog>
         </div >
     );
 }

@@ -12,6 +12,7 @@
 // ============================================================================
 
 import { useState, useEffect } from "react";
+import { format, parse, isValid } from "date-fns";
 import { useLocation, useRoute } from "wouter";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -64,10 +65,11 @@ import {
   CommandGroup,
   CommandItem,
 } from "@/components/ui/command";
-import { Plus, Search, Eye, Pencil, ChevronLeft, ChevronRight, ChevronsUpDown, Check } from "lucide-react";
+import { Plus, Search, ChevronLeft, ChevronRight, ChevronsUpDown, Check, Calendar as CalendarIcon, ChevronDown, X } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { cn } from "@/lib/utils";
 import { DataTablePagination } from "@/components/shared/DataTablePagination";
+import { TableActionButtons } from "@/components/shared/TableActionButtons";
 import { 
   type BatchRecord, 
   type BatchItem,
@@ -201,6 +203,329 @@ function SearchableSelect({
   );
 }
 
+function DatePicker({ date, setDate, disabled = false, minDate }: {
+    date?: Date,
+    setDate: (d?: Date) => void,
+    disabled?: boolean,
+    minDate?: Date
+}) {
+    const [isOpen, setIsOpen] = useState(false);
+    const [viewMode, setViewMode] = useState<"day" | "month" | "year">("day");
+    const [visibleDate, setVisibleDate] = useState(() => date || new Date());
+
+    const monthNames = [
+        "January", "February", "March", "April", "May", "June",
+        "July", "August", "September", "October", "November", "December"
+    ];
+
+    const monthNamesShort = [
+        "Jan", "Feb", "Mar", "Apr", "May", "Jun",
+        "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"
+    ];
+
+    const formatDisplayDate = (date: Date | undefined) => {
+        if (!date) return "Pick a date";
+        try {
+            return format(date, "dd-MM-yyyy");
+        } catch (error) {
+            return "Pick a date";
+        }
+    };
+
+    const handleDateSelect = (selectedDate: Date) => {
+        const selected = new Date(selectedDate);
+        selected.setHours(0, 0, 0, 0);
+
+        let isBeforeMinDate = false;
+        if (minDate) {
+            const minimumDate = new Date(minDate);
+            minimumDate.setHours(0, 0, 0, 0);
+            isBeforeMinDate = selected < minimumDate;
+        }
+
+        if (!isBeforeMinDate) {
+            setDate(selectedDate);
+            setIsOpen(false);
+            setViewMode("day");
+        }
+    };
+
+    const handleMonthSelect = (monthIndex: number) => {
+        const newDate = new Date(visibleDate.getFullYear(), monthIndex, 1);
+        setVisibleDate(newDate);
+        setViewMode("day");
+    };
+
+    const handleYearSelect = (year: number) => {
+        const newDate = new Date(year, visibleDate.getMonth(), 1);
+        setVisibleDate(newDate);
+        setViewMode("month");
+    };
+
+    const navigateMonth = (direction: number) => {
+        const newDate = new Date(visibleDate.getFullYear(), visibleDate.getMonth() + direction, 1);
+        setVisibleDate(newDate);
+    };
+
+    const getDaysInMonth = (date: Date) => {
+        const year = date.getFullYear();
+        const month = date.getMonth();
+        const firstDay = new Date(year, month, 1);
+        const lastDay = new Date(year, month + 1, 0);
+        const daysInMonth = lastDay.getDate();
+        const startingDayOfWeek = firstDay.getDay();
+
+        const days = [];
+        let minimumDate: Date | null = null;
+        if (minDate) {
+            minimumDate = new Date(minDate);
+            minimumDate.setHours(0, 0, 0, 0);
+        }
+
+        // Previous month's trailing days
+        const prevMonth = new Date(year, month - 1, 0);
+        for (let i = startingDayOfWeek - 1; i >= 0; i--) {
+            const dayDate = new Date(year, month - 1, prevMonth.getDate() - i);
+            dayDate.setHours(0, 0, 0, 0);
+            days.push({
+                date: dayDate,
+                isCurrentMonth: false,
+                isToday: false,
+                isSelected: false,
+                isPast: minimumDate ? dayDate < minimumDate : false
+            });
+        }
+
+        // Current month days
+        for (let day = 1; day <= daysInMonth; day++) {
+            const currentDate = new Date(year, month, day);
+            currentDate.setHours(0, 0, 0, 0);
+            const isToday = new Date().toDateString() === currentDate.toDateString();
+            const isSelected = date && currentDate.toDateString() === date.toDateString();
+            const isPast = minimumDate ? currentDate < minimumDate : false;
+
+            days.push({
+                date: currentDate,
+                isCurrentMonth: true,
+                isToday,
+                isSelected,
+                isPast: isPast
+            });
+        }
+
+        // Next month's leading days
+        const remainingDays = 42 - days.length;
+        for (let day = 1; day <= remainingDays; day++) {
+            const dayDate = new Date(year, month + 1, day);
+            dayDate.setHours(0, 0, 0, 0);
+            days.push({
+                date: dayDate,
+                isCurrentMonth: false,
+                isToday: false,
+                isSelected: false,
+                isPast: minimumDate ? dayDate < minimumDate : false
+            });
+        }
+
+        return days;
+    };
+
+    const renderDayView = () => {
+        const days = getDaysInMonth(visibleDate);
+        const weekDays = ["Su", "Mo", "Tu", "We", "Th", "Fr", "Sa"];
+
+        return (
+            <div className="w-80">
+                <div className="flex items-center justify-between mb-4">
+                    <Button
+                        variant="ghost"
+                        size="icon"
+                        className="h-8 w-8"
+                        onClick={() => navigateMonth(-1)}
+                    >
+                        <ChevronLeft className="h-4 w-4" />
+                    </Button>
+
+                    <div className="flex items-center gap-2">
+                        <Button
+                            variant="ghost"
+                            className="font-semibold text-sm"
+                            onClick={() => setViewMode("month")}
+                        >
+                            {monthNames[visibleDate.getMonth()]}
+                            <ChevronDown className="ml-1 h-3 w-3" />
+                        </Button>
+                        <Button
+                            variant="ghost"
+                            className="font-semibold text-sm"
+                            onClick={() => setViewMode("year")}
+                        >
+                            {visibleDate.getFullYear()}
+                            <ChevronDown className="ml-1 h-3 w-3" />
+                        </Button>
+                    </div>
+
+                    <Button
+                        variant="ghost"
+                        size="icon"
+                        className="h-8 w-8"
+                        onClick={() => navigateMonth(1)}
+                    >
+                        <ChevronRight className="h-4 w-4" />
+                    </Button>
+                </div>
+
+                <div className="grid grid-cols-7 gap-1 mb-2">
+                    {weekDays.map((day) => (
+                        <div key={day} className="h-8 flex items-center justify-center text-xs font-medium text-muted-foreground">
+                            {day}
+                        </div>
+                    ))}
+                </div>
+
+                <div className="grid grid-cols-7 gap-1">
+                    {days.map((day, index) => (
+                        <Button
+                            key={index}
+                            variant="ghost"
+                            size="icon"
+                            disabled={day.isPast}
+                            className={cn(
+                                "h-8 w-8 text-sm font-normal",
+                                !day.isCurrentMonth && "text-muted-foreground opacity-50",
+                                day.isToday && "bg-accent text-accent-foreground font-semibold",
+                                day.isSelected && "bg-primary text-primary-foreground font-semibold",
+                                day.isCurrentMonth && !day.isPast && "hover:bg-accent hover:text-accent-foreground",
+                                day.isPast && "opacity-30 cursor-not-allowed text-muted-foreground"
+                            )}
+                            onClick={() => !day.isPast && handleDateSelect(day.date)}
+                        >
+                            {day.date.getDate()}
+                        </Button>
+                    ))}
+                </div>
+            </div>
+        );
+    };
+
+    const renderMonthView = () => {
+        return (
+            <div className="w-80">
+                <div className="flex items-center justify-between mb-4">
+                    <Button
+                        variant="ghost"
+                        size="icon"
+                        className="h-8 w-8"
+                        onClick={() => setViewMode("day")}
+                    >
+                        <ChevronLeft className="h-4 w-4" />
+                    </Button>
+                    <h3 className="font-semibold">{visibleDate.getFullYear()}</h3>
+                    <Button
+                        variant="ghost"
+                        className="font-semibold text-sm"
+                        onClick={() => setViewMode("year")}
+                    >
+                        {visibleDate.getFullYear()}
+                        <ChevronDown className="ml-1 h-3 w-3" />
+                    </Button>
+                </div>
+
+                <div className="grid grid-cols-3 gap-2">
+                    {monthNamesShort.map((month, index) => (
+                        <Button
+                            key={month}
+                            variant="ghost"
+                            className={cn(
+                                "h-10 text-sm font-normal",
+                                index === visibleDate.getMonth() && "bg-primary text-primary-foreground font-semibold"
+                            )}
+                            onClick={() => handleMonthSelect(index)}
+                        >
+                            {month}
+                        </Button>
+                    ))}
+                </div>
+            </div>
+        );
+    };
+
+    const renderYearView = () => {
+        const currentYear = visibleDate.getFullYear();
+        const startYear = Math.floor(currentYear / 12) * 12;
+        const years = Array.from({ length: 12 }, (_, i) => startYear + i);
+
+        return (
+            <div className="w-80">
+                <div className="flex items-center justify-between mb-4">
+                    <Button
+                        variant="ghost"
+                        size="icon"
+                        className="h-8 w-8"
+                        onClick={() => {
+                            const newStartYear = startYear - 12;
+                            setVisibleDate(new Date(newStartYear, visibleDate.getMonth(), 1));
+                        }}
+                    >
+                        <ChevronLeft className="h-4 w-4" />
+                    </Button>
+                    <h3 className="font-semibold">{startYear} - {startYear + 11}</h3>
+                    <Button
+                        variant="ghost"
+                        size="icon"
+                        className="h-8 w-8"
+                        onClick={() => {
+                            const newStartYear = startYear + 12;
+                            setVisibleDate(new Date(newStartYear, visibleDate.getMonth(), 1));
+                        }}
+                    >
+                        <ChevronRight className="h-4 w-4" />
+                    </Button>
+                </div>
+
+                <div className="grid grid-cols-3 gap-2">
+                    {years.map((year) => (
+                        <Button
+                            key={year}
+                            variant="ghost"
+                            className={cn(
+                                "h-10 text-sm font-normal",
+                                year === currentYear && "bg-primary text-primary-foreground font-semibold"
+                            )}
+                            onClick={() => handleYearSelect(year)}
+                        >
+                            {year}
+                        </Button>
+                    ))}
+                </div>
+            </div>
+        );
+    };
+
+    return (
+        <Popover open={isOpen} onOpenChange={setIsOpen}>
+            <PopoverTrigger asChild>
+                <Button
+                    variant="outline"
+                    disabled={disabled}
+                    className={cn(
+                        "w-full justify-start text-left font-normal flex h-10 rounded-md border border-input px-3 py-2 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50",
+                        !date && "text-muted-foreground"
+                    )}
+                >
+                    <CalendarIcon className="mr-2 h-4 w-4" />
+                    {date ? formatDisplayDate(date) : <span>Pick a date</span>}
+                </Button>
+            </PopoverTrigger>
+            <PopoverContent className="w-auto p-4 shadow-lg border rounded-lg z-[9999]" align="start" side="bottom" sideOffset={4}>
+                {viewMode === "day" && renderDayView()}
+                {viewMode === "month" && renderMonthView()}
+                {viewMode === "year" && renderYearView()}
+            </PopoverContent>
+        </Popover>
+    );
+}
+
 // ============================================================================
 // MOCK DATA
 // ============================================================================
@@ -265,6 +590,8 @@ export default function BatchTracking() {
   const [statusFilter, setStatusFilter] = useState("Batch Created");
   const [operationFilter, setOperationFilter] = useState("All");
   const [workCenterFilter, setWorkCenterFilter] = useState("All");
+  const [shiftFilter, setShiftFilter] = useState("All");
+  const [dateFilter, setDateFilter] = useState<Date | undefined>(undefined);
 
   // Modal states
   const [isViewBatchModalOpen, setIsViewBatchModalOpen] = useState(false);
@@ -678,7 +1005,7 @@ export default function BatchTracking() {
         inputItems: inputItems,
         outputItems: outputItems
       });
-      setIsReadOnly(batch.status === "Verified QC" || batch.status === "Batch Closed" || batch.status === "Sent for QC");
+      setIsReadOnly(true);
       setBatchFormMode('view');
       setIsViewBatchModalOpen(true);
     }
@@ -727,7 +1054,7 @@ export default function BatchTracking() {
           inputItems: inputItems,
           outputItems: outputItems
         });
-        setIsReadOnly(false); // Edit mode - not read-only
+        setIsReadOnly(false);
         setBatchFormMode('edit');
         setIsViewBatchModalOpen(true); // Open the modal
       } else {
@@ -1039,7 +1366,15 @@ export default function BatchTracking() {
     const matchesStatus = statusFilter === "All" || item.status === statusFilter;
     const matchesOperation = operationFilter === "All" || item.operation === operationFilter;
     const matchesWorkCenter = workCenterFilter === "All" || item.workCenter === workCenterFilter;
-    return matchesSearch && matchesStatus && matchesOperation && matchesWorkCenter;
+    const matchesShift = shiftFilter === "All" || item.shift === shiftFilter;
+    
+    let matchesDate = true;
+    if (dateFilter) {
+      const selectedDate = format(dateFilter, "yyyy-MM-dd");
+      matchesDate = item.date === selectedDate;
+    }
+
+    return matchesSearch && matchesStatus && matchesOperation && matchesWorkCenter && matchesShift && matchesDate;
   });
 
   // Pagination calculations - slice data for current page
@@ -1059,7 +1394,7 @@ export default function BatchTracking() {
   // Reset to page 1 when filters change
   useEffect(() => {
     setCurrentPage(1);
-  }, [searchTerm, statusFilter, operationFilter, workCenterFilter]);
+  }, [searchTerm, statusFilter, operationFilter, workCenterFilter, shiftFilter, dateFilter]);
 
   // ============================================================================
   // RENDER - LISTING VIEW
@@ -1074,8 +1409,8 @@ export default function BatchTracking() {
         </p>
       </div>
 
-      <div className="flex flex-col sm:flex-row items-end gap-4 bg-card p-4 rounded-lg border shadow-sm">
-        <div className="w-full sm:flex-1">
+      <div className="flex flex-col lg:flex-row items-end gap-4 bg-card p-4 rounded-lg border shadow-sm flex-wrap">
+        <div className="w-full lg:flex-1 min-w-[200px]">
           <Label className="mb-1.5 block text-xs font-medium text-muted-foreground uppercase tracking-wider">Search</Label>
           <div className="relative">
             <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
@@ -1090,6 +1425,38 @@ export default function BatchTracking() {
             />
           </div>
         </div>
+
+        <div className="w-full sm:w-48">
+          <Label className="mb-1.5 block text-xs font-medium text-muted-foreground uppercase tracking-wider">Date</Label>
+          <div className="flex gap-2">
+            <div className="flex-1">
+              <DatePicker date={dateFilter} setDate={setDateFilter} />
+            </div>
+            {dateFilter && (
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-10 w-10 shrink-0 border border-input hover:bg-muted"
+                onClick={() => setDateFilter(undefined)}
+              >
+                <X className="h-4 w-4 text-muted-foreground" />
+              </Button>
+            )}
+          </div>
+        </div>
+
+        <div className="w-full sm:w-48">
+          <SearchableSelect
+            label="Shift"
+            value={shiftFilter}
+            options={["All", "Morning", "Night"]}
+            onChange={(value) => {
+              setShiftFilter(value);
+              setCurrentPage(1);
+            }}
+          />
+        </div>
+
         <div className="w-full sm:w-48">
           <SearchableSelect
             label="Operation"
@@ -1101,6 +1468,7 @@ export default function BatchTracking() {
             }}
           />
         </div>
+
         <div className="w-full sm:w-48">
           <SearchableSelect
             label="Status"
@@ -1112,12 +1480,13 @@ export default function BatchTracking() {
             }}
           />
         </div>
-        <div className="w-full sm:w-auto flex gap-2">
-          <Button onClick={() => setIsBatchFormModalOpen(true)} className="flex-1 sm:flex-none">
+
+        <div className="w-full lg:w-auto flex gap-2 mt-4 lg:mt-0">
+          <Button onClick={() => setIsBatchFormModalOpen(true)} className="flex-1 lg:flex-none h-10 whitespace-nowrap px-4">
             <Plus className="mr-2 h-4 w-4" />
             Create Batch
           </Button>
-          <Button onClick={() => setIsBulkBatchModalOpen(true)} className="flex-1 sm:flex-none">
+          <Button onClick={() => setIsBulkBatchModalOpen(true)} className="flex-1 lg:flex-none h-10 whitespace-nowrap px-4">
             <Plus className="mr-2 h-4 w-4" />
             Create Bulk Batches
           </Button>
@@ -1135,15 +1504,16 @@ export default function BatchTracking() {
                   <TableHead className="font-semibold text-xs uppercase tracking-wider">Date</TableHead>
                   <TableHead className="font-semibold text-xs uppercase tracking-wider">MR No</TableHead>
                   <TableHead className="font-semibold text-xs uppercase tracking-wider">Operation</TableHead>
+                  <TableHead className="font-semibold text-xs uppercase tracking-wider">Work Center</TableHead>
                   <TableHead className="font-semibold text-xs uppercase tracking-wider">Shift</TableHead>
                   <TableHead className="font-semibold text-xs uppercase tracking-wider">Status</TableHead>
-                  <TableHead className="text-right font-semibold text-xs uppercase tracking-wider pr-6">Action</TableHead>
+                  <TableHead className="text-center font-bold text-[11px] tracking-wider py-4">Actions</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {paginatedData.length === 0 ? (
                   <TableRow>
-                    <TableCell colSpan={7} className="h-32 text-center text-muted-foreground">
+                    <TableCell colSpan={8} className="h-32 text-center text-muted-foreground">
                       No batches found
                     </TableCell>
                   </TableRow>
@@ -1154,6 +1524,7 @@ export default function BatchTracking() {
                       <TableCell>{formatDate(batch.date)}</TableCell>
                       <TableCell className="font-mono">{batch.mrNo}</TableCell>
                       <TableCell>{batch.operation}</TableCell>
+                      <TableCell>{batch.workCenter}</TableCell>
                       <TableCell>{batch.shift}</TableCell>
                       <TableCell>
                         <Badge
@@ -1169,27 +1540,11 @@ export default function BatchTracking() {
                           {batch.status}
                         </Badge>
                       </TableCell>
-                      <TableCell className="text-right pr-6">
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          className="h-8"
-                          onClick={() => handleView(batch.id)}
-                        >
-                          <Eye className="h-4 w-4 mr-1" />
-                          View
-                        </Button>
-                        {batch.status === "Batch Created" && (
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            className="h-8 text-primary"
-                            onClick={() => handleEdit(batch.id)}
-                          >
-                            <Pencil className="h-4 w-4 mr-1" />
-                            Edit
-                          </Button>
-                        )}
+                      <TableCell className="text-center py-4">
+                        <TableActionButtons
+                          onView={() => handleView(batch.id)}
+                          onEdit={batch.status === "Batch Created" ? () => handleEdit(batch.id) : undefined}
+                        />
                       </TableCell>
                     </TableRow>
                   ))
@@ -1214,7 +1569,28 @@ export default function BatchTracking() {
       </Card>
 
       {/* View/Edit Batch Modal */}
-      <Dialog open={isViewBatchModalOpen} onOpenChange={setIsViewBatchModalOpen}>
+      <Dialog open={isViewBatchModalOpen} onOpenChange={(open) => {
+        if (!open) {
+          setIsViewBatchModalOpen(false);
+          setViewingBatch(null);
+          setIsReadOnly(false);
+          setBatchFormData({
+            batchNo: "",
+            date: "",
+            createdBy: "",
+            mrNo: "",
+            operation: "",
+            shift: "",
+            startTime: null,
+            endTime: null,
+            savedBatchId: null,
+            status: "Batch Created",
+            createdType: "SINGLE",
+            inputItems: [],
+            outputItems: []
+          });
+        }
+      }}>
         <DialogContent className="max-w-6xl max-h-[90vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle>
@@ -1453,11 +1829,7 @@ export default function BatchTracking() {
                 <CardTitle>Batch Information</CardTitle>
               </CardHeader>
               <CardContent>
-                <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-                  <div>
-                    <Label>Batch No</Label>
-                    <Input value={batchFormData.batchNo} readOnly className="bg-muted" />
-                  </div>
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                   <div>
                     <Label>Date</Label>
                     <Input value={formatDate(batchFormData.date)} readOnly className="bg-muted" />

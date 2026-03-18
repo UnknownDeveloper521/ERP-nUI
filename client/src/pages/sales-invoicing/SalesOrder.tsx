@@ -10,18 +10,18 @@ import { generateQuotationPDFHTML } from "@/lib/quotationPDFTemplate";
 import { generateInvoicePDFHTML, type InvoicePDFData } from "@/lib/invoicePDFTemplate";
 import {
     Search,
-    Eye,
     ChevronLeft,
     ChevronRight,
     Calendar as CalendarIcon,
     Trash2,
     Plus,
-    Edit,
     X,
     Download,
     Check,
     ChevronsUpDown
 } from "lucide-react";
+import { AppListToolbar } from "@/components/shared/AppListToolbar";
+import { TableActionButtons } from "@/components/shared/TableActionButtons";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Button } from "@/components/ui/button";
@@ -311,12 +311,18 @@ function DatePicker({ date, setDate, disabled = false }: {
 // Status badge helper - enforces SO status logic
 const getSOStatusBadge = (status: SOStatus) => {
     switch (status) {
-        case "Draft": return <Badge className="bg-slate-500 hover:bg-slate-600">Draft</Badge>;
-        case "Invoice Pending": return <Badge className="bg-blue-500 hover:bg-blue-600">Invoice Pending</Badge>;
-        case "Dispatch Pending": return <Badge className="bg-orange-500 hover:bg-orange-600">Dispatch Pending</Badge>;
-        case "Dispatched": return <Badge className="bg-green-500 hover:bg-green-600">Dispatched</Badge>;
-        case "Closed SO": return <Badge className="bg-gray-700 hover:bg-gray-800">Closed SO</Badge>;
-        default: return <Badge variant="outline">{status}</Badge>;
+        case "Draft":
+            return <Badge variant="outline">Draft</Badge>;
+        case "Invoice Pending":
+            return <Badge variant="default">Invoice Pending</Badge>;
+        case "Dispatch Pending":
+            return <Badge variant="secondary">Dispatch Pending</Badge>;
+        case "Dispatched":
+            return <Badge variant="default" className="bg-green-600 hover:bg-green-700">Dispatched</Badge>;
+        case "Closed SO":
+            return <Badge variant="outline" className="bg-slate-100">Closed SO</Badge>;
+        default:
+            return <Badge variant="outline">{status}</Badge>;
     }
 };
 
@@ -982,6 +988,7 @@ const SalesOrder = () => {
         // Filter out the SO to delete
         setSalesOrders(salesOrders.filter(so => so.id !== soId));
         setIsDeleteAlertOpen(false);
+        setIsSODialogOpen(false);
         toast({
             title: "SO Deleted",
             description: "Sales Order has been deleted successfully."
@@ -2126,87 +2133,61 @@ const SalesOrder = () => {
 
     return (
         <div className="h-full flex flex-col gap-6 animate-in fade-in duration-500">
-            {/* Header */}
-            <div className="flex flex-col gap-2">
-                <h1 className="text-3xl font-bold tracking-tight text-slate-900">Sales Orders</h1>
-                <p className="text-muted-foreground">Manage sales orders and customer deliveries.</p>
-            </div>
+            <h1 className="text-3xl font-bold tracking-tight">Sales Orders</h1>
 
-            {/* Filter Section - Cloned from PO table structure */}
-            <div className="flex flex-col sm:flex-row items-end gap-4 bg-card p-4 rounded-xl border shadow-sm">
-                <div className="w-full sm:flex-1">
-                    <Label className="mb-2 block text-[10px] font-bold text-muted-foreground uppercase tracking-wider">Search Sales Order</Label>
-                    <div className="relative">
-                        <Search className="absolute left-3 top-3 h-4 w-4 text-muted-foreground" />
-                        <Input
-                            placeholder="Search by SO No, Customer..."
-                            className="pl-10 h-10 rounded-md border-input bg-background"
-                            value={searchTerm}
-                            onChange={(e) => {
-                                setSearchTerm(e.target.value);
-                                setCurrentPage(1);
-                            }}
-                        />
-                    </div>
-                </div>
-                <div className="w-full sm:w-56">
-                    <Label className="mb-2 block text-[10px] font-bold text-muted-foreground uppercase tracking-wider">Filter By Date</Label>
-                    <div className="flex gap-2">
-                        <DatePicker date={filterDate} setDate={(date) => {
+            {/* Filter Section - Matching WarrantyService layout */}
+            <AppListToolbar
+                search={{
+                    value: searchTerm,
+                    onChange: (val) => {
+                        setSearchTerm(val);
+                        setCurrentPage(1);
+                    },
+                    placeholder: "Search by SO No, Customer..."
+                }}
+                filters={[
+                    {
+                        type: 'date',
+                        label: 'Date',
+                        value: filterDate,
+                        onChange: (date) => {
                             setFilterDate(date);
                             setCurrentPage(1);
-                        }} />
-                        {filterDate && (
-                            <Button variant="ghost" size="icon" className="h-10 w-10 shrink-0" onClick={() => {
-                                setFilterDate(undefined);
-                                setCurrentPage(1);
-                            }}>
-                                <Trash2 className="h-4 w-4 text-muted-foreground" />
-                            </Button>
-                        )}
-                    </div>
-                </div>
-                <div className="w-full sm:w-48">
-                    <Label className="mb-2 block text-[10px] font-bold text-muted-foreground uppercase tracking-wider">Filter By Status</Label>
-                    <Select value={filterStatus} onValueChange={(val) => {
-                        setFilterStatus(val);
-                        setCurrentPage(1);
-                    }}>
-                        <SelectTrigger className="h-10">
-                            <SelectValue placeholder="All Status" />
-                        </SelectTrigger>
-                        <SelectContent>
-                            <SelectItem value="all">All Status</SelectItem>
-                            <SelectItem value="Draft">Draft</SelectItem>
-                            <SelectItem value="Invoice Pending">Invoice Pending</SelectItem>
-                            <SelectItem value="Dispatch Pending">Dispatch Pending</SelectItem>
-                            <SelectItem value="Dispatched">Dispatched</SelectItem>
-                            <SelectItem value="Closed SO">Closed SO</SelectItem>
-                        </SelectContent>
-                    </Select>
-                </div>
-                <div className="w-full sm:w-auto">
-                    <Button
-                        onClick={() => handleOpenSO(null, true)}
-                        className="w-full sm:w-auto h-10 font-bold shadow-md"
-                    >
-                        <Plus className="h-4 w-4 mr-2" />
-                        Create Sales Order
-                    </Button>
-                </div>
-            </div>
-            {/* SO Table - Cloned from PO table structure, matching Materials styling */}
-            <Card className="border shadow-sm overflow-hidden bg-white/50">
-                <CardContent className="p-0">
-                    <div className="rounded-md">
+                        },
+                        showClear: true
+                    },
+                    {
+                        type: 'select',
+                        label: 'Status',
+                        value: filterStatus,
+                        options: [{ label: "All Status", value: "all" }, "Draft", "Invoice Pending", "Dispatch Pending", "Dispatched", "Closed SO"],
+                        onChange: (val) => {
+                            setFilterStatus(val);
+                            setCurrentPage(1);
+                        },
+                        searchable: true
+                    }
+                ]}
+                actions={[
+                    {
+                        label: "New Sales Order",
+                        icon: <Plus className="h-4 w-4" />,
+                        onClick: () => handleOpenSO(null, true)
+                    }
+                ]}
+            />
+            {/* SO Table - Matching WarrantyService layout */}
+            <Card>
+                <CardContent className="pt-6">
+                    <div className="rounded-md border">
                         <Table>
                             <TableHeader>
-                                <TableRow className="bg-muted/50">
-                                    <TableHead className="font-bold uppercase text-[11px] tracking-wider py-4 pl-6">SO No</TableHead>
-                                    <TableHead className="font-bold uppercase text-[11px] tracking-wider">SO Date</TableHead>
-                                    <TableHead className="font-bold uppercase text-[11px] tracking-wider">Customer</TableHead>
-                                    <TableHead className="font-bold uppercase text-[11px] tracking-wider text-center">Status</TableHead>
-                                    <TableHead className="text-right font-bold uppercase text-[11px] tracking-wider pr-6">Actions</TableHead>
+                                <TableRow className="bg-muted/50 hover:bg-muted/50">
+                                    <TableHead className="font-semibold text-xs uppercase tracking-wider py-4 pl-6">SO No</TableHead>
+                                    <TableHead className="font-semibold text-xs uppercase tracking-wider">SO Date</TableHead>
+                                    <TableHead className="font-semibold text-xs uppercase tracking-wider">Customer</TableHead>
+                                    <TableHead className="font-semibold text-xs uppercase tracking-wider text-center">Status</TableHead>
+                                    <TableHead className="font-semibold text-xs tracking-wider text-center">Actions</TableHead>
                                 </TableRow>
                             </TableHeader>
                             <TableBody>
@@ -2218,8 +2199,8 @@ const SalesOrder = () => {
                                     </TableRow>
                                 ) : (
                                     paginatedData.map((so) => (
-                                        <TableRow key={so.id} className="hover:bg-muted/20 group transition-colors border-b last:border-none">
-                                            <TableCell className="py-4 pl-6 font-medium text-xs text-primary">{so.soNumber}</TableCell>
+                                        <TableRow key={so.id} className="hover:bg-muted/30 transition-colors border-b last:border-none">
+                                            <TableCell className="py-4 pl-6 font-medium text-xs font-mono text-primary">{so.soNumber}</TableCell>
                                             <TableCell className="py-4 text-sm font-medium text-slate-600">
                                                 {so.soDate.includes('-') ? format(new Date(so.soDate), "dd-MM-yyyy") : so.soDate}
                                             </TableCell>
@@ -2227,59 +2208,16 @@ const SalesOrder = () => {
                                             <TableCell className="py-4 text-center">
                                                 {getSOStatusBadge(so.status)}
                                             </TableCell>
-                                            <TableCell className="py-4 text-right pr-6">
-                                                <div className="flex justify-end gap-1">
-                                                    <Button
-                                                        variant="ghost"
-                                                        size="icon"
-                                                        className="h-8 w-8 text-muted-foreground hover:text-primary"
-                                                        onClick={() => handleOpenSO(so, false)}
-                                                        title="View (PDF Preview)"
-                                                    >
-                                                        <Eye className="h-4 w-4" />
-                                                    </Button>
-                                                    {/* Edit button for Dispatched status - opens Close SO dialog */}
-                                                    {so.status === "Dispatched" && (
-                                                        <Button
-                                                            variant="ghost"
-                                                            size="icon"
-                                                            className="h-8 w-8 text-muted-foreground hover:text-blue-600"
-                                                            onClick={() => {
-                                                                setDispatchedEditSO(so);
-                                                                setIsDispatchedEditOpen(true);
-                                                            }}
-                                                            title="Edit (Close SO)"
-                                                        >
-                                                            <Edit className="h-4 w-4" />
-                                                        </Button>
-                                                    )}
-                                                    {/* Edit/Delete allowed only when status = Draft */}
-                                                    {so.status === "Draft" && (
-                                                        <>
-                                                            <Button
-                                                                variant="ghost"
-                                                                size="icon"
-                                                                className="h-8 w-8 text-muted-foreground hover:text-emerald-600"
-                                                                onClick={() => handleOpenSO(so, true)}
-                                                                title="Edit"
-                                                            >
-                                                                <Edit className="h-4 w-4" />
-                                                            </Button>
-                                                            <Button
-                                                                variant="ghost"
-                                                                size="icon"
-                                                                className="h-8 w-8 text-muted-foreground hover:text-slate-700"
-                                                                onClick={() => {
-                                                                    setSoToDelete(so);
-                                                                    setIsDeleteAlertOpen(true);
-                                                                }}
-                                                                title="Delete"
-                                                            >
-                                                                <Trash2 className="h-4 w-4" />
-                                                            </Button>
-                                                        </>
-                                                    )}
-                                                </div>
+                                            <TableCell className="py-4 text-center">
+                                                <TableActionButtons
+                                                    onView={() => handleOpenSO(so, false)}
+                                                    onEdit={
+                                                        so.status === "Draft"
+                                                            ? () => handleOpenSO(so, true)
+                                                            : (so.status === "Dispatched" ? () => { setDispatchedEditSO(so); setIsDispatchedEditOpen(true); } : undefined)
+                                                    }
+                                                    onDelete={undefined}
+                                                />
                                             </TableCell>
                                         </TableRow>
                                     ))
@@ -2289,7 +2227,7 @@ const SalesOrder = () => {
                     </div>
 
                     {/* DataTablePagination - matching Materials pagination position */}
-                    <div className="p-4 border-t">
+                    <div className="px-4 py-2 border-t">
                         <DataTablePagination
                             currentPage={currentPage}
                             totalPages={totalPages}
@@ -2842,7 +2780,7 @@ const SalesOrder = () => {
                                                 <TableHead className="text-[10px] font-bold uppercase py-3 text-center">Dispatched Qty</TableHead>
                                             )}
                                             {activeSO?.status === "Draft" && (
-                                                <TableHead className="text-[10px] font-bold uppercase py-3 text-right pr-6">Actions</TableHead>
+                                                <TableHead className="text-[10px] font-bold py-3 text-center">Actions</TableHead>
                                             )}
                                         </TableRow>
                                     </TableHeader>
@@ -2988,15 +2926,10 @@ const SalesOrder = () => {
                                                         </TableCell>
                                                     )}
                                                     {activeSO.status === "Draft" && (
-                                                        <TableCell className="text-right pr-6">
-                                                            <Button
-                                                                variant="ghost"
-                                                                size="icon"
-                                                                className="h-8 w-8 text-muted-foreground hover:text-slate-700"
-                                                                onClick={() => handleRemoveItem(item.id)}
-                                                            >
-                                                                <Trash2 className="h-4 w-4" />
-                                                            </Button>
+                                                        <TableCell className="text-center">
+                                                            <TableActionButtons
+                                                                onDelete={() => handleRemoveItem(item.id)}
+                                                            />
                                                         </TableCell>
                                                     )}
                                                 </TableRow>
@@ -3156,6 +3089,21 @@ const SalesOrder = () => {
                         {/* Status-based button logic enforced here */}
                         {activeSO?.status === "Draft" && (
                             <>
+                                <div className="mr-auto">
+                                    {activeSO.id && salesOrders.some(so => so.id === activeSO.id) && (
+                                        <Button
+                                            variant="destructive"
+                                            onClick={() => {
+                                                setSoToDelete(activeSO);
+                                                setIsDeleteAlertOpen(true);
+                                            }}
+                                            className="gap-2"
+                                        >
+                                            <Trash2 className="h-4 w-4" />
+                                            Delete
+                                        </Button>
+                                    )}
+                                </div>
                                 <Button variant="outline" onClick={() => setIsSODialogOpen(false)}>Close</Button>
                                 {isManualEntry && (
                                     <Button
@@ -4833,7 +4781,7 @@ const SalesOrder = () => {
                                 }
                             }}
                         >
-                            Delete SO
+                            Delete
                         </Button>
                     </DialogFooter>
                 </DialogContent>

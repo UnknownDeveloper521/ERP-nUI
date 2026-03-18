@@ -3,7 +3,6 @@ import { format } from "date-fns";
 import { Card, CardContent } from "@/components/ui/card";
 import {
     Search,
-    Eye,
     ChevronLeft,
     ChevronRight,
     FileText,
@@ -15,12 +14,12 @@ import {
     Paperclip,
     Plus,
     Settings2,
-    Edit,
     AlertCircle,
     Download,
     LayoutGrid
 } from "lucide-react";
 import { DataTablePagination } from "@/components/shared/DataTablePagination";
+import { TableActionButtons } from "@/components/shared/TableActionButtons";
 import {
     Table,
     TableBody,
@@ -65,6 +64,9 @@ import { Textarea } from "@/components/ui/textarea";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { cn } from "@/lib/utils";
 import { useToast } from "@/hooks/use-toast";
+import { AppListToolbar } from "@/components/shared/AppListToolbar";
+import { SearchableSelect } from "@/components/shared/SearchableSelect";
+import { DatePicker } from "@/components/shared/DatePicker";
 
 // ============================================================================
 // TYPE DEFINITIONS
@@ -78,6 +80,7 @@ import {
     getStoredPOs,
     savePOs
 } from "@/lib/procurementSharedData";
+import { mockWarehouses } from "@/lib/masterMockData";
 
 // ============================================================================
 // MOCK DATA
@@ -89,264 +92,9 @@ import {
 // REUSABLE COMPONENTS
 // ============================================================================
 
-function DatePicker({ date, setDate, disabled = false, minDate, blockedDates }: {
-    date?: Date,
-    setDate: (d?: Date) => void,
-    disabled?: boolean,
-    minDate?: Date,
-    blockedDates?: Date[]
-}) {
-    const [isOpen, setIsOpen] = useState(false);
-    const [viewMode, setViewMode] = useState<"day" | "month" | "year">("day");
-    const [visibleDate, setVisibleDate] = useState(() => date || new Date());
+// Local DatePicker and SearchableSelect removed in favor of shared components
 
-    const monthNames = [
-        "January", "February", "March", "April", "May", "June",
-        "July", "August", "September", "October", "November", "December"
-    ];
 
-    const monthNamesShort = [
-        "Jan", "Feb", "Mar", "Apr", "May", "Jun",
-        "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"
-    ];
-
-    const formatDisplayDate = (date: Date | undefined) => {
-        if (!date) return "Pick a date";
-        try {
-            return format(date, "dd-MM-yyyy");
-        } catch (error) {
-            return "Pick a date";
-        }
-    };
-
-    const handleDateSelect = (selectedDate: Date) => {
-        const selected = new Date(selectedDate);
-        selected.setHours(0, 0, 0, 0);
-
-        let isBeforeMinDate = false;
-        if (minDate) {
-            const minimumDate = new Date(minDate);
-            minimumDate.setHours(0, 0, 0, 0);
-            isBeforeMinDate = selected < minimumDate;
-        }
-
-        const isBlocked = blockedDates?.some(blockedDate => {
-            const blocked = new Date(blockedDate);
-            blocked.setHours(0, 0, 0, 0);
-            return blocked.getTime() === selected.getTime();
-        });
-
-        if (!isBeforeMinDate && !isBlocked) {
-            setDate(selectedDate);
-            setIsOpen(false);
-            setViewMode("day");
-        }
-    };
-
-    const handleMonthSelect = (monthIndex: number) => {
-        const newDate = new Date(visibleDate.getFullYear(), monthIndex, 1);
-        setVisibleDate(newDate);
-        setViewMode("day");
-    };
-
-    const handleYearSelect = (year: number) => {
-        const newDate = new Date(year, visibleDate.getMonth(), 1);
-        setVisibleDate(newDate);
-        setViewMode("month");
-    };
-
-    const navigateMonth = (direction: number) => {
-        const newDate = new Date(visibleDate.getFullYear(), visibleDate.getMonth() + direction, 1);
-        setVisibleDate(newDate);
-    };
-
-    const getDaysInMonth = (date: Date) => {
-        const year = date.getFullYear();
-        const month = date.getMonth();
-        const firstDay = new Date(year, month, 1);
-        const lastDay = new Date(year, month + 1, 0);
-        const daysInMonth = lastDay.getDate();
-        const startingDayOfWeek = firstDay.getDay();
-
-        const days = [];
-        let minimumDate: Date | null = null;
-        if (minDate) {
-            minimumDate = new Date(minDate);
-            minimumDate.setHours(0, 0, 0, 0);
-        }
-
-        const prevMonth = new Date(year, month - 1, 0);
-        for (let i = startingDayOfWeek - 1; i >= 0; i--) {
-            const dayDate = new Date(year, month - 1, prevMonth.getDate() - i);
-            dayDate.setHours(0, 0, 0, 0);
-            days.push({
-                date: dayDate,
-                isCurrentMonth: false,
-                isToday: false,
-                isSelected: false,
-                isPast: minimumDate ? dayDate < minimumDate : false
-            });
-        }
-
-        for (let day = 1; day <= daysInMonth; day++) {
-            const currentDate = new Date(year, month, day);
-            currentDate.setHours(0, 0, 0, 0);
-            const isToday = new Date().toDateString() === currentDate.toDateString();
-            const isSelected = date && currentDate.toDateString() === date.toDateString();
-            const isPast = minimumDate ? currentDate < minimumDate : false;
-
-            const isBlocked = blockedDates?.some(blockedDate => {
-                const blocked = new Date(blockedDate);
-                blocked.setHours(0, 0, 0, 0);
-                return blocked.getTime() === currentDate.getTime();
-            });
-
-            days.push({
-                date: currentDate,
-                isCurrentMonth: true,
-                isToday,
-                isSelected,
-                isPast: isPast || isBlocked
-            });
-        }
-
-        return days;
-    };
-
-    return (
-        <Popover open={isOpen} onOpenChange={setIsOpen}>
-            <PopoverTrigger asChild>
-                <Button
-                    variant={"outline"}
-                    className={cn(
-                        "w-full justify-start text-left font-normal h-10 bg-background border-input",
-                        !date && "text-muted-foreground"
-                    )}
-                    disabled={disabled}
-                >
-                    <CalendarIcon className="mr-2 h-4 w-4" />
-                    {formatDisplayDate(date)}
-                </Button>
-            </PopoverTrigger>
-            <PopoverContent className="w-auto p-0" align="start">
-                <div className="p-3 bg-popover text-popover-foreground">
-                    <div className="flex items-center justify-between mb-4">
-                        <div className="flex gap-1">
-                            <Button
-                                variant="ghost"
-                                size="icon"
-                                className="h-7 w-7"
-                                onClick={() => viewMode === "day" ? navigateMonth(-1) : setVisibleDate(new Date(visibleDate.getFullYear() - (viewMode === "year" ? 12 : 1), visibleDate.getMonth(), 1))}
-                            >
-                                <ChevronLeft className="h-4 w-4" />
-                            </Button>
-                        </div>
-
-                        <div className="flex gap-2">
-                            <Button
-                                variant="ghost"
-                                size="sm"
-                                className="font-semibold px-2 h-7"
-                                onClick={() => setViewMode(viewMode === "month" ? "day" : "month")}
-                            >
-                                {monthNames[visibleDate.getMonth()]}
-                            </Button>
-                            <Button
-                                variant="ghost"
-                                size="sm"
-                                className="font-semibold px-2 h-7"
-                                onClick={() => setViewMode(viewMode === "year" ? "day" : "year")}
-                            >
-                                {visibleDate.getFullYear()}
-                            </Button>
-                        </div>
-
-                        <div className="flex gap-1">
-                            <Button
-                                variant="ghost"
-                                size="icon"
-                                className="h-7 w-7"
-                                onClick={() => viewMode === "day" ? navigateMonth(1) : setVisibleDate(new Date(visibleDate.getFullYear() + (viewMode === "year" ? 12 : 1), visibleDate.getMonth(), 1))}
-                            >
-                                <ChevronRight className="h-4 w-4" />
-                            </Button>
-                        </div>
-                    </div>
-
-                    {viewMode === "day" && (
-                        <>
-                            <div className="grid grid-cols-7 gap-1 mb-2">
-                                {["Su", "Mo", "Tu", "We", "Th", "Fr", "Sa"].map((day) => (
-                                    <div key={day} className="text-center text-[10px] font-bold text-muted-foreground uppercase py-1">
-                                        {day}
-                                    </div>
-                                ))}
-                            </div>
-                            <div className="grid grid-cols-7 gap-1">
-                                {getDaysInMonth(visibleDate).map((day, idx) => (
-                                    <Button
-                                        key={idx}
-                                        variant="ghost"
-                                        size="sm"
-                                        className={cn(
-                                            "h-8 w-8 p-0 font-normal",
-                                            !day.isCurrentMonth && "text-muted-foreground opacity-50",
-                                            day.isToday && "bg-accent text-accent-foreground",
-                                            day.isSelected && "bg-primary text-primary-foreground hover:bg-primary hover:text-primary-foreground",
-                                            day.isPast && "text-muted-foreground opacity-20 pointer-events-none"
-                                        )}
-                                        onClick={() => handleDateSelect(day.date)}
-                                        disabled={day.isPast}
-                                    >
-                                        {day.date.getDate()}
-                                    </Button>
-                                ))}
-                            </div>
-                        </>
-                    )}
-
-                    {viewMode === "month" && (
-                        <div className="grid grid-cols-3 gap-2 p-2">
-                            {monthNamesShort.map((month, idx) => (
-                                <Button
-                                    key={month}
-                                    variant="ghost"
-                                    size="sm"
-                                    className={cn(
-                                        "h-9 w-full font-normal",
-                                        visibleDate.getMonth() === idx && "bg-accent text-accent-foreground"
-                                    )}
-                                    onClick={() => handleMonthSelect(idx)}
-                                >
-                                    {month}
-                                </Button>
-                            ))}
-                        </div>
-                    )}
-
-                    {viewMode === "year" && (
-                        <div className="grid grid-cols-3 gap-2 p-2">
-                            {Array.from({ length: 12 }, (_, i) => visibleDate.getFullYear() - 5 + i).map((year) => (
-                                <Button
-                                    key={year}
-                                    variant="ghost"
-                                    size="sm"
-                                    className={cn(
-                                        "h-9 w-full font-normal",
-                                        visibleDate.getFullYear() === year && "bg-accent text-accent-foreground"
-                                    )}
-                                    onClick={() => handleYearSelect(year)}
-                                >
-                                    {year}
-                                </Button>
-                            ))}
-                        </div>
-                    )}
-                </div>
-            </PopoverContent>
-        </Popover>
-    );
-}
 
 function getPOStatusBadge(status: POStatus) {
     switch (status) {
@@ -369,6 +117,7 @@ export default function GRN() {
     const [pos, setPos] = useState<POData[]>([]);
     const [searchTerm, setSearchTerm] = useState("");
     const [statusFilter, setStatusFilter] = useState<string>("Submitted PO");
+    const [warehouseFilter, setWarehouseFilter] = useState<string>("all");
     const [dateFilter, setDateFilter] = useState<Date | undefined>(undefined);
     const [currentPage, setCurrentPage] = useState(1);
     // Pagination state - using DataTablePagination component
@@ -411,7 +160,8 @@ export default function GRN() {
     const filteredPOs = pos.filter(po => {
         const matchesSearch = po.poNumber.toLowerCase().includes(searchTerm.toLowerCase()) ||
             po.vendorName.toLowerCase().includes(searchTerm.toLowerCase());
-        const matchesStatus = statusFilter === "All" || po.status === statusFilter;
+        const matchesStatus = statusFilter === "all" || po.status === statusFilter;
+        const matchesWarehouse = warehouseFilter === "all" || po.warehouseName === warehouseFilter;
 
         let matchesDate = true;
         if (dateFilter) {
@@ -423,7 +173,7 @@ export default function GRN() {
         }
 
         const matchesDraft = po.status !== "Draft PO";
-        return matchesSearch && matchesStatus && matchesDate && matchesDraft;
+        return matchesSearch && matchesStatus && matchesWarehouse && matchesDate && matchesDraft;
     });
 
     const paginatedPOs = filteredPOs.slice((currentPage - 1) * itemsPerPage, currentPage * itemsPerPage);
@@ -439,7 +189,7 @@ export default function GRN() {
     // Reset to page 1 when filters change
     useEffect(() => {
         setCurrentPage(1);
-    }, [searchTerm, statusFilter, dateFilter]);
+    }, [searchTerm, statusFilter, warehouseFilter, dateFilter]);
 
     // Handlers
     const handleOpenPO = (po: POData, edit: boolean) => {
@@ -563,58 +313,37 @@ export default function GRN() {
             <h1 className="text-3xl font-bold tracking-tight">Goods Received Note</h1>
 
             <div className="flex flex-col gap-6">
-                <div className="flex flex-col sm:flex-row items-end gap-4 bg-card p-4 rounded-lg border shadow-sm">
-                    <div className="w-full sm:flex-1">
-                        <Label className="mb-1.5 block text-xs font-medium text-muted-foreground uppercase tracking-wider">Search</Label>
-                        <div className="relative">
-                            <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
-                            <Input
-                                placeholder="Search by PO Number or Vendor..."
-                                className="pl-9 h-10"
-                                value={searchTerm}
-                                onChange={(e) => setSearchTerm(e.target.value)}
-                            />
-                        </div>
-                    </div>
-
-                    <div className="w-full sm:w-48">
-                        <Label className="mb-1.5 block text-xs font-medium text-muted-foreground uppercase tracking-wider">Status</Label>
-                        <Select value={statusFilter} onValueChange={(v: any) => setStatusFilter(v)}>
-                            <SelectTrigger className="h-10">
-                                <SelectValue placeholder="Filter by Status" />
-                            </SelectTrigger>
-                            <SelectContent>
-                                <SelectItem value="All">All Statuses</SelectItem>
-                                <SelectItem value="Submitted PO">Submitted PO</SelectItem>
-                                <SelectItem value="Partially Completed PO">Partially Completed PO</SelectItem>
-                                <SelectItem value="Completed PO">Completed PO</SelectItem>
-                            </SelectContent>
-                        </Select>
-                    </div>
-
-                    <div className="w-full sm:w-48">
-                        <Label className="mb-1.5 block text-xs font-medium text-muted-foreground uppercase tracking-wider">Date</Label>
-                        <div className="flex gap-2">
-                            <div className="flex-1">
-                                <DatePicker
-                                    date={dateFilter}
-                                    setDate={setDateFilter}
-                                />
-                            </div>
-                            {dateFilter && (
-                                <Button
-                                    variant="ghost"
-                                    size="icon"
-                                    onClick={() => setDateFilter(undefined)}
-                                    className="h-10 w-10 shrink-0"
-                                    title="Clear date filter"
-                                >
-                                    <X className="h-4 w-4" />
-                                </Button>
-                            )}
-                        </div>
-                    </div>
-                </div>
+                <AppListToolbar
+                    search={{
+                        value: searchTerm,
+                        onChange: setSearchTerm,
+                        placeholder: "Search by PO Number or Vendor..."
+                    }}
+                    filters={[
+                        {
+                            type: 'select',
+                            label: 'Status',
+                            value: statusFilter,
+                            options: [{ label: "All Status", value: "all" }, "Submitted PO", "Partially Completed PO", "Completed PO"],
+                            onChange: (val) => setStatusFilter(val),
+                            searchable: true
+                        },
+                        {
+                            type: 'select',
+                            label: 'Warehouse',
+                            value: warehouseFilter,
+                            options: [{ label: "All Warehouses", value: "all" }, ...mockWarehouses.map(wh => wh.name)],
+                            onChange: (val) => setWarehouseFilter(val),
+                            searchable: true
+                        },
+                        {
+                            type: 'date',
+                            label: 'Date',
+                            value: dateFilter,
+                            onChange: setDateFilter
+                        }
+                    ]}
+                />
 
                 <Card>
                     <CardContent className="pt-6">
@@ -628,7 +357,7 @@ export default function GRN() {
                                         <TableHead className="font-semibold text-xs uppercase tracking-wider">Location</TableHead>
                                         <TableHead className="font-semibold text-xs uppercase tracking-wider">Warehouse</TableHead>
                                         <TableHead className="font-semibold text-xs uppercase tracking-wider text-center">Status</TableHead>
-                                        <TableHead className="text-right font-semibold text-xs uppercase tracking-wider pr-6">Actions</TableHead>
+                                        <TableHead className="text-center w-[100px]">Actions</TableHead>
                                     </TableRow>
                                 </TableHeader>
                                 <TableBody>
@@ -647,29 +376,11 @@ export default function GRN() {
                                                 <TableCell className="py-4 text-sm font-medium text-slate-600">{po.location}</TableCell>
                                                 <TableCell className="py-4 text-sm font-medium text-slate-600">{po.warehouseName}</TableCell>
                                                 <TableCell className="py-4 text-center">{getPOStatusBadge(po.status)}</TableCell>
-                                                <TableCell className="py-4 text-right pr-6">
-                                                    <div className="flex justify-end items-center gap-1">
-                                                        <Button
-                                                            variant="ghost"
-                                                            size="icon"
-                                                            className="h-8 w-8 text-muted-foreground hover:text-primary transition-colors"
-                                                            onClick={() => handleOpenPO(po, false)}
-                                                            title="View"
-                                                        >
-                                                            <Eye className="h-4 w-4" />
-                                                        </Button>
-                                                        {po.status !== "Completed PO" && (
-                                                            <Button
-                                                                variant="ghost"
-                                                                size="icon"
-                                                                className="h-8 w-8 text-muted-foreground hover:text-emerald-600 transition-colors"
-                                                                onClick={() => handleOpenPO(po, true)}
-                                                                title="Edit"
-                                                            >
-                                                                <Edit className="h-4 w-4" />
-                                                            </Button>
-                                                        )}
-                                                    </div>
+                                                <TableCell className="py-4 text-center">
+                                                    <TableActionButtons
+                                                        onView={() => handleOpenPO(po, false)}
+                                                        onEdit={po.status !== "Completed PO" ? () => handleOpenPO(po, true) : undefined}
+                                                    />
                                                 </TableCell>
                                             </TableRow>
                                         ))
@@ -873,7 +584,7 @@ export default function GRN() {
                                                     <TableHead className="font-bold text-slate-500 py-3 uppercase text-[10px] tracking-wider">Date</TableHead>
                                                     <TableHead className="font-bold text-slate-500 py-3 uppercase text-[10px] tracking-wider">Document</TableHead>
                                                     <TableHead className="font-bold text-slate-500 py-3 uppercase text-[10px] tracking-wider">Note</TableHead>
-                                                    <TableHead className="font-bold text-slate-500 py-3 uppercase text-[10px] tracking-wider text-right pr-6">Action</TableHead>
+                                                    <TableHead className="font-bold text-slate-500 py-3 text-[10px] tracking-wider text-center">Actions</TableHead>
                                                 </TableRow>
                                             </TableHeader>
                                             <TableBody>

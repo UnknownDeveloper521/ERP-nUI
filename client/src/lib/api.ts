@@ -1,5 +1,5 @@
 // API client for ERP system
-import { getAccessToken } from './supabase';
+import { getAccessToken } from './customAuth';
 
 const API_BASE = `${import.meta.env.VITE_BACKEND_URL}/api`;
 
