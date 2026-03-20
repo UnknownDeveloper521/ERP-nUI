@@ -113,6 +113,24 @@ const probationPeriodOptions: Array<{ value: string; label: string }> = [
 ];
 const genderOptions: string[] = ["Male", "Female", "Other"];
 
+export const globalSafeParseDate = (dateStr: any) => {
+    if (!dateStr) return undefined;
+    if (typeof dateStr === 'number' || (!isNaN(Number(dateStr)) && Number(dateStr) > 25000 && Number(dateStr) < 70000)) {
+        return new Date((Number(dateStr) - 25569) * 86400 * 1000);
+    }
+    const d = new Date(dateStr);
+    if (!isNaN(d.getTime())) return d;
+    try {
+        const formats = ['ddMMyyyy', 'dd-MM-yyyy', 'dd/MM/yyyy', 'd-M-yyyy', 'd/M/yyyy', 'MM/dd/yyyy', 'M/d/yyyy', 'yyyy/MM/dd'];
+        const str = dateStr.toString().trim();
+        for (const fmt of formats) {
+            const parsedDate = parse(str, fmt, new Date());
+            if (!isNaN(parsedDate.getTime())) return parsedDate;
+        }
+    } catch (e) {}
+    return undefined;
+};
+
 // --- Mock Data for System Access ---
 // Synced with masterMockData.ts
 const initialWorkCenters = mockWorkCenters.map(wc => ({ id: wc.id, name: wc.name }));
@@ -130,27 +148,38 @@ export default function CoreHR() {
     // ⚠️ SAFE GUARD: Added ONE mock employee to prevent runtime crashes
     // This ensures the employee list never crashes when empty
     // ============================================================================
-    const [employees, setEmployees] = useState<any[]>([
-        {
-            id: "emp-001",
-            employeeId: "EMP001",
-            firstName: "John",
-            lastName: "Doe",
-            email: "john.doe@company.com",
-            phone: "+91 9876543210",
-            departmentId: "dept-001",
-            designation: "Software Engineer",
-            status: "active",
-            dateOfJoining: "15-01-2025",
-            type: "Full Time",
-            address: "123 Main Street, Mumbai",
-            postalCode: "400001",
-            dateOfBirth: "15-05-1995",
-            gender: "Male",
-            employmentType: "Full Time",
-            reportingTo: "Manager"
+    const [employees, setEmployees] = useState<any[]>(() => {
+        const saved = sessionStorage.getItem('hrms_employees_data');
+        if (saved) {
+            try { return JSON.parse(saved); } catch (e) { console.error('Error parsing saved employees', e); }
         }
-    ]);
+        return [
+            {
+                id: "emp-001",
+                employeeId: "EMP001",
+                firstName: "John",
+                lastName: "Doe",
+                email: "john.doe@company.com",
+                phone: "+91 9876543210",
+                departmentId: "dept-001",
+                designation: "Software Engineer",
+                status: "active",
+                dateOfJoining: "15-01-2025",
+                type: "Full Time",
+                address: "123 Main Street, Mumbai",
+                postalCode: "400001",
+                dateOfBirth: "15-05-1995",
+                gender: "Male",
+                employmentType: "Full Time",
+                reportingTo: "Manager",
+                documents: []
+            }
+        ];
+    });
+
+    useEffect(() => {
+        sessionStorage.setItem('hrms_employees_data', JSON.stringify(employees));
+    }, [employees]);
 
     // ============================================================================
     // ⚠️ UNNECESSARY CODE - REMOVE BEFORE PRODUCTION
@@ -238,7 +267,8 @@ export default function CoreHR() {
                 dateOfBirth: payload.dateOfBirth || "",
                 gender: payload.gender || "Male",
                 employmentType: payload.employmentType || "Full Time",
-                reportingTo: payload.reportingTo || ""
+                reportingTo: payload.reportingTo || "",
+                documents: payload.documents || []
             };
 
             console.log('✅ New employee created:', newEmployee);
@@ -340,60 +370,19 @@ export default function CoreHR() {
                     formData.documents.length > 0 &&
                     formData.documents.some((doc: any) => doc.fileName && doc.fileUrl);
                 return hasUploadedDocuments && !formData.documentsHasValidationErrors;
+            case 'system':
+                if (formData.enableLoginAccess) {
+                    return !!(
+                        formData.username &&
+                        formData.password &&
+                        formData.selectedRoles &&
+                        formData.selectedRoles.length > 0
+                    );
+                }
+                return true;
             default:
                 return true;
         }
-    };
-
-    // Validation function to check if ALL tabs' required fields are filled (for Save Employee button)
-    const areAllTabsValid = (): boolean => {
-        // Personal Details validation
-        const isPersonalValid = !!(
-            formData.firstName &&
-            formData.lastName &&
-            formData.mobileNumber &&
-            formData.gender &&
-            formData.dateOfBirth
-        );
-
-        // Employment & Job Details validation
-        const isJobValid = !!(
-            formData.dateOfJoining &&
-            formData.departmentId &&
-            formData.designation &&
-            formData.employmentType &&
-            formData.employmentStatus &&
-            formData.reportingManager &&
-            formData.workLocation
-        ) && !formData.hasEmploymentValidationErrors;
-
-        // Documents validation - OPTIONAL (employee can be saved without documents)
-        // Only check for validation errors if documents exist
-        const isDocsValid = !formData.documentsHasValidationErrors;
-
-        // System Access validation - ONLY if login access is enabled
-        let isSystemValid = true;
-        if (formData.enableLoginAccess) {
-            isSystemValid = !!(
-                formData.username &&
-                formData.password &&
-                formData.selectedRoles &&
-                formData.selectedRoles.length > 0
-            );
-        }
-        // If login access is disabled, system tab is always valid (employee can be saved without login)
-
-        // Debug logging to help identify which tab is blocking Save Employee button
-        console.log('📋 Save Employee Button Validation:', {
-            isPersonalValid,
-            isJobValid,
-            isDocsValid,
-            isSystemValid,
-            enableLoginAccess: formData.enableLoginAccess,
-            allValid: isPersonalValid && isJobValid && isDocsValid && isSystemValid
-        });
-
-        return isPersonalValid && isJobValid && isDocsValid && isSystemValid;
     };
 
     const handleClear = () => {
@@ -1072,8 +1061,8 @@ export default function CoreHR() {
         const formatDate = (date: string | Date): string => {
             if (!date) return '';
             try {
-                const dateObj = typeof date === 'string' ? new Date(date) : date;
-                return isNaN(dateObj.getTime()) ? '' : format(dateObj, 'dd-MM-yyyy');
+                const dateObj = globalSafeParseDate(date);
+                return dateObj ? format(dateObj, 'dd-MM-yyyy') : '';
             } catch {
                 return '';
             }
@@ -1284,6 +1273,8 @@ export default function CoreHR() {
             const employee = employees.find((e: any) => e.id === editingId || e.employeeId === editingId);
 
             if (employee) {
+                const safeParseDate = globalSafeParseDate;
+
                 setFormData({
                     ...employee,
                     // Keep existing mappings for compatibility
@@ -1308,14 +1299,15 @@ export default function CoreHR() {
                     reportingManager: employee.reportingTo || employee.reportingManager || "",
                     workLocation: employee.workLocation || "Office",
                     shift: employee.shift || "",
-                    // Date conversions - parse DD-MM-YYYY format
-                    dateOfBirth: employee.dateOfBirth ? parse(employee.dateOfBirth, 'dd-MM-yyyy', new Date()) : undefined,
-                    dateOfJoining: employee.dateOfJoining ? parse(employee.dateOfJoining, 'dd-MM-yyyy', new Date()) : undefined,
-                    anniversaryDate: employee.anniversaryDate ? parse(employee.anniversaryDate, 'dd-MM-yyyy', new Date()) : undefined,
-                    exitDate: employee.exitDate ? parse(employee.exitDate, 'dd-MM-yyyy', new Date()) : undefined,
+                    // Date conversions - handle various formats safely
+                    dateOfBirth: safeParseDate(employee.dateOfBirth),
+                    dateOfJoining: safeParseDate(employee.dateOfJoining),
+                    anniversaryDate: safeParseDate(employee.anniversaryDate),
+                    exitDate: safeParseDate(employee.exitDate),
                     employmentStatus: employee.status || employee.employmentStatus || "Active",
                     gender: employee.gender || "Male",
                     employmentType: employee.employmentType || employee.type || "Full Time",
+                    documents: employee.documents || [],
                 });
             }
         }
@@ -1485,11 +1477,11 @@ export default function CoreHR() {
                 firstName: formData.firstName,
                 lastName: formData.lastName,
                 gender: formData.gender,
-                dateOfBirth: formData.dateOfBirth ? format(formData.dateOfBirth, "yyyy-MM-dd") : null,
+                dateOfBirth: (formData.dateOfBirth && !isNaN(new Date(formData.dateOfBirth).getTime())) ? format(new Date(formData.dateOfBirth), "yyyy-MM-dd") : null,
                 nationality: formData.nationality,
                 bloodGroup: formData.bloodGroup,
                 maritalStatus: formData.maritalStatus,
-                anniversaryDate: formData.anniversaryDate ? format(formData.anniversaryDate, "yyyy-MM-dd") : null,
+                anniversaryDate: (formData.anniversaryDate && !isNaN(new Date(formData.anniversaryDate).getTime())) ? format(new Date(formData.anniversaryDate), "yyyy-MM-dd") : null,
 
                 email: formData.personalEmail,
                 officialEmail: formData.officialEmail,
@@ -1503,71 +1495,22 @@ export default function CoreHR() {
                 postalCode: formData.pincode,
                 country: formData.country,
 
-                dateOfJoining: formData.dateOfJoining ? format(formData.dateOfJoining, "yyyy-MM-dd") : null,
+                dateOfJoining: (formData.dateOfJoining && !isNaN(new Date(formData.dateOfJoining).getTime())) ? format(new Date(formData.dateOfJoining), "yyyy-MM-dd") : null,
                 employmentType: formData.employmentType,
                 type: formData.employmentType,
                 status: formData.employmentStatus,
-                exitDate: formData.exitDate ? format(formData.exitDate, "yyyy-MM-dd") : null,
+                exitDate: (formData.exitDate && !isNaN(new Date(formData.exitDate).getTime())) ? format(new Date(formData.exitDate), "yyyy-MM-dd") : null,
 
                 departmentId: formData.departmentId,
                 designation: formData.designation,
                 grade: formData.grade,
                 reportingTo: formData.reportingManager,
                 workLocation: formData.workLocation,
-                shift: formData.shift
+                shift: formData.shift,
+                documents: formData.documents || []
             };
 
             if (viewMode === 'edit' && editingId) {
-                console.log('🔄 Updating existing employee with ID:', editingId);
-                await updateEmployeeMutation.mutateAsync({ id: editingId, data: payload });
-                toast({
-                    title: "Employee Updated",
-                    description: "Employee information updated successfully.",
-                    className: "bg-green-50 border-green-200 text-green-900"
-                });
-            } else if (viewMode === 'add') {
-                console.log('➕ Creating new employee (viewMode:', viewMode, ', editingId:', editingId, ')');
-                const newEmployee: any = await createEmployeeMutation.mutateAsync(payload);
-
-                // Create user account if login access is enabled
-                if (formData.enableLoginAccess && formData.username && formData.password && formData.selectedRoles && formData.selectedRoles.length > 0) {
-                    const savedUsers = localStorage.getItem("system_users");
-                    const users = savedUsers ? JSON.parse(savedUsers) : [];
-
-                    const newUser = {
-                        id: `user_${Date.now()}`,
-                        employeeId: newEmployee.id,
-                        username: formData.username,
-                        password: formData.password,
-                        roles: formData.selectedRoles, // Store as array
-                        createdAt: new Date().toISOString(),
-                        isActive: true
-                    };
-
-                    users.push(newUser);
-                    localStorage.setItem("system_users", JSON.stringify(users));
-
-                    toast({
-                        title: "User Account Created",
-                        description: `Login credentials created for ${formData.username}`,
-                        className: "bg-blue-50 border-blue-200 text-blue-900"
-                    });
-                }
-
-                toast({
-                    title: "Employee Created",
-                    description: "New employee added successfully.",
-                    className: "bg-green-50 border-green-200 text-green-900"
-                });
-
-                // Clear search and reset pagination to show new employee
-                setSearchTerm("");
-                setCurrentPage(1);
-
-                // Wait for state to update before navigation
-                await new Promise(resolve => setTimeout(resolve, 100));
-                console.log('🔍 After employee creation - Total employees:', employees.length);
-            } else if (viewMode === 'edit' && editingId) {
                 console.log('🔄 Updating existing employee with ID:', editingId);
                 await updateEmployeeMutation.mutateAsync({ id: editingId, data: payload });
 
@@ -1612,6 +1555,55 @@ export default function CoreHR() {
                     description: "Employee information updated successfully.",
                     className: "bg-green-50 border-green-200 text-green-900"
                 });
+
+                // Stay on the edit page and wait for updates
+                await new Promise(resolve => setTimeout(resolve, 200));
+                handleBackToList();
+            } else if (viewMode === 'add') {
+                console.log('➕ Creating new employee (viewMode:', viewMode, ', editingId:', editingId, ')');
+                const newEmployee: any = await createEmployeeMutation.mutateAsync(payload);
+
+                // Create user account if login access is enabled
+                if (formData.enableLoginAccess && formData.username && formData.password && formData.selectedRoles && formData.selectedRoles.length > 0) {
+                    const savedUsers = localStorage.getItem("system_users");
+                    const users = savedUsers ? JSON.parse(savedUsers) : [];
+
+                    const newUser = {
+                        id: `user_${Date.now()}`,
+                        employeeId: newEmployee.id,
+                        username: formData.username,
+                        password: formData.password,
+                        roles: formData.selectedRoles, // Store as array
+                        createdAt: new Date().toISOString(),
+                        isActive: true
+                    };
+
+                    users.push(newUser);
+                    localStorage.setItem("system_users", JSON.stringify(users));
+
+                    toast({
+                        title: "User Account Created",
+                        description: `Login credentials created for ${formData.username}`,
+                        className: "bg-blue-50 border-blue-200 text-blue-900"
+                    });
+                }
+
+                toast({
+                    title: "Employee Created",
+                    description: "New employee added successfully.",
+                    className: "bg-green-50 border-green-200 text-green-900"
+                });
+
+                // Clear search and reset pagination to show new employee
+                setSearchTerm("");
+                setCurrentPage(1);
+
+                // Wait for state to update before navigating to edit
+                await new Promise(resolve => setTimeout(resolve, 100));
+                console.log('🔍 After employee creation - Total employees:', employees.length);
+
+                setLocation(`/hrms/core-hr/employees/${newEmployee.id}`);
+                return; // Stay on the form by returning early
             } else {
                 console.log('⚠️ Unexpected state - viewMode:', viewMode, ', editingId:', editingId);
                 toast({
@@ -1621,10 +1613,6 @@ export default function CoreHR() {
                 });
                 return;
             }
-
-            // Wait a bit more before navigation to ensure state is fully updated
-            await new Promise(resolve => setTimeout(resolve, 200));
-            handleBackToList();
         } catch (error: any) {
             toast({
                 title: "Error",
@@ -1851,18 +1839,21 @@ export default function CoreHR() {
                             </TabsTrigger>
                             <TabsTrigger
                                 value="job"
+                                disabled={viewMode === 'add'}
                                 className="data-[state=active]:bg-transparent data-[state=active]:shadow-none data-[state=active]:border-primary data-[state=active]:text-primary px-4 py-2 text-sm font-medium border-b-2 border-transparent transition-colors rounded-none text-muted-foreground hover:text-foreground hover:border-muted-foreground/30"
                             >
                                 Employment & Job Details
                             </TabsTrigger>
                             <TabsTrigger
                                 value="docs"
+                                disabled={viewMode === 'add'}
                                 className="data-[state=active]:bg-transparent data-[state=active]:shadow-none data-[state=active]:border-primary data-[state=active]:text-primary px-4 py-2 text-sm font-medium border-b-2 border-transparent transition-colors rounded-none text-muted-foreground hover:text-foreground hover:border-muted-foreground/30"
                             >
                                 Documents
                             </TabsTrigger>
                             <TabsTrigger
                                 value="system"
+                                disabled={viewMode === 'add'}
                                 className="data-[state=active]:bg-transparent data-[state=active]:shadow-none data-[state=active]:border-primary data-[state=active]:text-primary px-4 py-2 text-sm font-medium border-b-2 border-transparent transition-colors rounded-none text-muted-foreground hover:text-foreground hover:border-muted-foreground/30"
                             >
                                 System Access
@@ -1880,7 +1871,19 @@ export default function CoreHR() {
                                     <EmploymentDetailsForm data={formData} updateData={setFormData} departments={departments} employees={employees} readOnly={viewMode === 'edit' && !isEditing} />
                                 </TabsContent>
                                 <TabsContent value="docs" className="m-0 focus-visible:ring-0">
-                                    <DocumentsForm data={formData} updateData={setFormData} readOnly={viewMode === 'edit' && !isEditing} />
+                                    <DocumentsForm 
+                                        data={formData} 
+                                        updateData={setFormData} 
+                                        readOnly={viewMode === 'edit' && !isEditing}
+                                        onAutoSave={(newDocs: any) => {
+                                            if (editingId) {
+                                                const payload = { ...formData, documents: newDocs };
+                                                updateEmployeeMutation.mutateAsync({ id: editingId, data: payload })
+                                                    .then(() => toast({ title: "Documents Saved", description: "Changes saved to employee record automatically.", className: "bg-green-50 border-green-200 text-green-900", duration: 2500 }))
+                                                    .catch(() => toast({ title: "Save Error", description: "Failed to persist document changes.", variant: "destructive" }));
+                                            }
+                                        }}
+                                    />
                                 </TabsContent>
                                 <TabsContent value="system" className="m-0 focus-visible:ring-0">
                                     <SystemAccessForm data={formData} updateData={setFormData} readOnly={viewMode === 'edit' && !isEditing} />
@@ -1890,42 +1893,26 @@ export default function CoreHR() {
 
                         {(isEditing || viewMode === 'add') && (
                             <div className="p-4 border-t bg-muted/20 flex justify-end gap-3 shrink-0">
-                                <Button
-                                    variant="outline"
-                                    onClick={handleClear}
-                                    disabled={activeTab === 'docs'}
-                                >
-                                    Clear
-                                </Button>
-
-                                {/* Save & Next button - show for Personal and Employment tabs only */}
-                                {(activeTab === 'personal' || activeTab === 'job') && (
+                                {activeTab !== 'docs' && (
                                     <Button
-                                        onClick={() => handleSave(false)}
-                                        disabled={!isCurrentTabValid()}
-                                        className={`${isCurrentTabValid()
-                                            ? "bg-blue-600 hover:bg-blue-700 text-white"
-                                            : "bg-gray-300 text-gray-500 cursor-not-allowed"
-                                            }`}
+                                        variant="outline"
+                                        onClick={handleClear}
                                     >
-                                        Save & Next
+                                        Clear
                                     </Button>
                                 )}
 
-                                {/* Save & Next button for Documents tab - navigates to System Access */}
-                                {activeTab === 'docs' && (
+                                {/* Save button - show for Personal and Employment tabs only */}
+                                {(activeTab === 'personal' || activeTab === 'job') && (
                                     <Button
-                                        onClick={() => {
-                                            // Save document data and navigate to System Access tab
-                                            setActiveTab('system');
-                                        }}
+                                        onClick={() => handleSave(true)}
                                         disabled={!isCurrentTabValid()}
                                         className={`${isCurrentTabValid()
                                             ? "bg-blue-600 hover:bg-blue-700 text-white"
                                             : "bg-gray-300 text-gray-500 cursor-not-allowed"
                                             }`}
                                     >
-                                        Save & Next
+                                        Save
                                     </Button>
                                 )}
 
@@ -1933,13 +1920,13 @@ export default function CoreHR() {
                                 {activeTab === 'system' && (
                                     <Button
                                         onClick={() => handleSave(true)}
-                                        disabled={!areAllTabsValid()}
-                                        className={`${areAllTabsValid()
+                                        disabled={!isCurrentTabValid()}
+                                        className={`${isCurrentTabValid()
                                             ? "bg-blue-600 hover:bg-blue-700 text-white"
                                             : "bg-gray-300 text-gray-500 cursor-not-allowed"
                                             }`}
                                     >
-                                        {viewMode === 'edit' ? 'Update Info' : 'Save Employee'}
+                                        Save
                                     </Button>
                                 )}
                             </div>
@@ -2310,11 +2297,17 @@ function PersonalDetailsForm({ data, updateData, readOnly }: any) {
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                     <div className="space-y-2">
                         <Label>Mobile Number <span className="text-red-500">*</span></Label>
-                        <Input type="tel" value={data.mobileNumber} onChange={(e) => handleChange("mobileNumber", e.target.value)} readOnly={readOnly} className="cursor-text" />
+                        <Input type="tel" value={data.mobileNumber} onChange={(e) => {
+                            const numericVal = e.target.value.replace(/[^0-9+]/g, '');
+                            handleChange("mobileNumber", numericVal);
+                        }} readOnly={readOnly} className="cursor-text" />
                     </div>
                     <div className="space-y-2">
                         <Label>Alternate Mobile</Label>
-                        <Input type="tel" value={data.alternateMobile} onChange={(e) => handleChange("alternateMobile", e.target.value)} readOnly={readOnly} className="cursor-text" />
+                        <Input type="tel" value={data.alternateMobile} onChange={(e) => {
+                            const numericVal = e.target.value.replace(/[^0-9+]/g, '');
+                            handleChange("alternateMobile", numericVal);
+                        }} readOnly={readOnly} className="cursor-text" />
                     </div>
                     <div className="space-y-2">
                         <Label>Personal Email</Label>
@@ -2652,7 +2645,7 @@ function EmploymentDetailsForm({ data, updateData, departments, employees, readO
     )
 }
 
-function DocumentsForm({ data, updateData, readOnly }: any) {
+function DocumentsForm({ data, updateData, readOnly, onAutoSave }: any) {
     const { toast } = useToast();
     const [docs, setDocs] = useState<any[]>(data.documents || []);
     const [validationErrors, setValidationErrors] = useState<{ [key: string]: string }>({});
@@ -2756,7 +2749,11 @@ function DocumentsForm({ data, updateData, readOnly }: any) {
             fileUrl: newDoc.fileUrl
         };
 
-        setDocs(prev => [...prev, docToAdd]);
+        setDocs(prev => {
+            const next = [...prev, docToAdd];
+            if (onAutoSave) onAutoSave(next);
+            return next;
+        });
 
         // Reset form
         setNewDoc({ type: "", name: "", file: null, fileName: "", fileUrl: "" });
@@ -2788,7 +2785,11 @@ function DocumentsForm({ data, updateData, readOnly }: any) {
 
     const handleConfirmDelete = () => {
         if (docToDelete) {
-            setDocs(docs.filter(d => d.id !== docToDelete.id));
+            setDocs(prev => {
+                const next = prev.filter(d => d.id !== docToDelete.id);
+                if (onAutoSave) onAutoSave(next);
+                return next;
+            });
             // Clear selection if deleted document was selected
             setSelectedDocumentIds(prev => prev.filter(id => id !== docToDelete.id));
             toast({
@@ -2853,7 +2854,7 @@ function DocumentsForm({ data, updateData, readOnly }: any) {
 
     // Export all documents individually with better download handling
     const handleExportDocuments = async () => {
-        const uploadedDocs = docs.filter(doc => doc.fileName && doc.fileUrl);
+        const uploadedDocs = docs.filter(doc => doc.fileName && doc.fileUrl && selectedDocumentIds.includes(doc.id));
 
         if (uploadedDocs.length === 0) {
             toast({
@@ -2977,7 +2978,7 @@ function DocumentsForm({ data, updateData, readOnly }: any) {
                 <h4 className="font-semibold text-primary">Employee Documents</h4>
                 <div className="flex gap-2">
                     {!readOnly && hasUploadedDocs && (
-                        <Button size="sm" variant="outline" onClick={handleExportDocuments}>
+                        <Button size="sm" variant="outline" onClick={handleExportDocuments} disabled={selectedDocumentIds.length === 0}>
                             <FileSpreadsheet className="h-4 w-4 mr-2" /> Export
                         </Button>
                     )}

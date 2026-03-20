@@ -20,7 +20,6 @@ import {
     Check,
     ChevronsUpDown
 } from "lucide-react";
-import { AppListToolbar } from "@/components/shared/AppListToolbar";
 import { TableActionButtons } from "@/components/shared/TableActionButtons";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -67,6 +66,7 @@ import {
 } from "@/components/ui/dialog";
 import { cn } from "@/lib/utils";
 import { useToast } from "@/hooks/use-toast";
+import { AppListToolbar } from "@/components/shared/AppListToolbar";
 import { mockWarehouses, mockLocations } from "@/lib/masterMockData";
 // Updated: Import mock sales order service
 import {
@@ -881,7 +881,7 @@ const SalesOrder = () => {
         }
 
         // Changed: Validation - All items must have orderedQty > 0
-        const invalidItems = activeSO.items.filter(item => item.orderedQty <= 0);
+        const invalidItems = activeSO.items.filter(item => Number(item.orderedQty) <= 0);
         if (invalidItems.length > 0) {
             toast({
                 title: "Validation Error",
@@ -943,7 +943,17 @@ const SalesOrder = () => {
         });
     };
 
-    // Process to Invoice removed, as this logic is now handled in Invoicing.tsx
+    // Process to Invoice (Invoice Pending → Dispatch Pending) - removed localStorage - using mock store
+    const handleProcessToInvoice = () => {
+        if (!activeSO || activeSO.status !== "Invoice Pending") return;
+        changeSOStatus(activeSO.id, "Dispatch Pending");
+        setSalesOrders(getSalesOrders()); // Refresh list
+        setIsSODialogOpen(false);
+        toast({
+            title: "Processed to Invoice",
+            description: `Sales Order ${activeSO.soNumber} is now in Dispatch Pending status.`
+        });
+    };
 
     // Close SO (only allowed when status = Dispatched and payment completed)
     const handleCloseSO = (so?: SOData) => {
@@ -1127,8 +1137,8 @@ const SalesOrder = () => {
                                         <td class="text-right">${index + 1}</td>
                                         <td class="font-bold">${item.item}</td>
                                         <td class="text-right">${item.qty}</td>
-                                        <td class="text-right">${getCurrencySymbol(quotation.currency)} ${item.rate.toFixed(2)}</td>
-                                        <td class="text-right font-bold">${getCurrencySymbol(quotation.currency)} ${item.amount.toFixed(2)}</td>
+                                        <td class="text-right">${getCurrencySymbol(quotation.currency)} ${Number().toFixed(2)}</td>
+                                        <td class="text-right font-bold">${getCurrencySymbol(quotation.currency)} ${Number().toFixed(2)}</td>
                                     </tr>
                                 `).join("")}
                             </tbody>
@@ -1335,8 +1345,8 @@ const SalesOrder = () => {
                                         <td class="text-center">${index + 1}</td>
                                         <td class="font-bold">${item.itemName}</td>
                                         <td class="text-right">${item.orderedQty}</td>
-                                        <td class="text-right">USh ${item.rate.toFixed(2)}</td>
-                                        <td class="text-right font-bold" style="color: #1e40af;">USh ${item.price.toFixed(2)}</td>
+                                        <td class="text-right">USh ${Number(item.rate).toFixed(2)}</td>
+                                        <td class="text-right font-bold" style="color: #1e40af;">USh ${Number(item.price).toFixed(2)}</td>
                                     </tr>
                                 `).join("")}
                             </tbody>
@@ -1997,8 +2007,8 @@ const SalesOrder = () => {
                                             <td>${index + 1}</td>
                                             <td><strong>${item.itemName}</strong></td>
                                             <td class="text-right">${item.orderedQty}</td>
-                                            <td class="text-right">${getCurrencySymbol(so.currency)} ${item.rate.toFixed(2)}</td>
-                                            <td class="text-right"><strong>${getCurrencySymbol(so.currency)} ${item.price.toFixed(2)}</strong></td>
+                                            <td class="text-right">${getCurrencySymbol(so.currency)} ${Number(item.rate).toFixed(2)}</td>
+                                            <td class="text-right"><strong>${getCurrencySymbol(so.currency)} ${Number(item.price).toFixed(2)}</strong></td>
                                             ${so.status === 'Dispatched' ? `<td class="text-right" style="color: #2563eb; font-weight: 600;"><strong>${item.dispatchedQty}</strong></td>` : ''}
                                         </tr>
                                     `).join('')}
@@ -2125,7 +2135,6 @@ const SalesOrder = () => {
         <div className="h-full flex flex-col gap-6 animate-in fade-in duration-500">
             <h1 className="text-3xl font-bold tracking-tight">Sales Orders</h1>
 
-            {/* Filter Section - Matching WarrantyService layout */}
             <AppListToolbar
                 search={{
                     value: searchTerm,
@@ -2137,8 +2146,8 @@ const SalesOrder = () => {
                 }}
                 filters={[
                     {
-                        type: 'date',
-                        label: 'Date',
+                        type: "date",
+                        label: "Filter By Date",
                         value: filterDate,
                         onChange: (date) => {
                             setFilterDate(date);
@@ -2147,22 +2156,29 @@ const SalesOrder = () => {
                         showClear: true
                     },
                     {
-                        type: 'select',
-                        label: 'Status',
+                        type: "select",
+                        label: "Filter By Status",
                         value: filterStatus,
-                        options: [{ label: "All Status", value: "all" }, "Draft", "Invoice Pending", "Dispatch Pending", "Dispatched", "Closed SO"],
                         onChange: (val) => {
                             setFilterStatus(val);
                             setCurrentPage(1);
                         },
-                        searchable: true
+                        searchable: true,
+                        options: [
+                            { label: "All Status", value: "all" },
+                            { label: "Draft", value: "Draft" },
+                            { label: "Invoice Pending", value: "Invoice Pending" },
+                            { label: "Dispatch Pending", value: "Dispatch Pending" },
+                            { label: "Dispatched", value: "Dispatched" },
+                            { label: "Closed SO", value: "Closed SO" }
+                        ]
                     }
                 ]}
                 actions={[
                     {
                         label: "New Sales Order",
-                        icon: <Plus className="h-4 w-4" />,
-                        onClick: () => handleOpenSO(null, true)
+                        onClick: () => handleOpenSO(null, true),
+                        icon: <Plus className="h-4 w-4" />
                     }
                 ]}
             />
@@ -2852,25 +2868,24 @@ const SalesOrder = () => {
                                                         {/* Ordered Qty editable in Draft only - Changed: Auto-calculate price */}
                                                         {activeSO.status === "Draft" ? (
                                                             <Input
-                                                                type="number"
+                                                                type="text"
+                                                                inputMode="decimal"
                                                                 value={item.orderedQty}
                                                                 onChange={(e) => {
-                                                                    // Changed: Validation - Max 6 digits, must be > 0
-                                                                    let val = parseFloat(e.target.value) || 0;
-                                                                    if (val < 0) val = 0;
-                                                                    if (val > 999999) val = 999999;
+                                                                    const value = e.target.value.replace(/[^0-9.]/g, '');
+                                                                    const parts = value.split('.');
+                                                                    const cleanValue = parts[0].slice(0, 6) + (parts.length > 1 ? '.' + parts[1].slice(0, 2) : '');
+                                                                    
                                                                     const updated = activeSO.items.map(i =>
                                                                         i.id === item.id ? {
                                                                             ...i,
-                                                                            orderedQty: val,
-                                                                            price: val * i.rate // Auto-calculate price
+                                                                            orderedQty: cleanValue,
+                                                                            price: (parseFloat(cleanValue) || 0) * (Number(i.rate) || 0)
                                                                         } : i
                                                                     );
                                                                     setActiveSO({ ...activeSO, items: updated });
                                                                 }}
                                                                 className="h-8 w-20 text-center"
-                                                                min="1"
-                                                                max="999999"
                                                             />
                                                         ) : (
                                                             <span className="font-bold text-primary">{item.orderedQty}</span>
@@ -2880,29 +2895,27 @@ const SalesOrder = () => {
                                                     <TableCell className="text-center">
                                                         {activeSO.status === "Draft" ? (
                                                             <Input
-                                                                type="number"
+                                                                type="text"
+                                                                inputMode="decimal"
                                                                 value={item.rate}
                                                                 onChange={(e) => {
-                                                                    // Changed: Validation - Max 8 digits with decimal, no negative values
-                                                                    let val = parseFloat(e.target.value) || 0;
-                                                                    if (val < 0) val = 0;
-                                                                    if (val > 99999999) val = 99999999;
+                                                                    const value = e.target.value.replace(/[^0-9.]/g, '');
+                                                                    const parts = value.split('.');
+                                                                    const cleanValue = parts[0].slice(0, 6) + (parts.length > 1 ? '.' + parts[1].slice(0, 2) : '');
+                                                                    
                                                                     const updated = activeSO.items.map(i =>
                                                                         i.id === item.id ? {
                                                                             ...i,
-                                                                            rate: val,
-                                                                            price: i.orderedQty * val // Auto-calculate price
+                                                                            rate: cleanValue,
+                                                                            price: (Number(i.orderedQty) || 0) * (parseFloat(cleanValue) || 0)
                                                                         } : i
                                                                     );
                                                                     setActiveSO({ ...activeSO, items: updated });
                                                                 }}
                                                                 className="h-8 w-24 text-center"
-                                                                min="0"
-                                                                max="99999999"
-                                                                step="0.01"
                                                             />
                                                         ) : (
-                                                            <span className="font-medium">${item.rate}</span>
+                                                            <span className="font-medium">{getCurrencySymbol(activeSO.currency)} {Number(item.rate).toFixed(2)}</span>
                                                         )}
                                                     </TableCell>
                                                     {/* Changed: Price column (auto-calculated, read-only) */}
@@ -3352,10 +3365,10 @@ const SalesOrder = () => {
                                                             {item.orderedQty}
                                                         </td>
                                                         <td className="text-sm text-slate-800 text-right py-3 px-4 border-b border-slate-100">
-                                                            {getCurrencySymbol(previewSO.currency)} {item.rate.toFixed(2)}
+                                                            {getCurrencySymbol(previewSO.currency)} {Number().toFixed(2)}
                                                         </td>
                                                         <td className="text-sm font-semibold text-slate-800 text-right py-3 px-4 border-b border-slate-100">
-                                                            {getCurrencySymbol(previewSO.currency)} {item.price.toFixed(2)}
+                                                            {getCurrencySymbol(previewSO.currency)} {Number().toFixed(2)}
                                                         </td>
                                                     </tr>
                                                 ))}
@@ -3599,10 +3612,10 @@ const SalesOrder = () => {
                                                             {item.orderedQty}
                                                         </td>
                                                         <td className="text-sm text-slate-800 text-right py-3 px-4 border-b border-slate-100">
-                                                            {getCurrencySymbol(dispatchPreviewSO.currency)} {item.rate.toFixed(2)}
+                                                            {getCurrencySymbol(dispatchPreviewSO.currency)} {Number().toFixed(2)}
                                                         </td>
                                                         <td className="text-sm font-semibold text-slate-800 text-right py-3 px-4 border-b border-slate-100">
-                                                            {getCurrencySymbol(dispatchPreviewSO.currency)} {item.price.toFixed(2)}
+                                                            {getCurrencySymbol(dispatchPreviewSO.currency)} {Number().toFixed(2)}
                                                         </td>
                                                     </tr>
                                                 ))}
@@ -3860,10 +3873,10 @@ const SalesOrder = () => {
                                                             {item.orderedQty}
                                                         </td>
                                                         <td className="text-sm text-slate-800 text-right py-3 px-4 border-b border-slate-100">
-                                                            {getCurrencySymbol(dispatchedPreviewSO.currency)} {item.rate.toFixed(2)}
+                                                            {getCurrencySymbol(dispatchedPreviewSO.currency)} {Number().toFixed(2)}
                                                         </td>
                                                         <td className="text-sm font-semibold text-slate-800 text-right py-3 px-4 border-b border-slate-100">
-                                                            {getCurrencySymbol(dispatchedPreviewSO.currency)} {item.price.toFixed(2)}
+                                                            {getCurrencySymbol(dispatchedPreviewSO.currency)} {Number().toFixed(2)}
                                                         </td>
                                                         <td className="text-sm font-semibold text-blue-600 text-right py-3 px-4 border-b border-slate-100">
                                                             {item.dispatchedQty}
@@ -4133,10 +4146,10 @@ const SalesOrder = () => {
                                                             {item.orderedQty}
                                                         </td>
                                                         <td className="text-sm text-slate-800 text-right py-3 px-4 border-b border-slate-100">
-                                                            {getCurrencySymbol(closedSOPreviewSO.currency)} {item.rate.toFixed(2)}
+                                                            {getCurrencySymbol(closedSOPreviewSO.currency)} {Number().toFixed(2)}
                                                         </td>
                                                         <td className="text-sm font-semibold text-slate-800 text-right py-3 px-4 border-b border-slate-100">
-                                                            {getCurrencySymbol(closedSOPreviewSO.currency)} {item.price.toFixed(2)}
+                                                            {getCurrencySymbol(closedSOPreviewSO.currency)} {Number().toFixed(2)}
                                                         </td>
                                                         <td className="text-sm font-semibold text-blue-600 text-right py-3 px-4 border-b border-slate-100">
                                                             {item.dispatchedQty}
@@ -4405,10 +4418,10 @@ const SalesOrder = () => {
                                                             {item.orderedQty}
                                                         </td>
                                                         <td className="text-sm text-slate-800 text-right py-3 px-4 border-b border-slate-100">
-                                                            {getCurrencySymbol(draftPreviewSO.currency)} {item.rate.toFixed(2)}
+                                                            {getCurrencySymbol(draftPreviewSO.currency)} {Number().toFixed(2)}
                                                         </td>
                                                         <td className="text-sm font-semibold text-slate-800 text-right py-3 px-4 border-b border-slate-100">
-                                                            {getCurrencySymbol(draftPreviewSO.currency)} {item.price.toFixed(2)}
+                                                            {getCurrencySymbol(draftPreviewSO.currency)} {Number().toFixed(2)}
                                                         </td>
                                                     </tr>
                                                 ))}
@@ -4613,8 +4626,8 @@ const SalesOrder = () => {
                                                 <TableCell className="text-center text-xs uppercase py-3">{item.uom}</TableCell>
                                                 <TableCell className="text-center font-medium py-3">{item.orderedQty}</TableCell>
                                                 <TableCell className="text-center font-bold text-green-600 py-3">{item.dispatchedQty}</TableCell>
-                                                <TableCell className="text-right py-3">${item.rate.toFixed(2)}</TableCell>
-                                                <TableCell className="text-right font-bold text-primary py-3">${item.price.toFixed(2)}</TableCell>
+                                                <TableCell className="text-right py-3">${Number().toFixed(2)}</TableCell>
+                                                <TableCell className="text-right font-bold text-primary py-3">${Number().toFixed(2)}</TableCell>
                                             </TableRow>
                                         ))}
                                     </TableBody>

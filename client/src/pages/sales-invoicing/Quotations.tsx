@@ -61,6 +61,7 @@ import { useToast } from "@/hooks/use-toast";
 import { cn } from "@/lib/utils";
 import { DataTablePagination } from "@/components/shared/DataTablePagination";
 import { AppListToolbar } from "@/components/shared/AppListToolbar";
+import { DatePicker as SharedDatePicker } from "@/components/shared/DatePicker";
 import React from "react";
 // Updated: Import mock quotation service instead of using localStorage
 import {
@@ -205,7 +206,9 @@ const getCurrencySymbol = (currency: string): string => {
 
 const calculateItemAmount = (item: QuotationItem): number => {
     try {
-        return (item.qty || 0) * (item.rate || 0);
+        const qty = parseFloat((item.qty || 0).toString());
+        const rate = parseFloat((item.rate || 0).toString());
+        return (isNaN(qty) ? 0 : qty) * (isNaN(rate) ? 0 : rate);
     } catch (error) {
         console.error("Error calculating item amount:", error);
         return 0;
@@ -927,13 +930,16 @@ export default function Quotations() {
             <AppListToolbar
                 search={{
                     value: searchTerm,
-                    onChange: setSearchTerm,
+                    onChange: (val) => {
+                        setSearchTerm(val);
+                        setCurrentPage(1);
+                    },
                     placeholder: "Search by Quotation No, Customer..."
                 }}
                 filters={[
                     {
-                        type: 'date',
-                        label: 'Date',
+                        type: "date",
+                        label: "Filter By Date",
                         value: filterDate,
                         onChange: (date) => {
                             setFilterDate(date);
@@ -942,22 +948,28 @@ export default function Quotations() {
                         showClear: true
                     },
                     {
-                        type: 'select',
-                        label: 'Status',
+                        type: "select",
+                        label: "Filter By Status",
                         value: filterStatus,
-                        options: [{ label: "All Status", value: "all" }, "Draft Quote", "Submitted Quote", "Expired Quotations", "Converted to SO"],
                         onChange: (val) => {
                             setFilterStatus(val);
                             setCurrentPage(1);
                         },
-                        searchable: true
+                        searchable: true,
+                        options: [
+                            { label: "All Status", value: "all" },
+                            { label: "Draft Quote", value: "Draft Quote" },
+                            { label: "Submitted Quote", value: "Submitted Quote" },
+                            { label: "Expired Quotations", value: "Expired Quotations" },
+                            { label: "Converted to SO", value: "Converted to SO" }
+                        ]
                     }
                 ]}
                 actions={[
                     {
                         label: "New Quotation",
-                        icon: <Plus className="h-4 w-4" />,
-                        onClick: () => { resetForm(); setIsFormModalOpen(true); }
+                        onClick: () => { resetForm(); setIsFormModalOpen(true); },
+                        icon: <Plus className="h-4 w-4" />
                     }
                 ]}
             />
@@ -1376,20 +1388,30 @@ export default function Quotations() {
                                                     </TableCell>
                                                     <TableCell className="text-center">
                                                         <Input
-                                                            type="number"
+                                                            type="text"
+                                                            inputMode="decimal"
                                                             className="h-8 w-20 text-center"
                                                             value={item.qty}
-                                                            onChange={(e) => handleItemChange(item.id, 'qty', parseFloat(e.target.value) || 0)}
-                                                            min="0"
+                                                            onChange={(e) => {
+                                                                const val = e.target.value;
+                                                                if (val === "" || (/^\d*\.?\d*$/.test(val) && val.replace(".", "").length <= 6)) {
+                                                                    handleItemChange(item.id, 'qty', val);
+                                                                }
+                                                            }}
                                                         />
                                                     </TableCell>
                                                     <TableCell className="text-center">
                                                         <Input
-                                                            type="number"
+                                                            type="text"
+                                                            inputMode="decimal"
                                                             className="h-8 w-24 text-center"
                                                             value={item.rate}
-                                                            onChange={(e) => handleItemChange(item.id, 'rate', parseFloat(e.target.value) || 0)}
-                                                            min="0"
+                                                            onChange={(e) => {
+                                                                const val = e.target.value;
+                                                                if (val === "" || (/^\d*\.?\d*$/.test(val) && val.replace(".", "").length <= 6)) {
+                                                                    handleItemChange(item.id, 'rate', val);
+                                                                }
+                                                            }}
                                                         />
                                                     </TableCell>
                                                     <TableCell className="text-center">
@@ -1759,7 +1781,7 @@ export default function Quotations() {
                                                             {item.qty}
                                                         </td>
                                                         <td className="text-sm text-gray-900 text-right py-3 px-4">
-                                                            {getCurrencySymbol(viewingQuotation.currency)} {item.rate.toFixed(2)}
+                                                            {getCurrencySymbol(viewingQuotation.currency)} {Number(item.rate).toFixed(2)}
                                                         </td>
                                                         <td className="text-sm font-semibold text-gray-900 text-right py-3 px-4">
                                                             {getCurrencySymbol(viewingQuotation.currency)} {item.amount.toFixed(2)}

@@ -1,5 +1,6 @@
 import { useState, useEffect } from "react";
-import { Card, CardContent, CardHeader } from "@/components/ui/card";
+import { useLocation, useRoute } from "wouter";
+import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -53,12 +54,25 @@ import {
     ChevronsUpDown,
     Calendar as CalendarIcon,
     ChevronDown,
-    X
+    X,
+    Play, Clock, CheckCircle2, AlertCircle
 } from "lucide-react";
 import { DataTablePagination } from "@/components/shared/DataTablePagination";
 import { TableActionButtons } from "@/components/shared/TableActionButtons";
-import { AppListToolbar, FilterField } from "@/components/shared/AppListToolbar";
 import { parse, isValid } from "date-fns";
+import { AppListToolbar } from "@/components/shared/AppListToolbar";
+import { SearchableSelect as SharedSearchableSelect } from "@/components/shared/SearchableSelect";
+import { DatePicker as SharedDatePicker } from "@/components/shared/DatePicker";
+import {
+    AlertDialog,
+    AlertDialogAction,
+    AlertDialogCancel,
+    AlertDialogContent,
+    AlertDialogDescription,
+    AlertDialogFooter,
+    AlertDialogHeader,
+    AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 
 
 // ============================================================================
@@ -173,90 +187,6 @@ const INITIAL_PLANS: DailyFGPlan[] = [
 ];
 
 // ============================================================================
-// SEARCHABLE SELECT COMPONENT
-// ============================================================================
-
-interface SearchableSelectProps {
-    label: string;
-    value?: string;
-    options: (FGItem | string)[];
-    onChange: (val: any) => void;
-    required?: boolean;
-    disabled?: boolean;
-}
-
-function LocalSearchableSelect({
-    label,
-    value,
-    options,
-    onChange,
-    required = false,
-    disabled = false,
-}: SearchableSelectProps) {
-    const [open, setOpen] = useState(false);
-
-    return (
-        <div className="space-y-1">
-            <Label className="mb-1.5 block text-xs font-medium text-muted-foreground uppercase tracking-wider">
-                {label} {required && <span className="text-red-500">*</span>}
-            </Label>
-            <Popover open={open} onOpenChange={setOpen}>
-                <PopoverTrigger asChild>
-                    <Button
-                        variant="outline"
-                        role="combobox"
-                        aria-expanded={open}
-                        className="w-full justify-between h-10 font-normal border-input overflow-hidden bg-background"
-                        disabled={disabled}
-                    >
-                        <span className={cn("truncate mr-2", !value && "text-muted-foreground")}>
-                            {value || `Select ${label}`}
-                        </span>
-                        <ChevronsUpDown className="h-4 w-4 shrink-0 opacity-50 flex-shrink-0" />
-                    </Button>
-                </PopoverTrigger>
-                <PopoverContent className="w-[var(--radix-popover-trigger-width)] p-0" align="start">
-                    <Command>
-                        <CommandInputBorderless placeholder={`Search ${label.toLowerCase()}...`} className="h-9" />
-                        <CommandList className="max-h-[200px] overflow-y-auto">
-                            <CommandEmpty>No results found.</CommandEmpty>
-                            <CommandGroup>
-                                {options.map((item, idx) => {
-                                    const name = typeof item === 'string' ? item : item.name;
-                                    const code = typeof item === 'string' ? null : item.code;
-                                    return (
-                                        <CommandItem
-                                            key={idx}
-                                            value={name}
-                                            onSelect={() => {
-                                                onChange(item);
-                                                setOpen(false);
-                                            }}
-                                            className="cursor-pointer"
-                                        >
-                                            <Check
-                                                className={cn(
-                                                    "mr-2 h-4 w-4",
-                                                    value === name ? "opacity-100" : "opacity-0"
-                                                )}
-                                            />
-                                            <div className="flex flex-col">
-                                                <span className="font-medium text-sm">{name}</span>
-                                                {code && <span className="text-[10px] text-muted-foreground">{code}</span>}
-                                            </div>
-                                        </CommandItem>
-                                    );
-                                })}
-                            </CommandGroup>
-                        </CommandList>
-                    </Command>
-                </PopoverContent>
-            </Popover>
-        </div>
-    );
-}
-
-// ============================================================================
 // MAIN COMPONENT
 // ============================================================================
 
@@ -265,8 +195,8 @@ export default function ProductionPlan() {
 
     // Table State
     const [searchTerm, setSearchTerm] = useState("");
-    const [opFilter, setOpFilter] = useState("all");
-    const [shiftFilter, setShiftFilter] = useState("all");
+    const [opFilter, setOpFilter] = useState("All");
+    const [shiftFilter, setShiftFilter] = useState("All");
     const [filterDate, setFilterDate] = useState("");
     const [currentPage, setCurrentPage] = useState(1);
     // Pagination state - using DataTablePagination component
@@ -291,8 +221,8 @@ export default function ProductionPlan() {
     // Filtering
     const filteredPlans = plans.filter(p => {
         const matchesSearch = p.planCode.toLowerCase().includes(searchTerm.toLowerCase());
-        const matchesOp = opFilter === "all" || p.operationName === opFilter;
-        const matchesShift = shiftFilter === "all" || p.shift === shiftFilter;
+        const matchesOp = opFilter === "All" || p.operationName === opFilter;
+        const matchesShift = shiftFilter === "All" || p.shift === shiftFilter;
         const matchesDate = !filterDate || p.planDate === filterDate;
         return matchesSearch && matchesOp && matchesShift && matchesDate;
     });
@@ -447,10 +377,7 @@ export default function ProductionPlan() {
                 <AppListToolbar
                     search={{
                         value: searchTerm,
-                        onChange: (val) => {
-                            setSearchTerm(val);
-                            setCurrentPage(1);
-                        },
+                        onChange: setSearchTerm,
                         placeholder: "Search code..."
                     }}
                     filters={[
@@ -458,33 +385,31 @@ export default function ProductionPlan() {
                             type: 'select',
                             label: 'Operation',
                             value: opFilter,
-                            options: [{ label: "All Operations", value: "all" }, ...MOCK_OPERATIONS.map(o => o.name)],
-                            onChange: (val) => {
-                                setOpFilter(val);
-                                setCurrentPage(1);
-                            },
+                            options: [
+                                { label: "All Operations", value: "All" },
+                                ...MOCK_OPERATIONS.map(o => ({ label: o.name, value: o.name }))
+                            ],
+                            onChange: setOpFilter,
                             searchable: true
                         },
                         {
                             type: 'select',
                             label: 'Shift',
                             value: shiftFilter,
-                            options: [{ label: "All Shifts", value: "all" }, "Morning", "Night"],
-                            onChange: (val) => {
-                                setShiftFilter(val);
-                                setCurrentPage(1);
-                            },
+                            options: [
+                                { label: "All Shifts", value: "All" },
+                                { label: "Morning", value: "Morning" },
+                                { label: "Night", value: "Night" }
+                            ],
+                            onChange: setShiftFilter,
                             searchable: true
                         },
                         {
                             type: 'date',
-                            label: 'Date Filter',
+                            label: 'Date',
                             value: filterDate ? parseDateString(filterDate) : undefined,
-                            onChange: (date) => {
-                                setFilterDate(date ? format(date, "dd-MM-yyyy") : "");
-                                setCurrentPage(1);
-                            },
-                            showClear: true
+                            onChange: (date) => setFilterDate(date ? format(date, "dd-MM-yyyy") : ""),
+                            showClear: !!filterDate
                         }
                     ]}
                     actions={[
@@ -593,10 +518,11 @@ export default function ProductionPlan() {
                                 )}
                                 <div className="space-y-1">
                                     <Label className="text-[10px] uppercase font-bold text-muted-foreground block tracking-wider">Plan Date <span className="text-red-500">*</span></Label>
-                                    <LocalDatePicker
+                                    <SharedDatePicker
                                         date={formDate ? parseDateString(formDate) : undefined}
                                         setDate={(date) => setFormDate(date ? format(date, "dd-MM-yyyy") : "")}
                                         disabled={dialogMode === "view"}
+                                        showClear={false}
                                     />
                                 </div>
                                 <div className="space-y-1">
@@ -619,48 +545,17 @@ export default function ProductionPlan() {
 
                             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                                 <div className="space-y-1">
-                                    <Label className="mb-1.5 block text-[10px] font-bold text-muted-foreground uppercase tracking-wider">
-                                        Operation <span className="text-red-500">*</span>
-                                    </Label>
-                                    <Popover>
-                                        <PopoverTrigger asChild>
-                                            <Button
-                                                variant="outline"
-                                                role="combobox"
-                                                className="w-full justify-between h-9 font-normal border-input overflow-hidden text-sm"
-                                                disabled={dialogMode !== "create"}
-                                            >
-                                                <span className={cn("truncate mr-2", !selectedOpId && "text-muted-foreground")}>
-                                                    {MOCK_OPERATIONS.find(o => o.id === selectedOpId)?.name || "Select Operation"}
-                                                </span>
-                                                <ChevronsUpDown className="h-4 w-4 shrink-0 opacity-50 flex-shrink-0" />
-                                            </Button>
-                                        </PopoverTrigger>
-                                        <PopoverContent className="w-[var(--radix-popover-trigger-width)] p-0" align="start">
-                                            <Command>
-                                                <CommandInputBorderless placeholder="Search operation..." className="h-9" />
-                                                <CommandList className="max-h-[200px] overflow-y-auto text-sm">
-                                                    <CommandEmpty>No results found.</CommandEmpty>
-                                                    <CommandGroup>
-                                                        {MOCK_OPERATIONS.map((op) => (
-                                                            <CommandItem
-                                                                key={op.id}
-                                                                value={op.name}
-                                                                onSelect={() => setSelectedOpId(op.id)}
-                                                                className="cursor-pointer"
-                                                            >
-                                                                <Check className={cn("mr-2 h-4 w-4", selectedOpId === op.id ? "opacity-100" : "opacity-0")} />
-                                                                <div className="flex flex-col">
-                                                                    <span>{op.name}</span>
-                                                                    <span className="text-[10px] text-muted-foreground">{op.code}</span>
-                                                                </div>
-                                                            </CommandItem>
-                                                        ))}
-                                                    </CommandGroup>
-                                                </CommandList>
-                                            </Command>
-                                        </PopoverContent>
-                                    </Popover>
+                                    <SharedSearchableSelect
+                                        label="Operation *"
+                                        value={selectedOpId}
+                                        options={MOCK_OPERATIONS.map(op => ({
+                                            value: op.id,
+                                            label: op.name,
+                                            code: op.code
+                                        }))}
+                                        onChange={(val) => setSelectedOpId(val)}
+                                        disabled={dialogMode !== "create"}
+                                    />
                                 </div>
                             </div>
                         </div>
@@ -694,17 +589,21 @@ export default function ProductionPlan() {
                                                     <TableCell className="text-right pr-6">
                                                         <div className="flex flex-col items-end gap-1">
                                                             <Input
-                                                                type="number"
+                                                                type="text"
+                                                                inputMode="decimal"
                                                                 value={out.quantity}
                                                                 onChange={(e) => {
-                                                                    const val = parseFloat(e.target.value) || 0;
-                                                                    const newOutputs = [...formOutputs];
-                                                                    newOutputs[idx] = { ...out, quantity: val };
-                                                                    setFormOutputs(newOutputs);
+                                                                    const val = e.target.value;
+                                                                    // Allow only numbers and one decimal point, max 6 digits total
+                                                                    if (val === "" || (/^\d*\.?\d*$/.test(val) && val.replace(".", "").length <= 6)) {
+                                                                        const newOutputs = [...formOutputs];
+                                                                        newOutputs[idx] = { ...out, quantity: val };
+                                                                        setFormOutputs(newOutputs);
+                                                                    }
                                                                 }}
                                                                 className={cn(
                                                                     "h-8 w-24 text-right font-mono font-bold focus-visible:ring-primary/20",
-                                                                    (out.quantity <= 0 || out.quantity > 1000000) && "border-red-500 focus-visible:ring-red-500/20 text-red-600"
+                                                                    (parseFloat(out.quantity) <= 0 || parseFloat(out.quantity) > 1000000) && "border-red-500 focus-visible:ring-red-500/20 text-red-600"
                                                                 )}
                                                                 placeholder="0.00"
                                                                 disabled={dialogMode === "view"}
@@ -758,330 +657,5 @@ export default function ProductionPlan() {
                 </DialogContent>
             </Dialog>
         </div>
-    );
-}
-
-// --- Reusable Premium LocalDatePicker Component (Replicated from LeaveManagement.tsx) ---
-
-function LocalDatePicker({ date, setDate, disabled = false, minDate }: {
-    date?: Date,
-    setDate: (d?: Date) => void,
-    disabled?: boolean,
-    minDate?: Date
-}) {
-    const [isOpen, setIsOpen] = useState(false);
-    const [viewMode, setViewMode] = useState<"day" | "month" | "year">("day");
-    const [visibleDate, setVisibleDate] = useState(() => date || new Date());
-
-    const monthNames = [
-        "January", "February", "March", "April", "May", "June",
-        "July", "August", "September", "October", "November", "December"
-    ];
-
-    const monthNamesShort = [
-        "Jan", "Feb", "Mar", "Apr", "May", "Jun",
-        "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"
-    ];
-
-    const formatDisplayDate = (date: Date | undefined) => {
-        if (!date) return "Pick a date";
-        try {
-            return format(date, "dd-MM-yyyy");
-        } catch (error) {
-            return "Pick a date";
-        }
-    };
-
-    const handleDateSelect = (selectedDate: Date) => {
-        const selected = new Date(selectedDate);
-        selected.setHours(0, 0, 0, 0);
-
-        let isBeforeMinDate = false;
-        if (minDate) {
-            const minimumDate = new Date(minDate);
-            minimumDate.setHours(0, 0, 0, 0);
-            isBeforeMinDate = selected < minimumDate;
-        }
-
-        if (!isBeforeMinDate) {
-            setDate(selectedDate);
-            setIsOpen(false);
-            setViewMode("day");
-        }
-    };
-
-    const handleMonthSelect = (monthIndex: number) => {
-        const newDate = new Date(visibleDate.getFullYear(), monthIndex, 1);
-        setVisibleDate(newDate);
-        setViewMode("day");
-    };
-
-    const handleYearSelect = (year: number) => {
-        const newDate = new Date(year, visibleDate.getMonth(), 1);
-        setVisibleDate(newDate);
-        setViewMode("month");
-    };
-
-    const navigateMonth = (direction: number) => {
-        const newDate = new Date(visibleDate.getFullYear(), visibleDate.getMonth() + direction, 1);
-        setVisibleDate(newDate);
-    };
-
-    const getDaysInMonth = (date: Date) => {
-        const year = date.getFullYear();
-        const month = date.getMonth();
-        const firstDay = new Date(year, month, 1);
-        const lastDay = new Date(year, month + 1, 0);
-        const daysInMonth = lastDay.getDate();
-        const startingDayOfWeek = firstDay.getDay();
-
-        const days = [];
-        let minimumDate: Date | null = null;
-        if (minDate) {
-            minimumDate = new Date(minDate);
-            minimumDate.setHours(0, 0, 0, 0);
-        }
-
-        // Previous month's trailing days
-        const prevMonth = new Date(year, month - 1, 0);
-        for (let i = startingDayOfWeek - 1; i >= 0; i--) {
-            const dayDate = new Date(year, month - 1, prevMonth.getDate() - i);
-            dayDate.setHours(0, 0, 0, 0);
-            days.push({
-                date: dayDate,
-                isCurrentMonth: false,
-                isToday: false,
-                isSelected: false,
-                isPast: minimumDate ? dayDate < minimumDate : false
-            });
-        }
-
-        // Current month days
-        for (let day = 1; day <= daysInMonth; day++) {
-            const currentDate = new Date(year, month, day);
-            currentDate.setHours(0, 0, 0, 0);
-            const isToday = new Date().toDateString() === currentDate.toDateString();
-            const isSelected = date && currentDate.toDateString() === date.toDateString();
-            const isPast = minimumDate ? currentDate < minimumDate : false;
-
-            days.push({
-                date: currentDate,
-                isCurrentMonth: true,
-                isToday,
-                isSelected,
-                isPast: isPast
-            });
-        }
-
-        // Next month's leading days
-        const remainingDays = 42 - days.length;
-        for (let day = 1; day <= remainingDays; day++) {
-            const dayDate = new Date(year, month + 1, day);
-            dayDate.setHours(0, 0, 0, 0);
-            days.push({
-                date: dayDate,
-                isCurrentMonth: false,
-                isToday: false,
-                isSelected: false,
-                isPast: minimumDate ? dayDate < minimumDate : false
-            });
-        }
-
-        return days;
-    };
-
-    const renderDayView = () => {
-        const days = getDaysInMonth(visibleDate);
-        const weekDays = ["Su", "Mo", "Tu", "We", "Th", "Fr", "Sa"];
-
-        return (
-            <div className="w-80">
-                <div className="flex items-center justify-between mb-4">
-                    <Button
-                        variant="ghost"
-                        size="icon"
-                        className="h-8 w-8"
-                        onClick={() => navigateMonth(-1)}
-                    >
-                        <ChevronLeft className="h-4 w-4" />
-                    </Button>
-
-                    <div className="flex items-center gap-2">
-                        <Button
-                            variant="ghost"
-                            className="font-semibold text-sm"
-                            onClick={() => setViewMode("month")}
-                        >
-                            {monthNames[visibleDate.getMonth()]}
-                            <ChevronDown className="ml-1 h-3 w-3" />
-                        </Button>
-                        <Button
-                            variant="ghost"
-                            className="font-semibold text-sm"
-                            onClick={() => setViewMode("year")}
-                        >
-                            {visibleDate.getFullYear()}
-                            <ChevronDown className="ml-1 h-3 w-3" />
-                        </Button>
-                    </div>
-
-                    <Button
-                        variant="ghost"
-                        size="icon"
-                        className="h-8 w-8"
-                        onClick={() => navigateMonth(1)}
-                    >
-                        <ChevronRight className="h-4 w-4" />
-                    </Button>
-                </div>
-
-                <div className="grid grid-cols-7 gap-1 mb-2">
-                    {weekDays.map((day) => (
-                        <div key={day} className="h-8 flex items-center justify-center text-xs font-medium text-muted-foreground">
-                            {day}
-                        </div>
-                    ))}
-                </div>
-
-                <div className="grid grid-cols-7 gap-1">
-                    {days.map((day, index) => (
-                        <Button
-                            key={index}
-                            variant="ghost"
-                            size="icon"
-                            disabled={day.isPast}
-                            className={cn(
-                                "h-8 w-8 text-sm font-normal",
-                                !day.isCurrentMonth && "text-muted-foreground opacity-50",
-                                day.isToday && "bg-accent text-accent-foreground font-semibold",
-                                day.isSelected && "bg-primary text-primary-foreground font-semibold",
-                                day.isCurrentMonth && !day.isPast && "hover:bg-accent hover:text-accent-foreground",
-                                day.isPast && "opacity-30 cursor-not-allowed text-muted-foreground"
-                            )}
-                            onClick={() => !day.isPast && handleDateSelect(day.date)}
-                        >
-                            {day.date.getDate()}
-                        </Button>
-                    ))}
-                </div>
-            </div>
-        );
-    };
-
-    const renderMonthView = () => {
-        return (
-            <div className="w-80">
-                <div className="flex items-center justify-between mb-4">
-                    <Button
-                        variant="ghost"
-                        size="icon"
-                        className="h-8 w-8"
-                        onClick={() => setViewMode("day")}
-                    >
-                        <ChevronLeft className="h-4 w-4" />
-                    </Button>
-                    <h3 className="font-semibold">{visibleDate.getFullYear()}</h3>
-                    <Button
-                        variant="ghost"
-                        className="font-semibold text-sm"
-                        onClick={() => setViewMode("year")}
-                    >
-                        {visibleDate.getFullYear()}
-                        <ChevronDown className="ml-1 h-3 w-3" />
-                    </Button>
-                </div>
-
-                <div className="grid grid-cols-3 gap-2">
-                    {monthNamesShort.map((month, index) => (
-                        <Button
-                            key={month}
-                            variant="ghost"
-                            className={cn(
-                                "h-10 text-sm font-normal",
-                                index === visibleDate.getMonth() && "bg-primary text-primary-foreground font-semibold"
-                            )}
-                            onClick={() => handleMonthSelect(index)}
-                        >
-                            {month}
-                        </Button>
-                    ))}
-                </div>
-            </div>
-        );
-    };
-
-    const renderYearView = () => {
-        const currentYear = visibleDate.getFullYear();
-        const startYear = Math.floor(currentYear / 12) * 12;
-        const years = Array.from({ length: 12 }, (_, i) => startYear + i);
-
-        return (
-            <div className="w-80">
-                <div className="flex items-center justify-between mb-4">
-                    <Button
-                        variant="ghost"
-                        size="icon"
-                        className="h-8 w-8"
-                        onClick={() => {
-                            const newStartYear = startYear - 12;
-                            setVisibleDate(new Date(newStartYear, visibleDate.getMonth(), 1));
-                        }}
-                    >
-                        <ChevronLeft className="h-4 w-4" />
-                    </Button>
-                    <h3 className="font-semibold">{startYear} - {startYear + 11}</h3>
-                    <Button
-                        variant="ghost"
-                        size="icon"
-                        className="h-8 w-8"
-                        onClick={() => {
-                            const newStartYear = startYear + 12;
-                            setVisibleDate(new Date(newStartYear, visibleDate.getMonth(), 1));
-                        }}
-                    >
-                        <ChevronRight className="h-4 w-4" />
-                    </Button>
-                </div>
-
-                <div className="grid grid-cols-3 gap-2">
-                    {years.map((year) => (
-                        <Button
-                            key={year}
-                            variant="ghost"
-                            className={cn(
-                                "h-10 text-sm font-normal",
-                                year === currentYear && "bg-primary text-primary-foreground font-semibold"
-                            )}
-                            onClick={() => handleYearSelect(year)}
-                        >
-                            {year}
-                        </Button>
-                    ))}
-                </div>
-            </div>
-        );
-    };
-
-    return (
-        <Popover open={isOpen} onOpenChange={setIsOpen}>
-            <PopoverTrigger asChild>
-                <Button
-                    variant="outline"
-                    disabled={disabled}
-                    className={cn(
-                        "w-full justify-start text-left font-normal flex h-10 rounded-md border border-input px-3 py-2 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50",
-                        !date && "text-muted-foreground"
-                    )}
-                >
-                    <CalendarIcon className="mr-2 h-4 w-4" />
-                    {date ? formatDisplayDate(date) : <span>Pick a date</span>}
-                </Button>
-            </PopoverTrigger>
-            <PopoverContent className="w-auto p-4 shadow-lg border rounded-lg z-[9999]" align="start" side="bottom" sideOffset={4}>
-                {viewMode === "day" && renderDayView()}
-                {viewMode === "month" && renderMonthView()}
-                {viewMode === "year" && renderYearView()}
-            </PopoverContent>
-        </Popover>
     );
 }

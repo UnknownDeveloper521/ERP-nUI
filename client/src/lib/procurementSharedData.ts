@@ -30,11 +30,11 @@ export interface MRItem {
     itemName: string;
     uom: string;
     type: "RM" | "Consumable";
-    requiredQty: number;
+    requiredQty: number | string;
     availableQty: number;
     quotations: Quotation[];
     poNumber?: string;
-    price?: number;
+    price?: number | string;
     deliveryDate?: string;
     qtyReceived: number;
 }

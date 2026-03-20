@@ -678,7 +678,7 @@ export default function BatchTracking() {
   const [bulkBatchFormData, setBulkBatchFormData] = useState({
     mrNo: "",
     shift: "" as "Morning" | "Night" | "",
-    numberOfBatches: 0,
+    numberOfBatches: 0 as number | string,
     date: getCurrentDateForInput(),
     items: [] as { itemCode: string; itemName: string; uom: string; totalMRQty: number; availableQty: number; qtyPerBatch: number }[]
   });
@@ -765,27 +765,19 @@ export default function BatchTracking() {
   // ============================================================================
 
   const handleInputQtyChange = (id: number | string, value: string) => {
-    if (value === '' || (/^\d*\.?\d*$/.test(value) && value.length <= 10)) {
-      const numValue = parseFloat(value) || 0;
-      if (numValue >= 0 && numValue <= 999999) {
-        const updatedItems = batchFormData.inputItems.map(item =>
-          item.id === id ? { ...item, qtySupplied: numValue } : item
-        );
-        setBatchFormData({ ...batchFormData, inputItems: updatedItems });
-      }
-    }
+    // Already enforced by Input onChange, but keeping as a safe guard
+    const updatedItems = batchFormData.inputItems.map(item =>
+      item.id === id ? { ...item, qtySupplied: value } : item
+    );
+    setBatchFormData({ ...batchFormData, inputItems: updatedItems });
   };
 
   const handleOutputQtyChange = (id: number | string, value: string) => {
-    if (value === '' || (/^\d*\.?\d*$/.test(value) && value.length <= 10)) {
-      const numValue = parseFloat(value) || 0;
-      if (numValue >= 0 && numValue <= 999999) {
-        const updatedItems = batchFormData.outputItems.map(item =>
-          item.id === id ? { ...item, qtyProduced: numValue } : item
-        );
-        setBatchFormData({ ...batchFormData, outputItems: updatedItems });
-      }
-    }
+    // Already enforced by Input onChange
+    const updatedItems = batchFormData.outputItems.map(item =>
+      item.id === id ? { ...item, qtyProduced: value } : item
+    );
+    setBatchFormData({ ...batchFormData, outputItems: updatedItems });
   };
 
   const handleBatchMRSelection = (mrNo: string) => {
@@ -832,14 +824,14 @@ export default function BatchTracking() {
       toast({ variant: "destructive", title: "Validation Error", description: "Shift is required" });
       return;
     }
-    const hasInputQty = batchFormData.inputItems.some(item => item.qtySupplied > 0);
+    const hasInputQty = batchFormData.inputItems.some(item => parseFloat(item.qtySupplied.toString()) > 0);
     if (!hasInputQty) {
       toast({ variant: "destructive", title: "Validation Error", description: "At least one input quantity must be greater than 0" });
       return;
     }
 
     const startTime = batchFormData.startTime || new Date().toISOString();
-    const hasOutputQty = batchFormData.outputItems.some(item => item.qtyProduced > 0);
+    const hasOutputQty = batchFormData.outputItems.some(item => parseFloat(item.qtyProduced.toString()) > 0);
     const qcRequired = OPERATION_QC_REQUIRED[batchFormData.operation] !== false;
     
     let newStatus: "Batch Created" | "Sent for QC" | "Verified QC" | "Batch Closed" = "Batch Created";
@@ -857,7 +849,7 @@ export default function BatchTracking() {
         workCenter: mrRequests.find(mr => mr.mrNumber === batchFormData.mrNo)?.workCenter || "",
         warehouse: mrRequests.find(mr => mr.mrNumber === batchFormData.mrNo)?.warehouse || "",
         totalInputItems: batchFormData.inputItems.length,
-        totalOutputItems: batchFormData.outputItems.filter(item => (item.qtyProduced || 0) > 0).length,
+        totalOutputItems: batchFormData.outputItems.filter(item => (parseFloat(item.qtyProduced.toString()) || 0) > 0).length,
         inputItems: batchFormData.inputItems,
         outputItems: batchFormData.outputItems,
         qcStatus: qcRequired && newStatus === "Sent for QC" ? "Sent for QC" : undefined,
@@ -876,7 +868,7 @@ export default function BatchTracking() {
         workCenter: mrRequests.find(mr => mr.mrNumber === batchFormData.mrNo)?.workCenter || "",
         warehouse: mrRequests.find(mr => mr.mrNumber === batchFormData.mrNo)?.warehouse || "",
         totalInputItems: batchFormData.inputItems.length,
-        totalOutputItems: batchFormData.outputItems.filter(item => item.qtyProduced > 0).length,
+        totalOutputItems: batchFormData.outputItems.filter(item => parseFloat(item.qtyProduced.toString()) > 0).length,
         status: newStatus,
         createdType: "SINGLE",
         startTime,
@@ -903,12 +895,12 @@ export default function BatchTracking() {
       toast({ variant: "destructive", title: "Validation Error", description: "Shift is required" });
       return;
     }
-    const hasInputQty = batchFormData.inputItems.some(item => item.qtySupplied > 0);
+    const hasInputQty = batchFormData.inputItems.some(item => parseFloat(item.qtySupplied.toString()) > 0);
     if (!hasInputQty) {
       toast({ variant: "destructive", title: "Validation Error", description: "At least one input quantity must be greater than 0" });
       return;
     }
-    const hasOutputQty = batchFormData.outputItems.some(item => item.qtyProduced > 0);
+    const hasOutputQty = batchFormData.outputItems.some(item => parseFloat(item.qtyProduced.toString()) > 0);
     if (!hasOutputQty) {
       toast({ variant: "destructive", title: "Validation Error", description: "At least one output quantity must be greater than 0 to submit" });
       return;
@@ -927,7 +919,7 @@ export default function BatchTracking() {
         status: finalStatus,
         endTime: endTime,
         totalInputItems: batchFormData.inputItems.length,
-        totalOutputItems: batchFormData.outputItems.filter(item => item.qtyProduced > 0).length,
+        totalOutputItems: batchFormData.outputItems.filter(item => parseFloat(item.qtyProduced.toString()) > 0).length,
         inputItems: batchFormData.inputItems,
         outputItems: batchFormData.outputItems,
         qcStatus: qcRequired ? "Sent for QC" : undefined,
@@ -947,7 +939,7 @@ export default function BatchTracking() {
         workCenter: mrRequests.find(mr => mr.mrNumber === batchFormData.mrNo)?.workCenter || "",
         warehouse: mrRequests.find(mr => mr.mrNumber === batchFormData.mrNo)?.warehouse || "",
         totalInputItems: batchFormData.inputItems.length,
-        totalOutputItems: batchFormData.outputItems.filter(item => item.qtyProduced > 0).length,
+        totalOutputItems: batchFormData.outputItems.filter(item => parseFloat(item.qtyProduced.toString()) > 0).length,
         status: finalStatus,
         createdType: "SINGLE",
         startTime: batchFormData.startTime || new Date().toISOString(),
@@ -1073,13 +1065,13 @@ export default function BatchTracking() {
 
   const isSaveEnabled = () => {
     return batchFormData.mrNo && batchFormData.shift && 
-           batchFormData.inputItems.some(item => item.qtySupplied > 0);
+           batchFormData.inputItems.some(item => parseFloat(item.qtySupplied.toString()) > 0);
   };
 
   const isSubmitEnabled = () => {
     return batchFormData.mrNo && batchFormData.shift && 
-           batchFormData.inputItems.some(item => item.qtySupplied > 0) &&
-           batchFormData.outputItems.some(item => item.qtyProduced > 0);
+           batchFormData.inputItems.some(item => parseFloat(item.qtySupplied.toString()) > 0) &&
+           batchFormData.outputItems.some(item => parseFloat(item.qtyProduced.toString()) > 0);
   };
 
   // ============================================================================
@@ -1130,8 +1122,8 @@ export default function BatchTracking() {
 
     setBulkBatchFormData(updatedFormData);
 
-    if (updatedFormData.numberOfBatches >= 1 && itemsWithAvailableQty.length > 0) {
-      generateBulkBatchPreviews(updatedFormData.numberOfBatches, itemsWithAvailableQty, selectedMR);
+    if (parseFloat(updatedFormData.numberOfBatches.toString()) >= 1 && itemsWithAvailableQty.length > 0) {
+      generateBulkBatchPreviews(parseFloat(updatedFormData.numberOfBatches.toString()), itemsWithAvailableQty, selectedMR);
     }
   };
 
@@ -1232,20 +1224,19 @@ export default function BatchTracking() {
     setActiveBulkBatchTab("batch-1");
   };
 
-  const handleBulkBatchNumberChange = (numberOfBatches: number) => {
-    if (numberOfBatches < 0) numberOfBatches = 0;
-
+  const handleBulkBatchNumberChange = (value: string) => {
     setBulkBatchFormData(prev => ({
       ...prev,
-      numberOfBatches
+      numberOfBatches: value
     }));
 
-    if (numberOfBatches >= 1 && bulkBatchFormData.mrNo && bulkBatchFormData.items.length > 0) {
+    const numValue = parseFloat(value) || 0;
+    if (numValue >= 1 && bulkBatchFormData.mrNo && bulkBatchFormData.items.length > 0) {
       const selectedMR = mrRequests.find(mr => mr.mrNumber === bulkBatchFormData.mrNo);
       if (selectedMR) {
-        generateBulkBatchPreviews(numberOfBatches, bulkBatchFormData.items, selectedMR);
+        generateBulkBatchPreviews(numValue, bulkBatchFormData.items, selectedMR);
       }
-    } else if (numberOfBatches === 0) {
+    } else if (numValue === 0) {
       setBulkBatchPreviews([]);
       setBulkBatchValidationError("");
     }
@@ -1260,7 +1251,7 @@ export default function BatchTracking() {
       toast({ variant: "destructive", title: "Validation Error", description: "Shift is required" });
       return;
     }
-    if (!bulkBatchFormData.numberOfBatches || bulkBatchFormData.numberOfBatches < 1) {
+    if (!bulkBatchFormData.numberOfBatches || parseFloat(bulkBatchFormData.numberOfBatches.toString()) < 1) {
       toast({ variant: "destructive", title: "Validation Error", description: "Number of batches must be at least 1" });
       return;
     }
@@ -1274,7 +1265,7 @@ export default function BatchTracking() {
 
     const bulkGroupId = `BULK-${new Date().getFullYear()}-${String(batchTrackings.length + 1).padStart(3, '0')}`;
     const currentYear = new Date().getFullYear();
-    const numberOfBatches = bulkBatchFormData.numberOfBatches;
+    const numberOfBatches = parseFloat(bulkBatchFormData.numberOfBatches.toString());
     const previewsToUse = [];
 
     for (let batchIndex = 0; batchIndex < numberOfBatches; batchIndex++) {
@@ -1697,13 +1688,16 @@ export default function BatchTracking() {
                                   <span className="font-medium">{item.qtySupplied}</span>
                                 ) : (
                                   <Input
-                                    type="number"
+                                    type="text"
+                                    inputMode="decimal"
                                     value={item.qtySupplied}
-                                    onChange={(e) => handleInputQtyChange(item.id, e.target.value)}
+                                    onChange={(e) => {
+                                      const val = e.target.value;
+                                      if (val === "" || (/^\d*\.?\d*$/.test(val) && val.replace(".", "").length <= 6)) {
+                                        handleInputQtyChange(item.id, val);
+                                      }
+                                    }}
                                     className="w-28 text-right"
-                                    min="0"
-                                    max={999999}
-                                    readOnly
                                   />
                                 )}
                               </TableCell>
@@ -1751,12 +1745,16 @@ export default function BatchTracking() {
                                 <span className="font-medium">{item.qtyProduced}</span>
                               ) : (
                                 <Input
-                                  type="number"
+                                  type="text"
+                                  inputMode="decimal"
                                   value={item.qtyProduced}
-                                  onChange={(e) => handleOutputQtyChange(item.id, e.target.value)}
+                                  onChange={(e) => {
+                                    const val = e.target.value;
+                                    if (val === "" || (/^\d*\.?\d*$/.test(val) && val.replace(".", "").length <= 6)) {
+                                      handleOutputQtyChange(item.id, val);
+                                    }
+                                  }}
                                   className="w-28 text-right"
-                                  min="0"
-                                  max={999999}
                                 />
                               )}
                             </TableCell>
@@ -1898,12 +1896,16 @@ export default function BatchTracking() {
                                 </TableCell>
                                 <TableCell className="text-right">
                                   <Input
-                                    type="number"
+                                    type="text"
+                                    inputMode="decimal"
                                     value={item.qtySupplied}
-                                    onChange={(e) => handleInputQtyChange(item.id, e.target.value)}
+                                    onChange={(e) => {
+                                      const val = e.target.value;
+                                      if (val === "" || (/^\d*\.?\d*$/.test(val) && val.replace(".", "").length <= 6)) {
+                                        handleInputQtyChange(item.id, val);
+                                      }
+                                    }}
                                     className="w-24 text-right"
-                                    min={0}
-                                    max={999999}
                                   />
                                 </TableCell>
                               </TableRow>
@@ -1944,12 +1946,16 @@ export default function BatchTracking() {
                               <TableCell>{item.uom}</TableCell>
                               <TableCell className="text-right">
                                 <Input
-                                  type="number"
+                                  type="text"
+                                  inputMode="decimal"
                                   value={item.qtyProduced}
-                                  onChange={(e) => handleOutputQtyChange(item.id, e.target.value)}
+                                  onChange={(e) => {
+                                    const val = e.target.value;
+                                    if (val === "" || (/^\d*\.?\d*$/.test(val) && val.replace(".", "").length <= 6)) {
+                                      handleOutputQtyChange(item.id, val);
+                                    }
+                                  }}
                                   className="w-24 text-right"
-                                  min={0}
-                                  max={999999}
                                 />
                               </TableCell>
                             </TableRow>
@@ -2065,12 +2071,14 @@ export default function BatchTracking() {
                   <div>
                     <Label>No. of Batches <span className="text-red-500">*</span></Label>
                     <Input
-                      type="number"
-                      min={1}
-                      value={bulkBatchFormData.numberOfBatches || ""}
+                      type="text"
+                      inputMode="numeric"
+                      value={bulkBatchFormData.numberOfBatches}
                       onChange={(e) => {
-                        const value = parseInt(e.target.value) || 0;
-                        handleBulkBatchNumberChange(value);
+                        const val = e.target.value;
+                        if (val === "" || (/^\d*$/.test(val) && val.length <= 6)) {
+                          handleBulkBatchNumberChange(val);
+                        }
                       }}
                       placeholder="Enter number of batches"
                     />

@@ -47,11 +47,11 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Badge } from "@/components/ui/badge";
-import { TableActionButtons } from "@/components/shared/TableActionButtons";
-import { useToast } from "@/hooks/use-toast";
 import { cn } from "@/lib/utils";
 import { DataTablePagination } from "@/components/shared/DataTablePagination";
+import { TableActionButtons } from "@/components/shared/TableActionButtons";
 import { AppListToolbar } from "@/components/shared/AppListToolbar";
+import { useToast } from "@/hooks/use-toast";
 import { 
     type BatchRecord, 
     type BatchItem as QCItem, 
@@ -224,13 +224,11 @@ export default function BatchQC() {
   };
 
   const handleVerifiedQtyChange = (itemId: any, value: string) => {
-    const numValue = Number(value);
-
-    // Update the editable items
+    // Update the editable items with the string value
     setEditableItems(items =>
       items.map(item => {
         if (item.id === itemId) {
-          return { ...item, verifiedQty: numValue };
+          return { ...item, verifiedQty: value };
         }
         return item;
       })
@@ -241,13 +239,17 @@ export default function BatchQC() {
     if (!item) return;
 
     const errors = { ...validationErrors };
+    const numValue = parseFloat(value);
+    const qtyProduced = parseFloat((item.qtyProduced || 0).toString());
 
-    if (isNaN(numValue)) {
+    if (value === "") {
+      errors[itemId] = "Required";
+    } else if (isNaN(numValue)) {
       errors[itemId] = "Must be a valid number";
     } else if (numValue < 0) {
       errors[itemId] = "Must be >= 0";
-    } else if (numValue > item.qtyProduced || 0) {
-      errors[itemId] = `Must be <= ${item.qtyProduced || 0}`;
+    } else if (numValue > qtyProduced) {
+      errors[itemId] = `Must be <= ${qtyProduced}`;
     } else {
       delete errors[itemId];
     }
@@ -260,8 +262,9 @@ export default function BatchQC() {
 
     // Final validation
     const hasErrors = editableItems.some(item => {
-      const verifiedQty = item.verifiedQty ?? 0;
-      return isNaN(verifiedQty) || verifiedQty < 0 || verifiedQty > item.qtyProduced || 0;
+      const verifiedQty = parseFloat((item.verifiedQty ?? 0).toString());
+      const qtyProduced = parseFloat((item.qtyProduced || 0).toString());
+      return isNaN(verifiedQty) || verifiedQty < 0 || verifiedQty > qtyProduced;
     });
 
     if (hasErrors || Object.keys(validationErrors).length > 0) {
@@ -370,7 +373,10 @@ export default function BatchQC() {
             type: 'select',
             label: 'Operation',
             value: operationFilter,
-            options: ["All", ...uniqueOperations],
+            options: [
+              { label: "All Operations", value: "All" },
+              ...uniqueOperations.map(op => ({ label: op, value: op }))
+            ],
             onChange: setOperationFilter,
             searchable: true
           },
@@ -378,7 +384,10 @@ export default function BatchQC() {
             type: 'select',
             label: 'Work Center',
             value: workCenterFilter,
-            options: ["All", ...uniqueWorkCenters],
+            options: [
+              { label: "All Work Centers", value: "All" },
+              ...uniqueWorkCenters.map(wc => ({ label: wc, value: wc }))
+            ],
             onChange: setWorkCenterFilter,
             searchable: true
           },
@@ -386,8 +395,11 @@ export default function BatchQC() {
             type: 'select',
             label: 'Status',
             value: statusFilter,
-            options: ["Sent for QC", "Verified"],
-            onChange: (val) => setStatusFilter(val as "Sent for QC" | "Verified"),
+            options: [
+              { label: "Sent for QC", value: "Sent for QC" },
+              { label: "Verified QC", value: "Verified" }
+            ],
+            onChange: (value) => setStatusFilter(value as "Sent for QC" | "Verified"),
             searchable: true
           }
         ]}
@@ -574,12 +586,16 @@ export default function BatchQC() {
                             {!isReadOnly ? (
                               <div className="flex flex-col items-end gap-1">
                                 <Input
-                                  type="number"
+                                  type="text"
+                                  inputMode="decimal"
                                   value={item.verifiedQty ?? (item.qtyProduced || 0)}
-                                  onChange={(e) => handleVerifiedQtyChange(item.id as any, e.target.value)}
+                                  onChange={(e) => {
+                                    const val = e.target.value;
+                                    if (val === "" || (/^\d*\.?\d*$/.test(val) && val.replace(".", "").length <= 6)) {
+                                      handleVerifiedQtyChange(item.id as any, val);
+                                    }
+                                  }}
                                   className={`w-28 h-9 text-right font-bold ${validationErrors[item.id as any] ? 'border-destructive focus-visible:ring-destructive/20' : 'focus-visible:ring-primary/20'}`}
-                                  min="0"
-                                  max={item.qtyProduced || 0}
                                 />
                                 {validationErrors[item.id as any] && (
                                   <span className="text-[10px] text-destructive font-bold">

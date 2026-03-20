@@ -58,8 +58,8 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { cn } from "@/lib/utils";
 import { useToast } from "@/hooks/use-toast";
 import { AppListToolbar } from "@/components/shared/AppListToolbar";
-import { SearchableSelect } from "@/components/shared/SearchableSelect";
-import { DatePicker } from "@/components/shared/DatePicker";
+import { SearchableSelect as SharedSearchableSelect } from "@/components/shared/SearchableSelect";
+import { DatePicker as SharedDatePicker } from "@/components/shared/DatePicker";
 
 import {
     getSalesOrders,
@@ -85,8 +85,6 @@ import {
 // ============================================================================
 // REUSABLE COMPONENTS
 // ============================================================================
-
-// Local DatePicker removed in favor of shared component
 
 
 
@@ -185,7 +183,7 @@ export default function Dispatch() {
         const matchesSearch = order.soNumber.toLowerCase().includes(searchTerm.toLowerCase()) ||
             order.customerName.toLowerCase().includes(searchTerm.toLowerCase());
 
-        const matchesStatus = statusFilter === "all" || order.status === statusFilter;
+        const matchesStatus = statusFilter === "All" || order.status === statusFilter;
 
         let matchesDate = true;
         if (dateFilter) {
@@ -687,15 +685,20 @@ export default function Dispatch() {
                             type: 'select',
                             label: 'Status',
                             value: statusFilter,
-                            options: [{ label: "All Status", value: "all" }, "Dispatch Pending", "Dispatched"],
-                            onChange: (val) => setStatusFilter(val),
+                            options: [
+                                { label: "All Statuses", value: "All" },
+                                { label: "Dispatch Pending", value: "Dispatch Pending" },
+                                { label: "Dispatched", value: "Dispatched" }
+                            ],
+                            onChange: setStatusFilter,
                             searchable: true
                         },
                         {
                             type: 'date',
                             label: 'Date',
                             value: dateFilter,
-                            onChange: setDateFilter
+                            onChange: setDateFilter,
+                            showClear: !!dateFilter
                         }
                     ]}
                 />
@@ -965,10 +968,17 @@ export default function Dispatch() {
                                             <div className="col-span-3">
                                                 <Label className="text-xs font-bold text-slate-600 mb-2 block uppercase tracking-wide">Dispatch Qty <span className="text-red-500">*</span></Label>
                                                 <Input
-                                                    type="number"
+                                                    type="text"
+                                                    inputMode="decimal"
                                                     className="h-10 bg-white border-slate-200"
                                                     value={dispatchForm.dispatchQty}
-                                                    onChange={(e) => setDispatchForm(prev => ({ ...prev, dispatchQty: e.target.value }))}
+                                                    onChange={(e) => {
+                                                        const val = e.target.value;
+                                                        // Allow only numbers and one decimal point, max 6 digits total
+                                                        if (val === "" || (/^\d*\.?\d*$/.test(val) && val.replace(".", "").length <= 6)) {
+                                                            setDispatchForm(prev => ({ ...prev, dispatchQty: val }));
+                                                        }
+                                                    }}
                                                 />
                                             </div>
 
@@ -1089,7 +1099,7 @@ export default function Dispatch() {
                                                             </TableCell>
                                                             <TableCell className="py-3 text-sm text-slate-500">{entry.note || "-"}</TableCell>
                                                             {isEditMode && (
-                                                                <TableCell className="py-3 text-right pr-4">
+                                                                <TableCell className="py-3 text-center">
                                                                     <Button
                                                                         variant="ghost"
                                                                         size="icon"

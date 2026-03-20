@@ -6,8 +6,8 @@ export interface QuotationItem {
     id: number;
     itemCode: string;
     item: string;
-    qty: number;
-    rate: number;
+    qty: number | string;
+    rate: number | string;
     amount: number;
 }
 

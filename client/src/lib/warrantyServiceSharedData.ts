@@ -17,8 +17,8 @@ export interface RepairItem {
     id: number;
     itemName: string;
     stock: number;
-    qty: number;
-    price: number;
+    qty: number | string;
+    price: number | string;
     billable: boolean;
 }
 
@@ -47,7 +47,7 @@ export interface ServiceRequestData {
     repairItems: RepairItem[];
     replaceItems: ReplaceItem[];
     newSerialNumber?: string;
-    labourCost?: number;
+    labourCost?: number | string;
     labourBillable?: boolean;
     serviceDate?: string;
 }

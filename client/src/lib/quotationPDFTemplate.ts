@@ -28,8 +28,8 @@ export interface QuotationPDFData {
         id: number;
         itemCode?: string;
         item: string;
-        qty: number;
-        rate: number;
+        qty: number | string;
+        rate: number | string;
         amount: number;
     }>;
     subtotal: number;

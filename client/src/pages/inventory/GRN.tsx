@@ -65,8 +65,8 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { cn } from "@/lib/utils";
 import { useToast } from "@/hooks/use-toast";
 import { AppListToolbar } from "@/components/shared/AppListToolbar";
-import { SearchableSelect } from "@/components/shared/SearchableSelect";
-import { DatePicker } from "@/components/shared/DatePicker";
+import { SearchableSelect as SharedSearchableSelect } from "@/components/shared/SearchableSelect";
+import { DatePicker as SharedDatePicker } from "@/components/shared/DatePicker";
 
 // ============================================================================
 // TYPE DEFINITIONS
@@ -92,8 +92,266 @@ import { mockWarehouses } from "@/lib/masterMockData";
 // REUSABLE COMPONENTS
 // ============================================================================
 
-// Local DatePicker and SearchableSelect removed in favor of shared components
+function FormDatePicker({ date, setDate, disabled = false, minDate, blockedDates }: {
+    date?: Date,
+    setDate: (d?: Date) => void,
+    disabled?: boolean,
+    minDate?: Date,
+    blockedDates?: Date[]
+}) {
+    const [isOpen, setIsOpen] = useState(false);
+    const [viewMode, setViewMode] = useState<"day" | "month" | "year">("day");
+    const [visibleDate, setVisibleDate] = useState(() => date || new Date());
 
+    const monthNames = [
+        "January", "February", "March", "April", "May", "June",
+        "July", "August", "September", "October", "November", "December"
+    ];
+
+    const monthNamesShort = [
+        "Jan", "Feb", "Mar", "Apr", "May", "Jun",
+        "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"
+    ];
+
+    const formatDisplayDate = (date: Date | undefined) => {
+        if (!date) return "Pick a date";
+        try {
+            return format(date, "dd-MM-yyyy");
+        } catch (error) {
+            return "Pick a date";
+        }
+    };
+
+    const handleDateSelect = (selectedDate: Date) => {
+        const selected = new Date(selectedDate);
+        selected.setHours(0, 0, 0, 0);
+
+        let isBeforeMinDate = false;
+        if (minDate) {
+            const minimumDate = new Date(minDate);
+            minimumDate.setHours(0, 0, 0, 0);
+            isBeforeMinDate = selected < minimumDate;
+        }
+
+        const isBlocked = blockedDates?.some(blockedDate => {
+            const blocked = new Date(blockedDate);
+            blocked.setHours(0, 0, 0, 0);
+            return blocked.getTime() === selected.getTime();
+        });
+
+        if (!isBeforeMinDate && !isBlocked) {
+            setDate(selectedDate);
+            setIsOpen(false);
+            setViewMode("day");
+        }
+    };
+
+    const handleMonthSelect = (monthIndex: number) => {
+        const newDate = new Date(visibleDate.getFullYear(), monthIndex, 1);
+        setVisibleDate(newDate);
+        setViewMode("day");
+    };
+
+    const handleYearSelect = (year: number) => {
+        const newDate = new Date(year, visibleDate.getMonth(), 1);
+        setVisibleDate(newDate);
+        setViewMode("month");
+    };
+
+    const navigateMonth = (direction: number) => {
+        const newDate = new Date(visibleDate.getFullYear(), visibleDate.getMonth() + direction, 1);
+        setVisibleDate(newDate);
+    };
+
+    const getDaysInMonth = (date: Date) => {
+        const year = date.getFullYear();
+        const month = date.getMonth();
+        const firstDay = new Date(year, month, 1);
+        const lastDay = new Date(year, month + 1, 0);
+        const daysInMonth = lastDay.getDate();
+        const startingDayOfWeek = firstDay.getDay();
+
+        const days = [];
+        let minimumDate: Date | null = null;
+        if (minDate) {
+            minimumDate = new Date(minDate);
+            minimumDate.setHours(0, 0, 0, 0);
+        }
+
+        const prevMonth = new Date(year, month - 1, 0);
+        for (let i = startingDayOfWeek - 1; i >= 0; i--) {
+            const dayDate = new Date(year, month - 1, prevMonth.getDate() - i);
+            dayDate.setHours(0, 0, 0, 0);
+            days.push({
+                date: dayDate,
+                isCurrentMonth: false,
+                isToday: false,
+                isSelected: false,
+                isPast: minimumDate ? dayDate < minimumDate : false
+            });
+        }
+
+        for (let day = 1; day <= daysInMonth; day++) {
+            const currentDate = new Date(year, month, day);
+            currentDate.setHours(0, 0, 0, 0);
+            const isToday = new Date().toDateString() === currentDate.toDateString();
+            const isSelected = date && currentDate.toDateString() === date.toDateString();
+            const isPast = minimumDate ? currentDate < minimumDate : false;
+
+            const isBlocked = blockedDates?.some(blockedDate => {
+                const blocked = new Date(blockedDate);
+                blocked.setHours(0, 0, 0, 0);
+                return blocked.getTime() === currentDate.getTime();
+            });
+
+            days.push({
+                date: currentDate,
+                isCurrentMonth: true,
+                isToday,
+                isSelected,
+                isPast: isPast || isBlocked
+            });
+        }
+
+        return days;
+    };
+
+    return (
+        <Popover open={isOpen} onOpenChange={setIsOpen}>
+            <PopoverTrigger asChild>
+                <Button
+                    variant={"outline"}
+                    className={cn(
+                        "w-full justify-start text-left font-normal h-10 bg-background border-input",
+                        !date && "text-muted-foreground"
+                    )}
+                    disabled={disabled}
+                >
+                    <CalendarIcon className="mr-2 h-4 w-4" />
+                    {formatDisplayDate(date)}
+                </Button>
+            </PopoverTrigger>
+            <PopoverContent className="w-auto p-0" align="start">
+                <div className="p-3 bg-popover text-popover-foreground">
+                    <div className="flex items-center justify-between mb-4">
+                        <div className="flex gap-1">
+                            <Button
+                                variant="ghost"
+                                size="icon"
+                                className="h-7 w-7"
+                                onClick={() => viewMode === "day" ? navigateMonth(-1) : setVisibleDate(new Date(visibleDate.getFullYear() - (viewMode === "year" ? 12 : 1), visibleDate.getMonth(), 1))}
+                            >
+                                <ChevronLeft className="h-4 w-4" />
+                            </Button>
+                        </div>
+
+                        <div className="flex gap-2">
+                            <Button
+                                variant="ghost"
+                                size="sm"
+                                className="font-semibold px-2 h-7"
+                                onClick={() => setViewMode(viewMode === "month" ? "day" : "month")}
+                            >
+                                {monthNames[visibleDate.getMonth()]}
+                            </Button>
+                            <Button
+                                variant="ghost"
+                                size="sm"
+                                className="font-semibold px-2 h-7"
+                                onClick={() => setViewMode(viewMode === "year" ? "day" : "year")}
+                            >
+                                {visibleDate.getFullYear()}
+                            </Button>
+                        </div>
+
+                        <div className="flex gap-1">
+                            <Button
+                                variant="ghost"
+                                size="icon"
+                                className="h-7 w-7"
+                                onClick={() => viewMode === "day" ? navigateMonth(1) : setVisibleDate(new Date(visibleDate.getFullYear() + (viewMode === "year" ? 12 : 1), visibleDate.getMonth(), 1))}
+                            >
+                                <ChevronRight className="h-4 w-4" />
+                            </Button>
+                        </div>
+                    </div>
+
+                    {viewMode === "day" && (
+                        <>
+                            <div className="grid grid-cols-7 gap-1 mb-2">
+                                {["Su", "Mo", "Tu", "We", "Th", "Fr", "Sa"].map((day) => (
+                                    <div key={day} className="text-center text-[10px] font-bold text-muted-foreground uppercase py-1">
+                                        {day}
+                                    </div>
+                                ))}
+                            </div>
+                            <div className="grid grid-cols-7 gap-1">
+                                {getDaysInMonth(visibleDate).map((day, idx) => (
+                                    <Button
+                                        key={idx}
+                                        variant="ghost"
+                                        size="sm"
+                                        className={cn(
+                                            "h-8 w-8 p-0 font-normal",
+                                            !day.isCurrentMonth && "text-muted-foreground opacity-50",
+                                            day.isToday && "bg-accent text-accent-foreground",
+                                            day.isSelected && "bg-primary text-primary-foreground hover:bg-primary hover:text-primary-foreground",
+                                            day.isPast && "text-muted-foreground opacity-20 pointer-events-none"
+                                        )}
+                                        onClick={() => handleDateSelect(day.date)}
+                                        disabled={day.isPast}
+                                    >
+                                        {day.date.getDate()}
+                                    </Button>
+                                ))}
+                            </div>
+                        </>
+                    )}
+
+                    {viewMode === "month" && (
+                        <div className="grid grid-cols-3 gap-2 p-2">
+                            {monthNamesShort.map((month, idx) => (
+                                <Button
+                                    key={month}
+                                    variant="ghost"
+                                    size="sm"
+                                    className={cn(
+                                        "h-9 w-full font-normal",
+                                        visibleDate.getMonth() === idx && "bg-accent text-accent-foreground"
+                                    )}
+                                    onClick={() => handleMonthSelect(idx)}
+                                >
+                                    {month}
+                                </Button>
+                            ))}
+                        </div>
+                    )}
+
+                    {viewMode === "year" && (
+                        <div className="grid grid-cols-3 gap-2 p-2">
+                            {Array.from({ length: 12 }, (_, i) => visibleDate.getFullYear() - 5 + i).map((year) => (
+                                <Button
+                                    key={year}
+                                    variant="ghost"
+                                    size="sm"
+                                    className={cn(
+                                        "h-9 w-full font-normal",
+                                        visibleDate.getFullYear() === year && "bg-accent text-accent-foreground"
+                                    )}
+                                    onClick={() => handleYearSelect(year)}
+                                >
+                                    {year}
+                                </Button>
+                            ))}
+                        </div>
+                    )}
+                </div>
+            </PopoverContent>
+        </Popover>
+    );
+}
+
+// SearchableSelect removed in favor of shared component
 
 
 function getPOStatusBadge(status: POStatus) {
@@ -117,7 +375,7 @@ export default function GRN() {
     const [pos, setPos] = useState<POData[]>([]);
     const [searchTerm, setSearchTerm] = useState("");
     const [statusFilter, setStatusFilter] = useState<string>("Submitted PO");
-    const [warehouseFilter, setWarehouseFilter] = useState<string>("all");
+    const [warehouseFilter, setWarehouseFilter] = useState<string>("All");
     const [dateFilter, setDateFilter] = useState<Date | undefined>(undefined);
     const [currentPage, setCurrentPage] = useState(1);
     // Pagination state - using DataTablePagination component
@@ -160,8 +418,8 @@ export default function GRN() {
     const filteredPOs = pos.filter(po => {
         const matchesSearch = po.poNumber.toLowerCase().includes(searchTerm.toLowerCase()) ||
             po.vendorName.toLowerCase().includes(searchTerm.toLowerCase());
-        const matchesStatus = statusFilter === "all" || po.status === statusFilter;
-        const matchesWarehouse = warehouseFilter === "all" || po.warehouseName === warehouseFilter;
+        const matchesStatus = statusFilter === "All" || po.status === statusFilter;
+        const matchesWarehouse = warehouseFilter === "All" || po.warehouseName === warehouseFilter;
 
         let matchesDate = true;
         if (dateFilter) {
@@ -322,25 +580,31 @@ export default function GRN() {
                     filters={[
                         {
                             type: 'select',
-                            label: 'Status',
-                            value: statusFilter,
-                            options: [{ label: "All Status", value: "all" }, "Submitted PO", "Partially Completed PO", "Completed PO"],
-                            onChange: (val) => setStatusFilter(val),
+                            label: 'Warehouse',
+                            value: warehouseFilter,
+                            options: [{ label: "All Warehouses", value: "All" }, ...mockWarehouses.map(wh => wh.name)],
+                            onChange: setWarehouseFilter,
                             searchable: true
                         },
                         {
                             type: 'select',
-                            label: 'Warehouse',
-                            value: warehouseFilter,
-                            options: [{ label: "All Warehouses", value: "all" }, ...mockWarehouses.map(wh => wh.name)],
-                            onChange: (val) => setWarehouseFilter(val),
+                            label: 'Status',
+                            value: statusFilter,
+                            options: [
+                                { label: "All Statuses", value: "All" },
+                                { label: "Submitted PO", value: "Submitted PO" },
+                                { label: "Partially Completed PO", value: "Partially Completed PO" },
+                                { label: "Completed PO", value: "Completed PO" }
+                            ],
+                            onChange: setStatusFilter,
                             searchable: true
                         },
                         {
                             type: 'date',
                             label: 'Date',
                             value: dateFilter,
-                            onChange: setDateFilter
+                            onChange: setDateFilter,
+                            showClear: true
                         }
                     ]}
                 />
@@ -520,16 +784,23 @@ export default function GRN() {
                                             <div className="col-span-2">
                                                 <Label className="text-xs font-bold text-slate-600 mb-2 block uppercase tracking-wide">Receive Qty <span className="text-red-500">*</span></Label>
                                                 <Input
-                                                    type="number"
+                                                    type="text"
+                                                    inputMode="decimal"
                                                     placeholder="0.00"
                                                     className="h-10 bg-white border-slate-200"
                                                     value={receptionForm.receivedQty}
-                                                    onChange={(e) => setReceptionForm(prev => ({ ...prev, receivedQty: e.target.value }))}
+                                                    onChange={(e) => {
+                                                        const val = e.target.value;
+                                                        // Allow only numbers and one decimal point, max 6 digits total
+                                                        if (val === "" || (/^\d*\.?\d*$/.test(val) && val.replace(".", "").length <= 6)) {
+                                                            setReceptionForm(prev => ({ ...prev, receivedQty: val }));
+                                                        }
+                                                    }}
                                                 />
                                             </div>
                                             <div className="col-span-3">
                                                 <Label className="text-xs font-bold text-slate-600 mb-2 block uppercase tracking-wide">Receive Date <span className="text-red-500">*</span></Label>
-                                                <DatePicker
+                                                <FormDatePicker
                                                     date={receptionForm.deliveryDate}
                                                     setDate={(d) => setReceptionForm(prev => ({ ...prev, deliveryDate: d }))}
                                                 />

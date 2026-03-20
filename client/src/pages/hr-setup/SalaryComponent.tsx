@@ -46,7 +46,7 @@ import {
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Switch } from "@/components/ui/switch";
 import { Checkbox } from "@/components/ui/checkbox";
-import { Search, Plus, Edit, ChevronLeft, ChevronRight, ChevronsUpDown, Check, Eye, Pencil } from "lucide-react";
+import { Plus, Edit, ChevronLeft, ChevronRight, ChevronsUpDown, Check, Eye, Pencil } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { cn } from "@/lib/utils";
 import { TableActionButtons } from "@/components/shared/TableActionButtons";
@@ -486,41 +486,35 @@ export default function SalaryComponent() {
       </div>
 
       {/* Action Bar: Search & Add Button */}
-      <div className="flex flex-col sm:flex-row items-end gap-4 bg-card p-4 rounded-lg border shadow-sm">
-        <div className="w-full sm:flex-1">
-          <Label className="mb-1.5 block text-[10px] font-bold text-muted-foreground uppercase tracking-wider">
-            Search
-          </Label>
-          <div className="relative">
-            <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
-            <Input
-              placeholder="Search components..."
-              className="pl-9 h-10"
-              value={searchTerm}
-              onChange={(e) => setSearchTerm(e.target.value)}
-            />
-          </div>
-        </div>
-        <div className="w-full sm:w-48">
-          <Label className="mb-1.5 block text-[10px] font-bold text-muted-foreground uppercase tracking-wider">
-            Status
-          </Label>
-          <Select value={filterStatus} onValueChange={setFilterStatus}>
-            <SelectTrigger className="h-10">
-              <SelectValue placeholder="All Status" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="All">All Status</SelectItem>
-              <SelectItem value="Active">Active</SelectItem>
-              <SelectItem value="Inactive">Inactive</SelectItem>
-            </SelectContent>
-          </Select>
-        </div>
-        <Button onClick={() => setLocation(`/hr-setup/salary-component/${activeTab}/new`)} className="h-10">
-          <Plus className="h-4 w-4 mr-2" />
-          {activeTab === 'earnings' ? 'Add Earning' : 'Add Deduction'}
-        </Button>
-      </div>
+      <AppListToolbar
+        search={{
+          value: searchTerm,
+          onChange: setSearchTerm,
+          placeholder: "Search components..."
+        }}
+        filters={[
+          {
+            type: "select",
+            label: "Status",
+            value: filterStatus,
+            onChange: setFilterStatus,
+            searchable: true,
+            options: [
+              { label: "All Status", value: "All" },
+              { label: "Active", value: "Active" },
+              { label: "Inactive", value: "Inactive" }
+            ]
+          }
+        ]}
+        actions={[
+          {
+            label: activeTab === 'earnings' ? 'Add Earning' : 'Add Deduction',
+            onClick: () => setLocation(`/hr-setup/salary-component/${activeTab}/new`),
+            icon: <Plus className="h-4 w-4" />,
+            variant: "default",
+          }
+        ]}
+      />
 
       {/* Main Content Card with Table */}
       <Card>

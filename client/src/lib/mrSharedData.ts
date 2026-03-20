@@ -21,9 +21,9 @@ export interface MRItem {
     itemName: string;
     uom: string;
     availableQty: number;
-    requiredQty: number;
+    requiredQty: number | string;
     issuedQty?: number;
-    receivedQty?: number;
+    receivedQty?: number | string;
 }
 
 // MR Request data structure

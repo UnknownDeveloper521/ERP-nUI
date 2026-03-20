@@ -592,7 +592,7 @@ export default function AttendancePage() {
                                                     <TableHead className="w-[40%]">Employee Name</TableHead>
                                                     <TableHead>In Time</TableHead>
                                                     <TableHead>Out Time</TableHead>
-                                                    <TableHead className="text-right pr-6">Mark Present</TableHead>
+                                                    <TableHead className="text-center">Mark Present</TableHead>
                                                 </TableRow>
                                             </TableHeader>
                                             <TableBody>
@@ -620,12 +620,14 @@ export default function AttendancePage() {
                                                                         className="h-8 w-24"
                                                                     />
                                                                 </TableCell>
-                                                                <TableCell className="text-right pr-8">
-                                                                    <Checkbox
-                                                                        checked={attendanceData.status === "Present"}
-                                                                        onCheckedChange={(checked) => handleBulkSetStatus(record.id, checked ? "Present" : "Absent")}
-                                                                        className="h-5 w-5"
-                                                                    />
+                                                                <TableCell>
+                                                                    <div className="flex justify-center items-center">
+                                                                        <Checkbox
+                                                                            checked={attendanceData.status === "Present"}
+                                                                            onCheckedChange={(checked) => handleBulkSetStatus(record.id, checked ? "Present" : "Absent")}
+                                                                            className="h-5 w-5"
+                                                                        />
+                                                                    </div>
                                                                 </TableCell>
                                                             </TableRow>
                                                         );

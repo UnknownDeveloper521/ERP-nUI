@@ -216,9 +216,17 @@ export default function MRRequest() {
     };
 
     const handleUpdateItemQuantity = (id: number | string, newQty: string) => {
-        const qty = parseFloat(newQty);
+        // Changed: Apply 6-digit limit and numeric-only validation
+        const cleanValue = newQty.replace(/[^0-9.]/g, '');
+        const parts = cleanValue.split('.');
+        const integerPart = parts[0];
+        const decimalPart = parts[1];
+
+        if (integerPart.length > 6) return;
+        if (decimalPart !== undefined && decimalPart.length > 2) return;
+
         setAddedItems(prev => prev.map(item =>
-            item.id === id ? { ...item, requiredQty: isNaN(qty) ? 0 : qty } : item
+            item.id === id ? { ...item, requiredQty: cleanValue } : item
         ));
     };
 
@@ -548,9 +556,9 @@ export default function MRRequest() {
                                                 <TableCell className="text-center font-medium">{item.availableQty}</TableCell>
                                                 <TableCell className="text-right">
                                                     <Input
-                                                        type="number"
-                                                        min="1"
-                                                        className={cn("h-8 w-20 ml-auto text-right", item.requiredQty <= 0 && "border-destructive")}
+                                                        type="text"
+                                                        inputMode="decimal"
+                                                        className={cn("h-8 w-20 ml-auto text-right", Number(item.requiredQty) <= 0 && "border-destructive")}
                                                         value={item.requiredQty || ""}
                                                         onChange={(e) => handleUpdateItemQuantity(item.id, e.target.value)}
                                                     />
@@ -574,7 +582,7 @@ export default function MRRequest() {
 
                     <DialogFooter className="p-6 pt-2 border-t mt-auto">
                         <Button variant="outline" onClick={() => setIsFormModalOpen(false)}>Cancel</Button>
-                        <Button onClick={handleSaveMR} disabled={addedItems.length === 0 || addedItems.some(item => item.requiredQty <= 0)}>
+                        <Button onClick={handleSaveMR} disabled={addedItems.length === 0 || addedItems.some(item => Number(item.requiredQty) <= 0)}>
                             Save Changes
                         </Button>
                     </DialogFooter>
@@ -651,7 +659,7 @@ export default function MRRequest() {
                                                             <Badge variant="outline" className="text-[9px] uppercase px-1.5">{item.type}</Badge>
                                                         </TableCell>
                                                         <TableCell className="text-right font-bold text-primary pr-6">
-                                                            {item.requiredQty}
+                                                            {typeof item.requiredQty === 'number' ? item.requiredQty : Number(item.requiredQty).toLocaleString()}
                                                         </TableCell>
                                                     </TableRow>
                                                 ))}

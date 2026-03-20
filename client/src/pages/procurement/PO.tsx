@@ -338,6 +338,36 @@ const PO = () => {
         setIsPODialogOpen(true);
     };
 
+    const handleUpdateItemPrice = (itemId: number, value: string) => {
+        if (!activePO) return;
+
+        // Allow only numbers and one decimal point
+        let cleanedValue = value.replace(/[^0-9.]/g, '');
+        
+        // Ensure only one decimal point
+        const parts = cleanedValue.split('.');
+        if (parts.length > 2) {
+            cleanedValue = parts[0] + '.' + parts.slice(1).join('');
+        }
+
+        // 6-digit limit for integer part
+        if (parts[0].length > 6) {
+            cleanedValue = parts[0].slice(0, 6) + (parts.length > 1 ? '.' + parts[1] : '');
+        }
+
+        // Optional: 2-digit limit for decimal part
+        if (parts.length > 1 && parts[1].length > 2) {
+            cleanedValue = parts[0] + '.' + parts[1].slice(0, 2);
+        }
+
+        setActivePO({
+            ...activePO,
+            items: activePO.items.map(item => 
+                item.id === itemId ? { ...item, price: cleanedValue } : item
+            )
+        });
+    };
+
     const handleDeletePO = (poId: number) => {
         const poToDelete = pos.find(p => p.id === poId);
         if (!poToDelete) return;
@@ -472,13 +502,6 @@ const PO = () => {
                         options: [{ label: "All Status", value: "all" }, "Draft PO", "Submitted PO", "Partially Completed PO", "Completed PO"],
                         onChange: setPoFilterStatus,
                         searchable: true
-                    }
-                ]}
-                actions={[
-                    {
-                        label: "Create PO",
-                        icon: <Plus className="h-4 w-4" />,
-                        onClick: () => setIsCreatePOOpen(true)
                     }
                 ]}
             />
@@ -639,7 +662,7 @@ const PO = () => {
                                             <td style={{ border: "1px solid #eee", padding: "12px", textAlign: "left", fontSize: "12px" }}>{item.itemName}</td>
                                             <td style={{ border: "1px solid #eee", padding: "12px", textAlign: "left", fontSize: "12px" }}>{item.uom}</td>
                                             <td style={{ border: "1px solid #eee", padding: "12px", textAlign: "left", fontSize: "12px" }}>{item.requiredQty}</td>
-                                            <td style={{ border: "1px solid #eee", padding: "12px", textAlign: "left", fontSize: "12px" }}>USh {item.price || 0}</td>
+                                            <td style={{ border: "1px solid #eee", padding: "12px", textAlign: "left", fontSize: "12px" }}>USh {typeof item.price === 'number' ? item.price.toLocaleString() : (Number(item.price) || 0).toLocaleString()}</td>
                                             <td style={{ border: "1px solid #eee", padding: "12px", textAlign: "left", fontSize: "12px" }}>{item.deliveryDate ? formatDate(item.deliveryDate) : "N/A"}</td>
                                         </tr>
                                     ))}
@@ -744,21 +767,12 @@ const PO = () => {
                                                                 <div className="flex items-center justify-center gap-1">
                                                                     <span className="text-xs font-bold text-slate-500">USh</span>
                                                                     <Input
-                                                                        type="number"
+                                                                        type="text"
+                                                                        inputMode="decimal"
                                                                         className="h-8 text-center font-bold px-1 flex-none"
                                                                         style={{ width: '80px', minWidth: '80px', maxWidth: '80px' }}
                                                                         value={item.price || ""}
-                                                                        onChange={(e) => {
-                                                                            const val = parseFloat(e.target.value);
-                                                                            if (val < 0) return;
-                                                                            setActivePO(prev => {
-                                                                                if (!prev) return null;
-                                                                                return {
-                                                                                    ...prev,
-                                                                                    items: prev.items.map(i => i.id === item.id ? { ...i, price: val } : i)
-                                                                                };
-                                                                            });
-                                                                        }}
+                                                                        onChange={(e) => handleUpdateItemPrice(item.id, e.target.value)}
                                                                     />
                                                                     <span className="text-[10px] font-bold text-slate-500 uppercase">/{item.uom}</span>
                                                                 </div>
@@ -785,7 +799,7 @@ const PO = () => {
                                                     ) : (
                                                         <>
                                                             <TableCell className="text-center font-bold text-xs text-slate-700">
-                                                                USh {item.price || 0}/{item.uom}
+                                                                USh {typeof item.price === 'number' ? item.price.toLocaleString() : (Number(item.price) || 0).toLocaleString()}/{item.uom}
                                                             </TableCell>
                                                             <TableCell className="text-center text-xs font-medium text-slate-600">
                                                                 {item.deliveryDate ? formatDate(item.deliveryDate) : "N/A"}
@@ -961,6 +975,15 @@ const PO = () => {
                 po={poToDeleteRecord}
                 onDelete={handleDeletePO}
             />
+            
+            <CreatePODialog
+                isOpen={isCreatePOOpen}
+                setOpen={setIsCreatePOOpen}
+                requests={requests}
+                pos={pos}
+                updatePos={updatePos}
+                updateRequests={updateRequests}
+            />
         </div>
     );
 };
@@ -995,6 +1018,222 @@ const DeletePOAlert = ({ isOpen, setOpen, po, onDelete }: {
                 </AlertDialogFooter>
             </AlertDialogContent>
         </AlertDialog>
+    );
+};
+
+const CreatePODialog = ({ isOpen, setOpen, requests, pos, updatePos, updateRequests }: {
+    isOpen: boolean,
+    setOpen: (o: boolean) => void,
+    requests: MRRequestData[],
+    pos: POData[],
+    updatePos: (newPos: POData[]) => void,
+    updateRequests: (newRequests: MRRequestData[]) => void
+}) => {
+    const { toast } = useToast();
+    const [selectedMRId, setSelectedMRId] = useState<number | null>(null);
+    const [selectedItemIds, setSelectedItemIds] = useState<number[]>([]);
+    const [selectedWarehouse, setSelectedWarehouse] = useState("");
+    const [selectedVendor, setSelectedVendor] = useState("");
+
+    const activeMR = requests.find(r => r.id === selectedMRId);
+    const pendingMRs = requests.filter(r => r.status === "Requested MR" || r.status === "MR in Fullfillment");
+
+    const handleCreatePO = () => {
+        if (!activeMR || selectedItemIds.length === 0 || !selectedVendor || !selectedWarehouse) {
+            toast({
+                title: "Validation Error",
+                description: "Please select an MR, items, vendor, and warehouse.",
+                variant: "destructive"
+            });
+            return;
+        }
+
+        const poNum = `PO-${new Date().getFullYear()}-${Math.floor(1000 + Math.random() * 9000)}`;
+        const selectedItems = activeMR.items.filter(item => selectedItemIds.includes(item.id));
+
+        const updatedRequest = JSON.parse(JSON.stringify(activeMR)) as MRRequestData;
+        updatedRequest.items.forEach(item => {
+            if (selectedItemIds.includes(item.id)) {
+                item.poNumber = poNum;
+            }
+        });
+
+        const allDone = updatedRequest.items.every(i => !!i.poNumber);
+        if (allDone) {
+            updatedRequest.status = "MR in Fullfillment";
+        }
+
+        const newPO: POData = {
+            id: Date.now(),
+            poNumber: poNum,
+            poDate: format(new Date(), "dd-MM-yyyy"),
+            mrCode: updatedRequest.mrCode,
+            location: updatedRequest.location,
+            department: updatedRequest.department,
+            workCenter: updatedRequest.workCenter,
+            createdBy: "Admin User",
+            vendorName: selectedVendor,
+            warehouseName: selectedWarehouse,
+            paymentTerms: "Net 30",
+            items: JSON.parse(JSON.stringify(selectedItems)),
+            status: "Draft PO",
+            receptions: []
+        };
+
+        updatePos([...pos, newPO]);
+        updateRequests(requests.map(r => r.id === updatedRequest.id ? updatedRequest : r));
+        
+        setOpen(false);
+        setSelectedMRId(null);
+        setSelectedItemIds([]);
+        setSelectedWarehouse("");
+        setSelectedVendor("");
+        
+        toast({ title: "PO Created", description: `Purchase Order ${poNum} successfully generated.` });
+    };
+
+    return (
+        <Dialog open={isOpen} onOpenChange={(val) => {
+            setOpen(val);
+            if (!val) {
+                setSelectedMRId(null);
+                setSelectedItemIds([]);
+            }
+        }}>
+            <DialogContent className="sm:max-w-[700px]">
+                <DialogHeader>
+                    <DialogTitle className="flex items-center gap-2">
+                        <Plus className="h-5 w-5 text-primary" />
+                        Create Purchase Order
+                    </DialogTitle>
+                    <DialogDescription>
+                        Create a PO from a Material Request.
+                    </DialogDescription>
+                </DialogHeader>
+
+                <div className="space-y-6 py-4">
+                    <div className="space-y-2">
+                        <Label>Select Material Request</Label>
+                        <Select
+                            value={selectedMRId?.toString() || ""}
+                            onValueChange={(val) => {
+                                setSelectedMRId(parseInt(val));
+                                setSelectedItemIds([]);
+                            }}
+                        >
+                            <SelectTrigger>
+                                <SelectValue placeholder="Select MR..." />
+                            </SelectTrigger>
+                            <SelectContent>
+                                {pendingMRs.map(mr => (
+                                    <SelectItem key={mr.id} value={mr.id.toString()}>
+                                        {mr.mrCode} - {mr.workCenter} ({formatDate(mr.mrDate)})
+                                    </SelectItem>
+                                ))}
+                            </SelectContent>
+                        </Select>
+                    </div>
+
+                    {activeMR && (
+                        <>
+                            <div className="space-y-2">
+                                <Label>Select Items from {activeMR.mrCode}</Label>
+                                <div className="border rounded-md max-h-[200px] overflow-y-auto">
+                                    <Table>
+                                        <TableHeader className="bg-muted/50">
+                                            <TableRow>
+                                                <TableHead className="w-12 text-center">
+                                                    <Checkbox
+                                                        checked={selectedItemIds.length === activeMR.items.filter(i => !i.poNumber).length && activeMR.items.filter(i => !i.poNumber).length > 0}
+                                                        onCheckedChange={(checked) => {
+                                                            if (checked) {
+                                                                setSelectedItemIds(activeMR.items.filter(i => !i.poNumber).map(i => i.id));
+                                                            } else {
+                                                                setSelectedItemIds([]);
+                                                            }
+                                                        }}
+                                                    />
+                                                </TableHead>
+                                                <TableHead>Item</TableHead>
+                                                <TableHead className="text-center">Qty</TableHead>
+                                                <TableHead className="text-right pr-4">Status</TableHead>
+                                            </TableRow>
+                                        </TableHeader>
+                                        <TableBody>
+                                            {activeMR.items.map(item => (
+                                                <TableRow key={item.id}>
+                                                    <TableCell className="text-center">
+                                                        <Checkbox
+                                                            disabled={!!item.poNumber}
+                                                            checked={selectedItemIds.includes(item.id)}
+                                                            onCheckedChange={(checked) => {
+                                                                if (checked) setSelectedItemIds(prev => [...prev, item.id]);
+                                                                else setSelectedItemIds(prev => prev.filter(id => id !== item.id));
+                                                            }}
+                                                        />
+                                                    </TableCell>
+                                                    <TableCell>
+                                                        <div className="text-xs font-bold">{item.itemCode}</div>
+                                                        <div className="text-[10px] text-muted-foreground">{item.itemName}</div>
+                                                    </TableCell>
+                                                    <TableCell className="text-center font-bold">{item.requiredQty}</TableCell>
+                                                    <TableCell className="text-right pr-4">
+                                                        {item.poNumber ? (
+                                                            <Badge variant="outline" className="text-[9px] h-4 uppercase">Linked</Badge>
+                                                        ) : (
+                                                            <span className="text-[9px] text-muted-foreground uppercase">Pending</span>
+                                                        )}
+                                                    </TableCell>
+                                                </TableRow>
+                                            ))}
+                                        </TableBody>
+                                    </Table>
+                                </div>
+                            </div>
+
+                            <div className="grid grid-cols-2 gap-4">
+                                <div className="space-y-2">
+                                    <Label>Vendor</Label>
+                                    <Select value={selectedVendor} onValueChange={setSelectedVendor}>
+                                        <SelectTrigger>
+                                            <SelectValue placeholder="Choose Vendor..." />
+                                        </SelectTrigger>
+                                        <SelectContent>
+                                            {mockTransporters.map(v => (
+                                                <SelectItem key={v.id} value={v.name}>{v.name}</SelectItem>
+                                            ))}
+                                        </SelectContent>
+                                    </Select>
+                                </div>
+                                <div className="space-y-2">
+                                    <Label>Warehouse</Label>
+                                    <Select value={selectedWarehouse} onValueChange={setSelectedWarehouse}>
+                                        <SelectTrigger>
+                                            <SelectValue placeholder="Choose Warehouse..." />
+                                        </SelectTrigger>
+                                        <SelectContent>
+                                            {mockWarehouses.map(wh => (
+                                                <SelectItem key={wh.id} value={wh.name}>{wh.name}</SelectItem>
+                                            ))}
+                                        </SelectContent>
+                                    </Select>
+                                </div>
+                            </div>
+                        </>
+                    )}
+                </div>
+
+                <DialogFooter>
+                    <Button variant="outline" onClick={() => setOpen(false)}>Cancel</Button>
+                    <Button
+                        disabled={!activeMR || selectedItemIds.length === 0 || !selectedVendor || !selectedWarehouse}
+                        onClick={handleCreatePO}
+                    >
+                        Create PO
+                    </Button>
+                </DialogFooter>
+            </DialogContent>
+        </Dialog>
     );
 };
 

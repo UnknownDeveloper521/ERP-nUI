@@ -370,7 +370,21 @@ function WarrantyService() {
     const handleRepairItemChange = (id: number, field: keyof RepairItem, value: any) => {
         const updatedItems = formData.repairItems?.map(item => {
             if (item.id === id) {
-                const updated = { ...item, [field]: value };
+                let updatedValue = value;
+                if (field === "qty" || field === "price") {
+                    // Allow only numbers and one decimal point
+                    let cleanedValue = value.toString().replace(/[^0-9.]/g, '');
+                    const parts = cleanedValue.split('.');
+                    if (parts.length > 2) cleanedValue = parts[0] + '.' + parts.slice(1).join('');
+                    
+                    if (field === "qty") {
+                        // 6-digit limit for integer part of qty
+                        if (parts[0].length > 6) cleanedValue = parts[0].slice(0, 6) + (parts.length > 1 ? '.' + parts[1] : '');
+                    }
+                    updatedValue = cleanedValue;
+                }
+
+                const updated = { ...item, [field]: updatedValue };
                 // Auto-update stock number when item name changes
                 if (field === "itemName" && value) {
                     updated.stock = MOCK_STOCK_DATA[value] || 0;
@@ -1206,7 +1220,7 @@ function WarrantyService() {
                                     <td><strong>${item.itemName}</strong></td>
                                     <td class="text-center">${item.stock}</td>
                                     <td class="text-center">${item.qty}</td>
-                                    <td class="text-right">$${item.price.toFixed(2)}</td>
+                                    <td class="text-right">$${Number(item.price || 0).toFixed(2)}</td>
                                 </tr>
                             `).join('')}
                         </tbody>
@@ -1217,11 +1231,11 @@ function WarrantyService() {
                         <div class="totals-box">
                             <div class="totals-row">
                                 <span class="totals-label">Labour Cost ${request.labourBillable ? '(Billable)' : ''}</span>
-                                <span class="totals-value">$${(request.labourCost || 0).toFixed(2)}</span>
+                                <span class="totals-value">$${Number(request.labourCost || 0).toFixed(2)}</span>
                             </div>
                             <div class="totals-row total">
                                 <span class="totals-label">Total Price</span>
-                                <span class="totals-value">$${((request.repairItems || []).reduce((sum, item) => sum + (item.billable ? item.price * item.qty : 0), 0) + (request.labourBillable ? (request.labourCost || 0) : 0)).toFixed(2)}</span>
+                                <span class="totals-value">$${((request.repairItems || []).reduce((sum, item) => sum + (item.billable ? Number(item.price || 0) * Number(item.qty || 0) : 0), 0) + (request.labourBillable ? (Number(request.labourCost || 0)) : 0)).toFixed(2)}</span>
                             </div>
                         </div>
                     </div>
@@ -1915,21 +1929,21 @@ function WarrantyService() {
                                                                 </TableCell>
                                                                 <TableCell>
                                                                     <Input
-                                                                        type="number"
-                                                                        min="0"
+                                                                        type="text"
+                                                                        inputMode="numeric"
                                                                         value={item.qty}
-                                                                        onChange={(e) => handleRepairItemChange(item.id, "qty", parseInt(e.target.value) || 0)}
-                                                                        className="h-9"
+                                                                        onChange={(e) => handleRepairItemChange(item.id, "qty", e.target.value)}
+                                                                        className="h-9 text-center"
                                                                     />
                                                                 </TableCell>
                                                                 <TableCell>
                                                                     <Input
-                                                                        type="number"
-                                                                        min="0"
+                                                                        type="text"
+                                                                        inputMode="decimal"
                                                                         placeholder="Price"
                                                                         value={item.price}
-                                                                        onChange={(e) => handleRepairItemChange(item.id, "price", parseFloat(e.target.value) || 0)}
-                                                                        className="h-9"
+                                                                        onChange={(e) => handleRepairItemChange(item.id, "price", e.target.value)}
+                                                                        className="h-9 text-right font-semibold"
                                                                     />
                                                                 </TableCell>
                                                                 <TableCell>
@@ -1960,12 +1974,17 @@ function WarrantyService() {
                                                         <Label className="font-semibold">Labour Cost</Label>
                                                     </div>
                                                     <Input
-                                                        type="number"
-                                                        min="0"
+                                                        type="text"
+                                                        inputMode="decimal"
                                                         placeholder="Amount"
-                                                        value={formData.labourCost || 0}
-                                                        onChange={(e) => setFormData({ ...formData, labourCost: parseFloat(e.target.value) || 0 })}
-                                                        className="h-9 w-32"
+                                                        value={formData.labourCost || ""}
+                                                        onChange={(e) => {
+                                                            let val = e.target.value.replace(/[^0-9.]/g, '');
+                                                            const parts = val.split('.');
+                                                            if (parts.length > 2) val = parts[0] + '.' + parts.slice(1).join('');
+                                                            setFormData({ ...formData, labourCost: val });
+                                                        }}
+                                                        className="h-9 w-32 text-right font-semibold"
                                                     />
                                                 </div>
                                                 
@@ -1973,7 +1992,7 @@ function WarrantyService() {
                                                 <div className="flex items-center justify-between pt-2 border-t">
                                                     <Label className="font-bold text-lg">Total Price</Label>
                                                     <span className="font-bold text-lg text-primary">
-                                                        ${((formData.repairItems || []).reduce((sum, item) => sum + (item.billable ? item.price * item.qty : 0), 0) + (formData.labourBillable ? (formData.labourCost || 0) : 0)).toFixed(2)}
+                                                        ${((formData.repairItems || []).reduce((sum, item) => sum + (item.billable ? Number(item.price || 0) * Number(item.qty || 0) : 0), 0) + (formData.labourBillable ? (Number(formData.labourCost || 0)) : 0)).toFixed(2)}
                                                     </span>
                                                 </div>
                                             </div>
@@ -2244,31 +2263,38 @@ function WarrantyService() {
                                                                     </TableCell>
                                                                     <TableCell>
                                                                         <Input
-                                                                            type="number"
-                                                                            min="0"
+                                                                            type="text"
+                                                                            inputMode="numeric"
                                                                             value={item.qty}
                                                                             onChange={(e) => {
+                                                                                let val = e.target.value.replace(/[^0-9.]/g, '');
+                                                                                const parts = val.split('.');
+                                                                                if (parts.length > 2) val = parts[0] + '.' + parts.slice(1).join('');
+                                                                                if (parts[0].length > 6) val = parts[0].slice(0, 6) + (parts.length > 1 ? '.' + parts[1] : '');
                                                                                 const updatedItems = viewingRequest.repairItems?.map(i =>
-                                                                                    i.id === item.id ? { ...i, qty: parseInt(e.target.value) || 0 } : i
+                                                                                    i.id === item.id ? { ...i, qty: val } : i
                                                                                 );
                                                                                 updateViewingRequest({ repairItems: updatedItems });
                                                                             }}
-                                                                            className="h-9"
+                                                                            className="h-9 text-center"
                                                                         />
                                                                     </TableCell>
                                                                     <TableCell>
                                                                         <Input
-                                                                            type="number"
-                                                                            min="0"
+                                                                            type="text"
+                                                                            inputMode="decimal"
                                                                             placeholder="Price"
                                                                             value={item.price}
                                                                             onChange={(e) => {
+                                                                                let val = e.target.value.replace(/[^0-9.]/g, '');
+                                                                                const parts = val.split('.');
+                                                                                if (parts.length > 2) val = parts[0] + '.' + parts.slice(1).join('');
                                                                                 const updatedItems = viewingRequest.repairItems?.map(i =>
-                                                                                    i.id === item.id ? { ...i, price: parseFloat(e.target.value) || 0 } : i
+                                                                                    i.id === item.id ? { ...i, price: val } : i
                                                                                 );
                                                                                 updateViewingRequest({ repairItems: updatedItems });
                                                                             }}
-                                                                            className="h-9"
+                                                                            className="h-9 text-right font-semibold"
                                                                         />
                                                                     </TableCell>
                                                                     <TableCell>
@@ -2302,12 +2328,17 @@ function WarrantyService() {
                                                             <Label className="font-semibold">Labour Cost</Label>
                                                         </div>
                                                         <Input
-                                                            type="number"
-                                                            min="0"
+                                                            type="text"
+                                                            inputMode="decimal"
                                                             placeholder="Amount"
-                                                            value={viewingRequest.labourCost || 0}
-                                                            onChange={(e) => updateViewingRequest({ labourCost: parseFloat(e.target.value) || 0 })}
-                                                            className="h-9 w-32"
+                                                            value={viewingRequest.labourCost || ""}
+                                                            onChange={(e) => {
+                                                                let val = e.target.value.replace(/[^0-9.]/g, '');
+                                                                const parts = val.split('.');
+                                                                if (parts.length > 2) val = parts[0] + '.' + parts.slice(1).join('');
+                                                                updateViewingRequest({ labourCost: val });
+                                                            }}
+                                                            className="h-9 w-32 text-right font-semibold"
                                                         />
                                                     </div>
                                                     
@@ -2315,7 +2346,7 @@ function WarrantyService() {
                                                     <div className="flex items-center justify-between pt-2 border-t">
                                                         <Label className="font-bold text-lg">Total Price</Label>
                                                         <span className="font-bold text-lg text-primary">
-                                                            ${((viewingRequest.repairItems || []).reduce((sum, item) => sum + (item.billable ? item.price * item.qty : 0), 0) + (viewingRequest.labourBillable ? (viewingRequest.labourCost || 0) : 0)).toFixed(2)}
+                                                            ${((viewingRequest.repairItems || []).reduce((sum, item) => sum + (item.billable ? Number(item.price || 0) * Number(item.qty || 0) : 0), 0) + (viewingRequest.labourBillable ? (Number(viewingRequest.labourCost || 0)) : 0)).toFixed(2)}
                                                         </span>
                                                     </div>
                                                 </div>
@@ -2380,7 +2411,7 @@ function WarrantyService() {
                                                                 <TableCell>{item.itemName}</TableCell>
                                                                 <TableCell>{item.stock}</TableCell>
                                                                 <TableCell>{item.qty}</TableCell>
-                                                                <TableCell>${item.price.toFixed(2)}</TableCell>
+                                                                <TableCell>${Number(item.price || 0).toFixed(2)}</TableCell>
                                                             </TableRow>
                                                         ))}
                                                     </TableBody>
@@ -2393,14 +2424,14 @@ function WarrantyService() {
                                                             <Checkbox checked={viewingRequest.labourBillable || false} disabled className="h-5 w-5" />
                                                             <Label className="font-semibold">Labour Cost</Label>
                                                         </div>
-                                                        <span className="font-medium">${(viewingRequest.labourCost || 0).toFixed(2)}</span>
+                                                        <span className="font-medium">${Number(viewingRequest.labourCost || 0).toFixed(2)}</span>
                                                     </div>
                                                     
                                                     {/* Total Price */}
                                                     <div className="flex items-center justify-between pt-2 border-t">
                                                         <Label className="font-bold text-lg">Total Price</Label>
                                                         <span className="font-bold text-lg text-primary">
-                                                            ${((viewingRequest.repairItems || []).reduce((sum, item) => sum + (item.billable ? item.price * item.qty : 0), 0) + (viewingRequest.labourBillable ? (viewingRequest.labourCost || 0) : 0)).toFixed(2)}
+                                                            ${((viewingRequest.repairItems || []).reduce((sum, item) => sum + (item.billable ? Number(item.price || 0) * Number(item.qty || 0) : 0), 0) + (viewingRequest.labourBillable ? (Number(viewingRequest.labourCost || 0)) : 0)).toFixed(2)}
                                                         </span>
                                                     </div>
                                                 </div>

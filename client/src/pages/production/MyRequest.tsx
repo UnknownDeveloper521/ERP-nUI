@@ -40,36 +40,25 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
-import {
-  Popover,
-  PopoverContent,
-  PopoverTrigger,
-} from "@/components/ui/popover";
-import {
-  Command,
-  CommandInputBorderless,
-  CommandList,
-  CommandEmpty,
-  CommandGroup,
-  CommandItem,
-} from "@/components/ui/command";
 import { Badge } from "@/components/ui/badge";
-import { Plus, Search, ChevronLeft, ChevronRight, ChevronsUpDown, Check, Calendar as CalendarIcon, ChevronDown, X } from "lucide-react";
+import { Plus, Search, ChevronLeft, ChevronRight, ChevronsUpDown, Check, Trash2, Calendar as CalendarIcon, ChevronDown, X, Play, Clock, CheckCircle2, AlertCircle, FileText, Send, User } from "lucide-react";
 import { DataTablePagination } from "@/components/shared/DataTablePagination";
 import { TableActionButtons } from "@/components/shared/TableActionButtons";
-import { AppListToolbar, FilterField } from "@/components/shared/AppListToolbar";
-import { format, parse, isValid } from "date-fns";
 import { useToast } from "@/hooks/use-toast";
 import { cn } from "@/lib/utils";
-import { 
-  type MRRequest, 
-  type MRItem, 
-  type MRStatus, 
-  mockMRRequests, 
-  addMRRequest, 
+import {
+  type MRRequest,
+  type MRItem,
+  type MRStatus,
+  mockMRRequests,
+  addMRRequest,
   updateMRRequest,
-  getMRRequestById 
+  getMRRequestById
 } from "@/lib/mrSharedData";
+import { AppListToolbar } from "@/components/shared/AppListToolbar";
+import { SearchableSelect as SharedSearchableSelect } from "@/components/shared/SearchableSelect";
+import { DatePicker as SharedDatePicker } from "@/components/shared/DatePicker";
+import { format } from "date-fns";
 
 // ============================================================================
 // HELPER FUNCTIONS
@@ -91,6 +80,11 @@ const formatDate = (date: Date | string): string => {
  */
 const getCurrentDateForInput = (): string => {
   return new Date().toISOString().split('T')[0];
+};
+
+const parseDateString = (dateString: string): Date => {
+  const [year, month, day] = dateString.split('-').map(Number);
+  return new Date(year, month - 1, day);
 };
 
 // ============================================================================
@@ -116,388 +110,6 @@ interface OperationMapping {
 // SEARCHABLE SELECT COMPONENT
 // ============================================================================
 
-interface SearchableSelectProps {
-  label: string;
-  value?: string;
-  options: string[];
-  onChange: (val: string) => void;
-  required?: boolean;
-  disabled?: boolean;
-}
-
-function LocalSearchableSelect({
-  label,
-  value,
-  options,
-  onChange,
-  required = false,
-  disabled = false,
-}: SearchableSelectProps) {
-  const [open, setOpen] = useState(false);
-
-  return (
-    <div className="space-y-2">
-      <Label>
-        {label} {required && <span className="text-red-500">*</span>}
-      </Label>
-      <Popover open={open} onOpenChange={setOpen}>
-        <PopoverTrigger asChild>
-          <Button
-            variant="outline"
-            role="combobox"
-            aria-expanded={open}
-            className="w-full justify-between h-10 font-normal border-input overflow-hidden"
-            disabled={disabled}
-          >
-            <span className={cn("truncate mr-2", !value && "text-muted-foreground")}>
-              {value || `Select ${label}`}
-            </span>
-            <ChevronsUpDown className="h-4 w-4 shrink-0 opacity-50 flex-shrink-0" />
-          </Button>
-        </PopoverTrigger>
-        <PopoverContent className="w-[var(--radix-popover-trigger-width)] p-0" align="start">
-          <Command>
-            <CommandInputBorderless placeholder={`Search ${label.toLowerCase()}...`} className="h-9" />
-            <CommandList className="max-h-[200px] overflow-y-auto">
-              <CommandEmpty>No results found.</CommandEmpty>
-              <CommandGroup>
-                {options.map((item) => (
-                  <CommandItem
-                    key={item}
-                    value={item}
-                    onSelect={() => {
-                      onChange(item);
-                      setOpen(false);
-                    }}
-                    className="cursor-pointer"
-                  >
-                    <Check
-                      className={cn(
-                        "mr-2 h-4 w-4",
-                        value === item ? "opacity-100" : "opacity-0"
-                      )}
-                    />
-                    {item}
-                  </CommandItem>
-                ))}
-              </CommandGroup>
-            </CommandList>
-          </Command>
-        </PopoverContent>
-      </Popover>
-    </div>
-  );
-}
-
-// ============================================================================
-// LOCAL DATE PICKER COMPONENT
-// ============================================================================
-
-interface LocalDatePickerProps {
-  date?: Date | string;
-  setDate: (date?: Date) => void;
-  disabled?: boolean;
-  minDate?: Date;
-  placeholder?: string;
-}
-
-function LocalDatePicker({
-  date,
-  setDate,
-  disabled = false,
-  minDate,
-  placeholder = "Pick a date"
-}: LocalDatePickerProps) {
-  const [isOpen, setIsOpen] = useState(false);
-  const [viewMode, setViewMode] = useState<"day" | "month" | "year">("day");
-  
-  // Convert string date to Date object if needed
-  const parsedDate = typeof date === 'string' ? (date ? new Date(date) : undefined) : date;
-  const [visibleDate, setVisibleDate] = useState(() => parsedDate || new Date());
-
-  const monthNames = [
-    "January", "February", "March", "April", "May", "June",
-    "July", "August", "September", "October", "November", "December"
-  ];
-
-  const monthNamesShort = [
-    "Jan", "Feb", "Mar", "Apr", "May", "Jun",
-    "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"
-  ];
-
-  const formatDisplayDate = (d: Date | undefined) => {
-    if (!d || !isValid(d)) return placeholder;
-    if (!d) return "Pick a date";
-    try {
-      return format(d, "dd-MM-yyyy");
-    } catch (error) {
-      return "Pick a date";
-    }
-  };
-
-  const handleDateSelect = (selectedDate: Date) => {
-    setDate(selectedDate);
-    setIsOpen(false);
-    setViewMode("day");
-  };
-
-  const handleMonthSelect = (monthIndex: number) => {
-    const newDate = new Date(visibleDate.getFullYear(), monthIndex, 1);
-    setVisibleDate(newDate);
-    setViewMode("day");
-  };
-
-  const handleYearSelect = (year: number) => {
-    const newDate = new Date(year, visibleDate.getMonth(), 1);
-    setVisibleDate(newDate);
-    setViewMode("month");
-  };
-
-  const navigateMonth = (direction: number) => {
-    const newDate = new Date(visibleDate.getFullYear(), visibleDate.getMonth() + direction, 1);
-    setVisibleDate(newDate);
-  };
-
-  const getDaysInMonth = (date: Date) => {
-    const year = date.getFullYear();
-    const month = date.getMonth();
-    const firstDay = new Date(year, month, 1);
-    const lastDay = new Date(year, month + 1, 0);
-    const daysInMonth = lastDay.getDate();
-    const startingDayOfWeek = firstDay.getDay();
-
-    const days = [];
-
-    const prevMonth = new Date(year, month - 1, 0);
-    for (let i = startingDayOfWeek - 1; i >= 0; i--) {
-      days.push({
-        date: new Date(year, month - 1, prevMonth.getDate() - i),
-        isCurrentMonth: false,
-        isToday: false,
-        isSelected: false
-      });
-    }
-
-    for (let day = 1; day <= daysInMonth; day++) {
-      const currentDate = new Date(year, month, day);
-      const today = new Date();
-      const isToday = currentDate.toDateString() === today.toDateString();
-      const isSelected = parsedDate && currentDate.toDateString() === parsedDate.toDateString();
-
-      days.push({
-        date: currentDate,
-        isCurrentMonth: true,
-        isToday,
-        isSelected
-      });
-    }
-
-    const remainingDays = 42 - days.length;
-    for (let day = 1; day <= remainingDays; day++) {
-      days.push({
-        date: new Date(year, month + 1, day),
-        isCurrentMonth: false,
-        isToday: false,
-        isSelected: false
-      });
-    }
-
-    return days;
-  };
-
-  const renderDayView = () => {
-    const days = getDaysInMonth(visibleDate);
-    const weekDays = ["Su", "Mo", "Tu", "We", "Th", "Fr", "Sa"];
-
-    return (
-      <div className="w-80">
-        <div className="flex items-center justify-between mb-4">
-          <Button
-            variant="ghost"
-            size="icon"
-            className="h-8 w-8"
-            onClick={() => navigateMonth(-1)}
-          >
-            <ChevronLeft className="h-4 w-4" />
-          </Button>
-
-          <div className="flex items-center gap-2">
-            <Button
-              variant="ghost"
-              className="font-semibold text-sm"
-              onClick={() => setViewMode("month")}
-            >
-              {monthNames[visibleDate.getMonth()]}
-              <ChevronDown className="ml-1 h-3 w-3" />
-            </Button>
-            <Button
-              variant="ghost"
-              className="font-semibold text-sm"
-              onClick={() => setViewMode("year")}
-            >
-              {visibleDate.getFullYear()}
-              <ChevronDown className="ml-1 h-3 w-3" />
-            </Button>
-          </div>
-
-          <Button
-            variant="ghost"
-            size="icon"
-            className="h-8 w-8"
-            onClick={() => navigateMonth(1)}
-          >
-            <ChevronRight className="h-4 w-4" />
-          </Button>
-        </div>
-
-        <div className="grid grid-cols-7 gap-1 mb-2">
-          {weekDays.map((day) => (
-            <div key={day} className="h-8 flex items-center justify-center text-xs font-medium text-muted-foreground">
-              {day}
-            </div>
-          ))}
-        </div>
-
-        <div className="grid grid-cols-7 gap-1">
-          {days.map((day, index) => (
-            <Button
-              key={index}
-              variant="ghost"
-              size="icon"
-              className={cn(
-                "h-8 w-8 text-sm font-normal",
-                !day.isCurrentMonth && "text-muted-foreground opacity-50",
-                day.isToday && "bg-accent text-accent-foreground font-semibold",
-                day.isSelected && "bg-primary text-primary-foreground font-semibold",
-                day.isCurrentMonth && "hover:bg-accent hover:text-accent-foreground"
-              )}
-              onClick={() => handleDateSelect(day.date)}
-            >
-              {day.date.getDate()}
-            </Button>
-          ))}
-        </div>
-      </div>
-    );
-  };
-
-  const renderMonthView = () => {
-    return (
-      <div className="w-80">
-        <div className="flex items-center justify-between mb-4">
-          <Button
-            variant="ghost"
-            size="icon"
-            className="h-8 w-8"
-            onClick={() => setViewMode("day")}
-          >
-            <ChevronLeft className="h-4 w-4" />
-          </Button>
-          <h3 className="font-semibold">{visibleDate.getFullYear()}</h3>
-          <Button
-            variant="ghost"
-            className="font-semibold text-sm"
-            onClick={() => setViewMode("year")}
-          >
-            {visibleDate.getFullYear()}
-            <ChevronDown className="ml-1 h-3 w-3" />
-          </Button>
-        </div>
-
-        <div className="grid grid-cols-3 gap-2">
-          {monthNamesShort.map((month, index) => (
-            <Button
-              key={month}
-              variant="ghost"
-              className={cn(
-                "h-10 text-sm font-normal",
-                index === visibleDate.getMonth() && "bg-primary text-primary-foreground font-semibold"
-              )}
-              onClick={() => handleMonthSelect(index)}
-            >
-              {month}
-            </Button>
-          ))}
-        </div>
-      </div>
-    );
-  };
-
-  const renderYearView = () => {
-    const currentYear = visibleDate.getFullYear();
-    const startYear = Math.floor(currentYear / 12) * 12;
-    const years = Array.from({ length: 12 }, (_, i) => startYear + i);
-
-    return (
-      <div className="w-80">
-        <div className="flex items-center justify-between mb-4">
-          <Button
-            variant="ghost"
-            size="icon"
-            className="h-8 w-8"
-            onClick={() => {
-              const newStartYear = startYear - 12;
-              setVisibleDate(new Date(newStartYear, visibleDate.getMonth(), 1));
-            }}
-          >
-            <ChevronLeft className="h-4 w-4" />
-          </Button>
-          <h3 className="font-semibold">{startYear} - {startYear + 11}</h3>
-          <Button
-            variant="ghost"
-            size="icon"
-            className="h-8 w-8"
-            onClick={() => {
-              const newStartYear = startYear + 12;
-              setVisibleDate(new Date(newStartYear, visibleDate.getMonth(), 1));
-            }}
-          >
-            <ChevronRight className="h-4 w-4" />
-          </Button>
-        </div>
-
-        <div className="grid grid-cols-3 gap-2">
-          {years.map((year) => (
-            <Button
-              key={year}
-              variant="ghost"
-              className={cn(
-                "h-10 text-sm font-normal",
-                year === currentYear && "bg-primary text-primary-foreground font-semibold"
-              )}
-              onClick={() => handleYearSelect(year)}
-            >
-              {year}
-            </Button>
-          ))}
-        </div>
-      </div>
-    );
-  };
-
-  return (
-    <Popover open={isOpen} onOpenChange={setIsOpen}>
-      <PopoverTrigger asChild>
-        <Button
-          variant="outline"
-          disabled={disabled}
-          className={cn(
-            "w-full justify-start text-left font-normal flex h-9 rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50 hover:bg-transparent",
-            !parsedDate && "text-muted-foreground"
-          )}
-        >
-          <CalendarIcon className="mr-2 h-4 w-4" />
-          {parsedDate ? formatDisplayDate(parsedDate) : <span>Pick a date</span>}
-        </Button>
-      </PopoverTrigger>
-      <PopoverContent className="w-auto p-4 shadow-lg border rounded-lg z-[9999]" align="start" side="bottom" sideOffset={4}>
-        {viewMode === "day" && renderDayView()}
-        {viewMode === "month" && renderMonthView()}
-        {viewMode === "year" && renderYearView()}
-      </PopoverContent>
-    </Popover>
-  );
-}
 
 // ============================================================================
 // MOCK DATA
@@ -587,8 +199,8 @@ export default function MyRequest() {
   // Pagination state - using DataTablePagination component
   const [itemsPerPage, setItemsPerPage] = useState(10);
   const [statusFilter, setStatusFilter] = useState("Requested to Warehouse");
-  const [operationFilter, setOperationFilter] = useState("all");
-  const [shiftFilter, setShiftFilter] = useState("all");
+  const [operationFilter, setOperationFilter] = useState("All");
+  const [shiftFilter, setShiftFilter] = useState("All");
 
   // Modal state
   const [isViewModalOpen, setIsViewModalOpen] = useState(false);
@@ -651,12 +263,11 @@ export default function MyRequest() {
     setFormData({ ...formData, warehouse, items: updatedItems });
   };
 
-  const handleRequiredQtyChange = (itemId: number, newQty: number) => {
+  const handleRequiredQtyChange = (itemId: number, newQty: string) => {
     let error = "";
-    if (newQty <= 0) {
+    const numericQty = parseFloat(newQty) || 0;
+    if (newQty !== "" && numericQty <= 0) {
       error = "Must be greater than 0";
-    } else if (newQty > 999999) {
-      error = "Maximum 6 digits allowed";
     }
     setQtyValidationErrors(prev => ({ ...prev, [itemId]: error }));
     const updatedItems = formData.items?.map(item =>
@@ -666,7 +277,7 @@ export default function MyRequest() {
   };
 
   const hasShortage = (): boolean => {
-    return formData.items?.some(item => item.requiredQty > item.availableQty) || false;
+    return formData.items?.some(item => parseFloat(item.requiredQty.toString()) > item.availableQty) || false;
   };
 
   const handleSubmit = () => {
@@ -694,7 +305,7 @@ export default function MyRequest() {
       toast({ variant: "destructive", title: "Validation Error", description: "No items mapped for this operation" });
       return;
     }
-    if (formData.items.some(item => item.requiredQty <= 0)) {
+    if (formData.items.some(item => parseFloat(item.requiredQty.toString()) <= 0)) {
       toast({ variant: "destructive", title: "Validation Error", description: "Required Qty must be greater than 0 for all items" });
       return;
     }
@@ -742,9 +353,9 @@ export default function MyRequest() {
 
   const handleMarkAsReceived = () => {
     if (!viewingMR || viewingMR.status !== "Issued by Warehouse") return;
-    
+
     const hasInvalidQty = viewingMR.items.some(item => {
-      const receivedQty = item.receivedQty || 0;
+      const receivedQty = parseFloat(item.receivedQty?.toString() || "0");
       const issuedQty = item.issuedQty || 0;
       return receivedQty < 0 || receivedQty > issuedQty;
     });
@@ -851,9 +462,9 @@ export default function MyRequest() {
   const filteredRequests = mrRequests.filter(item => {
     const matchesSearch = item.mrNo.toLowerCase().includes(searchTerm.toLowerCase()) ||
       item.operation.toLowerCase().includes(searchTerm.toLowerCase());
-    const matchesStatus = statusFilter === "all" || item.status === statusFilter;
-    const matchesOperation = operationFilter === "all" || item.operation === operationFilter;
-    const matchesShift = shiftFilter === "all" || item.shift === shiftFilter;
+    const matchesStatus = statusFilter === "All" || item.status === statusFilter;
+    const matchesOperation = operationFilter === "All" || item.operation === operationFilter;
+    const matchesShift = shiftFilter === "All" || item.shift === shiftFilter;
     return matchesSearch && matchesStatus && matchesOperation && matchesShift;
   });
 
@@ -891,10 +502,7 @@ export default function MyRequest() {
       <AppListToolbar
         search={{
           value: searchTerm,
-          onChange: (val) => {
-            setSearchTerm(val);
-            setCurrentPage(1);
-          },
+          onChange: setSearchTerm,
           placeholder: "Search by MR Number or Operation..."
         }}
         filters={[
@@ -902,33 +510,36 @@ export default function MyRequest() {
             type: 'select',
             label: 'Operation',
             value: operationFilter,
-            options: [{ label: "All Operations", value: "all" }, ...OPERATIONS],
-            onChange: (val) => {
-              setOperationFilter(val);
-              setCurrentPage(1);
-            },
+            options: [
+              { label: "All Operations", value: "All" },
+              ...OPERATIONS.map(op => ({ label: op, value: op }))
+            ],
+            onChange: setOperationFilter,
             searchable: true
           },
           {
             type: 'select',
             label: 'Shift',
             value: shiftFilter,
-            options: [{ label: "All Shifts", value: "all" }, "Morning", "Night"],
-            onChange: (val) => {
-              setShiftFilter(val);
-              setCurrentPage(1);
-            },
+            options: [
+              { label: "All Shifts", value: "All" },
+              { label: "Morning", value: "Morning" },
+              { label: "Night", value: "Night" }
+            ],
+            onChange: setShiftFilter,
             searchable: true
           },
           {
             type: 'select',
             label: 'Status',
             value: statusFilter,
-            options: [{ label: "All Status", value: "all" }, "Requested to Warehouse", "Issued by Warehouse", "Received by Production"],
-            onChange: (val) => {
-              setStatusFilter(val);
-              setCurrentPage(1);
-            },
+            options: [
+              { label: "All Status", value: "All" },
+              { label: "Requested to Warehouse", value: "Requested to Warehouse" },
+              { label: "Issued by Warehouse", value: "Issued by Warehouse" },
+              { label: "Received by Production", value: "Received by Production" }
+            ],
+            onChange: setStatusFilter,
             searchable: true
           }
         ]}
@@ -1123,18 +734,19 @@ export default function MyRequest() {
                                       item.receivedQty || 0
                                     ) : (
                                       <Input
-                                        type="number"
-                                        value={item.receivedQty || item.issuedQty || 0}
+                                        type="text"
+                                        inputMode="decimal"
+                                        value={item.receivedQty ?? item.issuedQty ?? 0}
                                         onChange={(e) => {
-                                          const value = parseFloat(e.target.value) || 0;
-                                          const updatedItems = viewingMR.items.map(i =>
-                                            i.id === item.id ? { ...i, receivedQty: value } : i
-                                          );
-                                          setViewingMR({ ...viewingMR, items: updatedItems });
+                                          const val = e.target.value;
+                                          if (val === "" || (/^\d*\.?\d*$/.test(val) && val.replace(".", "").length <= 6)) {
+                                            const updatedItems = viewingMR.items.map(i =>
+                                              i.id === item.id ? { ...i, receivedQty: val } : i
+                                            );
+                                            setViewingMR({ ...viewingMR, items: updatedItems });
+                                          }
                                         }}
                                         className="w-24 text-right"
-                                        min="0"
-                                        max={item.issuedQty || 0}
                                       />
                                     )}
                                   </TableCell>
@@ -1227,46 +839,49 @@ export default function MyRequest() {
                     </div>
                   )}
                   <div className="space-y-2">
-                    <Label>Date</Label>
-                    <LocalDatePicker
-                      date={formData.date}
-                      setDate={(d: Date | undefined) => setFormData({ ...formData, date: d ? format(d, 'yyyy-MM-dd') : '' })}
+                    <div className="space-y-1">
+                      <Label className="text-[10px] uppercase font-bold text-muted-foreground block tracking-wider">Request Date <span className="text-red-500">*</span></Label>
+                      <SharedDatePicker
+                        date={formData.date ? parseDateString(formData.date) : undefined}
+                        setDate={(date) => setFormData(prev => ({ ...prev, date: date ? format(date, "yyyy-MM-dd") : "" }))}
+                        showClear={false}
+                      />
+                    </div>
+                  </div>
+                  <div className="space-y-1">
+                    <Label className="text-[10px] uppercase font-bold text-muted-foreground block tracking-wider">Required By Date <span className="text-red-500">*</span></Label>
+                    <SharedDatePicker
+                      date={formData.requiredByDate ? parseDateString(formData.requiredByDate) : undefined}
+                      setDate={(date) => setFormData(prev => ({ ...prev, requiredByDate: date ? format(date, "yyyy-MM-dd") : "" }))}
+                      showClear={false}
                     />
                   </div>
-                  <div className="space-y-2">
-                    <Label>Required By Date <span className="text-red-500">*</span></Label>
-                    <LocalDatePicker
-                      date={formData.requiredByDate}
-                      setDate={(d: Date | undefined) => setFormData({ ...formData, requiredByDate: d ? format(d, 'yyyy-MM-dd') : '' })}
-                    />
-                  </div>
-                  <LocalSearchableSelect
-                    label="Operation"
-                    required
+                  <SharedSearchableSelect
+                    label="Operation *"
                     value={formData.operation}
-                    options={OPERATIONS}
+                    options={OPERATIONS.map(op => ({ value: op, label: op }))}
                     onChange={handleOperationChange}
                   />
-                  <LocalSearchableSelect
-                    label="Work Center"
-                    required
+                  <SharedSearchableSelect
+                    label="Work Center *"
                     value={formData.workCenter}
-                    options={WORK_CENTERS}
-                    onChange={(val: string) => setFormData({ ...formData, workCenter: val })}
+                    options={WORK_CENTERS.map(wc => ({ value: wc, label: wc }))}
+                    onChange={(val) => setFormData({ ...formData, workCenter: val })}
                   />
-                  <LocalSearchableSelect
-                    label="Warehouse"
-                    required
+                  <SharedSearchableSelect
+                    label="Warehouse *"
                     value={formData.warehouse}
-                    options={WAREHOUSES}
+                    options={WAREHOUSES.map(wh => ({ value: wh, label: wh }))}
                     onChange={handleWarehouseChange}
                   />
-                  <LocalSearchableSelect
-                    label="Shift"
-                    required
+                  <SharedSearchableSelect
+                    label="Shift *"
                     value={formData.shift}
-                    options={["Morning", "Night"]}
-                    onChange={(val: string) => setFormData({ ...formData, shift: val })}
+                    options={[
+                      { value: "Morning", label: "Morning" },
+                      { value: "Night", label: "Night" }
+                    ]}
+                    onChange={(val) => setFormData({ ...formData, shift: val })}
                   />
                 </div>
 
@@ -1304,14 +919,20 @@ export default function MyRequest() {
                             <TableCell>{item.uom}</TableCell>
                             <TableCell className="text-right">{item.availableQty}</TableCell>
                             <TableCell className="text-right">
-                              <Input
-                                type="number"
+                               <Input
+                                type="text"
+                                inputMode="decimal"
                                 className={cn(
                                   "h-8 text-right",
                                   qtyValidationErrors[item.id as any] && "border-destructive focus-visible:ring-destructive"
                                 )}
                                 value={item.requiredQty}
-                                onChange={(e) => handleRequiredQtyChange(item.id as any, parseFloat(e.target.value) || 0)}
+                                onChange={(e) => {
+                                  const val = e.target.value;
+                                  if (val === "" || (/^\d*\.?\d*$/.test(val) && val.replace(".", "").length <= 6)) {
+                                    handleRequiredQtyChange(item.id as any, val);
+                                  }
+                                }}
                               />
                               {qtyValidationErrors[item.id as any] && (
                                 <p className="text-[10px] text-destructive mt-1">{qtyValidationErrors[item.id as any]}</p>

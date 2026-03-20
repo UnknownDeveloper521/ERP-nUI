@@ -7,9 +7,9 @@ export interface SOItem {
     itemCode: string;
     itemName: string;
     uom: string;
-    orderedQty: number;
+    orderedQty: number | string;
     dispatchedQty: number;
-    rate: number;
+    rate: number | string;
     price: number;
 }
 
@@ -22,9 +22,9 @@ export interface PaymentTerm {
     date: string;
     days?: number;
     note?: string;
-    isGenerated?: boolean; // Indicates if this term has been generated as an invoice
-    invoiceNo?: string;    // The generated invoice number for this term
-    invoiceDate?: string;  // The generated invoice date for this term
+    isGenerated?: boolean; // Track if an invoice has been generated for this term
+    invoiceNo?: string;    // Store the generated invoice number
+    invoiceDate?: string;  // Store the generated invoice date
 }
 
 export interface DispatchEntry {
@@ -127,9 +127,9 @@ const DEFAULT_SALES_ORDERS: SOData[] = [
         currency: "UGX",
         remarks: "Urgent order - expedited shipping required",
         terms: [
-            { id: 1, value: 40, percentage: 40, termType: "Advance", date: "2026-03-06", note: "40% advance payment", isGenerated: false },
-            { id: 2, value: 30, percentage: 30, termType: "Days", date: "", days: 30, note: "30% within 30 days from invoice", isGenerated: false },
-            { id: 3, value: 30, percentage: 30, termType: "Delivery", date: "", note: "30% on delivery", isGenerated: false }
+            { id: 1, value: 40, percentage: 40, termType: "Advance", date: "2026-03-06", note: "40% advance payment" },
+            { id: 2, value: 30, percentage: 30, termType: "Days", date: "", days: 30, note: "30% within 30 days from invoice" },
+            { id: 3, value: 30, percentage: 30, termType: "Delivery", date: "", note: "30% on delivery" }
         ],
         items: [
             { id: 1, itemCode: mockFinishedGoods[2].id, itemName: mockFinishedGoods[2].name, uom: "PCS", orderedQty: 15, dispatchedQty: 0, rate: 850.00, price: 12750.00 },
@@ -141,7 +141,7 @@ const DEFAULT_SALES_ORDERS: SOData[] = [
         taxType: "%",
         taxValue: 18,
         taxPercentage: 18,
-        status: "Invoice Pending",
+        status: "Draft",
         invoiceDueAmount: 0,
         paymentStatus: "Pending"
     },
@@ -228,18 +228,6 @@ export const changeSOStatus = (id: number, status: SOStatus): SOData | null => {
     return updateSalesOrder(id, { status });
 };
 
-// Check if all terms are generated, then move to Dispatch Pending
-export const checkAndMoveToDispatchPending = (soId: number): SOData | null => {
-    const so = mockSalesOrders.find(s => s.id === soId);
-    if (!so) return null;
-
-    const allGenerated = so.terms.every(t => t.isGenerated);
-    if (allGenerated && so.status !== "Dispatch Pending" && so.status !== "Dispatched" && so.status !== "Closed SO") {
-        return updateSalesOrder(soId, { status: "Dispatch Pending" });
-    }
-    return so;
-};
-
 // Close Sales Order - Only allowed when status is Dispatched and payment is completed
 export const closeSalesOrder = (id: number): { success: boolean; message: string; so?: SOData } => {
     const so = mockSalesOrders.find(s => s.id === id);
@@ -267,4 +255,19 @@ export const closeSalesOrder = (id: number): { success: boolean; message: string
     }
     
     return { success: false, message: "Failed to close Sales Order" };
+};
+
+// Check if all terms are generated and move to Dispatch Pending status
+export const checkAndMoveToDispatchPending = (id: number): SOData | null => {
+    const so = mockSalesOrders.find(s => s.id === id);
+    if (!so) return null;
+
+    // Check if all terms are generated
+    const allGenerated = so.terms.every(term => term.isGenerated);
+
+    if (allGenerated && (so.status === "Draft" || so.status === "Invoice Pending")) {
+        return updateSalesOrder(id, { status: "Dispatch Pending" });
+    }
+
+    return so;
 };

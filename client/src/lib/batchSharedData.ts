@@ -18,9 +18,9 @@ export interface BatchItem {
     itemCode?: string;
     itemName?: string;
     uom: string;
-    qtySupplied: number; // Required for tracking consumption
-    qtyProduced: number; // Required for tracking output
-    verifiedQty?: number;
+    qtySupplied: number | string; // Required for tracking consumption
+    qtyProduced: number | string; // Required for tracking output
+    verifiedQty?: number | string;
     availableQty?: number;
     qcRequired?: boolean;
 }
