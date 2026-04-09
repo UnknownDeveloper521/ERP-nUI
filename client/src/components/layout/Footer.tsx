@@ -7,7 +7,7 @@ export default function Footer() {
             Tassos Consultancy Services | Govt IT Solutions | Ahmedabad
           </p>
           <p className="text-xs text-[#666666]">
-            © 2025 Tassos Consultancy Services. All rights reserved.
+            © 2026 Tassos Consultancy Services. All rights reserved.
           </p>
         </div>
       </div>
