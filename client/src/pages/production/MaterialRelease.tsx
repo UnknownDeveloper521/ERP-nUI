@@ -1,4 +1,5 @@
 import { useState, useEffect } from "react";
+import { format, parse, isValid } from "date-fns";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -105,6 +106,17 @@ const formatDate = (date: Date | string): string => {
  */
 const getCurrentDateForInput = (): string => {
   return new Date().toISOString().split('T')[0];
+};
+
+const parseDateString = (dateStr: string): Date => {
+  if (!dateStr) return new Date();
+  // Try DD-MM-YYYY first
+  let parsed = parse(dateStr, "dd-MM-yyyy", new Date());
+  if (isValid(parsed)) return parsed;
+  // Fallback to YYYY-MM-DD
+  parsed = parse(dateStr, "yyyy-MM-dd", new Date());
+  if (isValid(parsed)) return parsed;
+  return new Date();
 };
 
 /**
@@ -336,6 +348,7 @@ export default function MaterialRelease() {
   const [statusFilter, setStatusFilter] = useState("Issued to Warehouse"); // Default filter to show issued
   const [operationFilter, setOperationFilter] = useState("all");
   const [shiftFilter, setShiftFilter] = useState("all");
+  const [filterDate, setFilterDate] = useState("");
   const [currentPage, setCurrentPage] = useState(1);
   const [isViewModalOpen, setIsViewModalOpen] = useState(false);
   const [viewingRelease, setViewingRelease] = useState<OperationRelease | null>(null);
@@ -360,6 +373,7 @@ export default function MaterialRelease() {
     releasedBy: "Admin User", // TODO: Get from login context
   });
 
+  const [selectedProductionPlan, setSelectedProductionPlan] = useState("");
   const [producedItems, setProducedItems] = useState<ProducedItem[]>([]);
 
   // Serial Numbers for batches/items: Record<batchNo, Record<itemCode, serialNumbers[]>>
@@ -395,6 +409,13 @@ export default function MaterialRelease() {
 
   // Warehouses
   const warehouses = ["Jinja WH"];
+
+  // Mock Production Plans
+  const mockProductionPlans = [
+    { value: "PLN-24-001", label: "PLN-24-001 (Purified Lead)" },
+    { value: "PLN-24-002", label: "PLN-24-002 (GSV 7)" },
+    { value: "PLN-24-003", label: "PLN-24-003 (Battery Cases)" },
+  ];
 
   // Sample operation releases data moved to releaseSharedData.ts
 
@@ -512,6 +533,7 @@ export default function MaterialRelease() {
     setEligibleBatches([]);
     setSelectedBatchIds([]);
     setProducedItems([]);
+    setSelectedProductionPlan("");
   };
 
   /**
@@ -525,6 +547,7 @@ export default function MaterialRelease() {
     setEligibleBatches([]);
     setSelectedBatchIds([]);
     setProducedItems([]);
+    setSelectedProductionPlan("");
   };
 
   /**
@@ -555,6 +578,15 @@ export default function MaterialRelease() {
    */
   const handleSubmit = () => {
     // Validation
+    if (!selectedProductionPlan) {
+      toast({
+        title: "Validation Error",
+        description: "Please select a Production Plan",
+        variant: "destructive",
+      });
+      return;
+    }
+
     if (!selectedOperation) {
       toast({
         title: "Validation Error",
@@ -620,6 +652,7 @@ export default function MaterialRelease() {
     setReleases(addReleaseRecord(newRelease));
 
     toast({
+      variant: "success",
       title: "Success",
       description: "Material issued to warehouse successfully.",
     });
@@ -633,6 +666,7 @@ export default function MaterialRelease() {
     setSelectedBatchIds([]);
     setProducedItems([]);
     setBatchSerialNumbers({}); // Reset serial numbers
+    setSelectedProductionPlan("");
   };
 
   /**
@@ -678,6 +712,7 @@ export default function MaterialRelease() {
         }));
 
         toast({
+          variant: "success",
           title: "Import Success",
           description: `Imported ${serialNumbers.length} serial numbers for batch ${batchNo}.`,
         });
@@ -792,8 +827,9 @@ export default function MaterialRelease() {
     const matchesStatus = statusFilter === "all" || release.status === statusFilter;
     const matchesOperation = operationFilter === "all" || release.operation === operationFilter;
     const matchesShift = shiftFilter === "all" || (release.batchDetails?.some(b => b.shift === shiftFilter) ?? false);
+    const matchesDate = !filterDate || formatDate(release.releaseDate) === filterDate;
 
-    return matchesSearch && matchesStatus && matchesOperation && matchesShift;
+    return matchesSearch && matchesStatus && matchesOperation && matchesShift && matchesDate;
   });
 
   const totalPages = Math.ceil(filteredReleases.length / itemsPerPage);
@@ -812,7 +848,7 @@ export default function MaterialRelease() {
   // Reset to page 1 when filters change
   useEffect(() => {
     setCurrentPage(1);
-  }, [searchTerm, statusFilter]);
+  }, [searchTerm, statusFilter, operationFilter, shiftFilter, filterDate]);
 
   // ============================================================================
   // RENDER - LISTING PAGE
@@ -827,6 +863,7 @@ export default function MaterialRelease() {
 
   // Check if primary button should be disabled (used in create modal)
   const isPrimaryButtonDisabled =
+    !selectedProductionPlan ||
     !selectedOperation ||
     !selectedWorkCenter ||
     !selectedWarehouse ||
@@ -876,6 +913,13 @@ export default function MaterialRelease() {
             options: [{ label: "All Status", value: "all" }, "Issued to Warehouse", "Received By Warehouse"],
             onChange: setStatusFilter,
             searchable: true
+          },
+          {
+            type: 'date',
+            label: 'Date',
+            value: filterDate ? parseDateString(filterDate) : undefined,
+            onChange: (date) => setFilterDate(date ? format(date, "dd-MM-yyyy") : ""),
+            showClear: !!filterDate
           }
         ]}
         actions={[
@@ -955,7 +999,10 @@ export default function MaterialRelease() {
 
       {/* View Release Modal */}
       <Dialog open={isViewModalOpen} onOpenChange={setIsViewModalOpen}>
-        <DialogContent className="sm:max-w-[700px] max-h-[90vh] overflow-y-auto">
+        <DialogContent
+          className="sm:max-w-[700px] max-h-[90vh] overflow-y-auto"
+          onPointerDownOutside={(e) => e.preventDefault()}
+        >
           <DialogHeader>
             <DialogTitle>Release Details</DialogTitle>
             <DialogDescription>
@@ -1089,7 +1136,10 @@ export default function MaterialRelease() {
           handleCancel();
         }
       }}>
-        <DialogContent className="sm:max-w-[950px] max-h-[95vh] overflow-y-auto">
+        <DialogContent
+          className="sm:max-w-[950px] max-h-[95vh] overflow-y-auto"
+          onPointerDownOutside={(e) => e.preventDefault()}
+        >
           <DialogHeader>
             <DialogTitle>Create Material Release</DialogTitle>
             <DialogDescription>
@@ -1103,16 +1153,21 @@ export default function MaterialRelease() {
               {/* Auto-filled fields (read-only) */}
               <div>
                 <Label>Release Date</Label>
-                <Input
-                  type="date"
-                  value={formData.releaseDate}
-                  readOnly
-                  className="bg-muted"
-                />
+                <div
+                  className="flex h-10 w-full items-center rounded-md border border-input bg-muted/30 px-3 text-sm text-foreground tabular-nums"
+                  aria-readonly="true"
+                >
+                  {formData.releaseDate ? formatDate(formData.releaseDate) : ""}
+                </div>
               </div>
               <div>
                 <Label>Released By</Label>
-                <Input value={formData.releasedBy} readOnly className="bg-muted" />
+                <div
+                  className="flex h-10 w-full items-center rounded-md border border-input bg-muted/30 px-3 text-sm text-foreground"
+                  aria-readonly="true"
+                >
+                  {formData.releasedBy}
+                </div>
               </div>
 
               {/* Required dropdowns */}
@@ -1164,6 +1219,20 @@ export default function MaterialRelease() {
                   placeholder="Select Warehouse"
                   searchPlaceholder="Search warehouse..."
                   emptyText="No warehouse found"
+                />
+              </div>
+
+              <div>
+                <Label>
+                  Production Plan <span className="text-destructive">*</span>
+                </Label>
+                <LocalSearchableSelect
+                  value={selectedProductionPlan}
+                  onValueChange={setSelectedProductionPlan}
+                  options={mockProductionPlans}
+                  placeholder="Select Production Plan"
+                  searchPlaceholder="Search plan..."
+                  emptyText="No plan found"
                 />
               </div>
             </div>
@@ -1316,7 +1385,12 @@ export default function MaterialRelease() {
                                   size="sm"
                                   onClick={() => handleGenerateQR(batch.batchNo, item.itemCode, item.itemName)}
                                   disabled={importedCount === 0}
-                                  className="h-8 shadow-sm"
+                                  className={cn(
+                                    "h-8 shadow-sm",
+                                    importedCount === 0
+                                      ? "bg-muted text-muted-foreground border-muted hover:bg-muted disabled:!opacity-100"
+                                      : "bg-blue-600 text-white hover:bg-blue-600/90 border-blue-600"
+                                  )}
                                 >
                                   <Printer className="h-3.5 w-3.5 mr-2" />
                                   Generate Labels
@@ -1373,7 +1447,15 @@ export default function MaterialRelease() {
             <Button variant="outline" onClick={handleCancel}>
               Cancel
             </Button>
-            <Button onClick={handleSubmit} disabled={isPrimaryButtonDisabled}>
+            <Button
+              onClick={handleSubmit}
+              disabled={isPrimaryButtonDisabled}
+              className={
+                isPrimaryButtonDisabled
+                  ? "bg-muted text-muted-foreground border-muted hover:bg-muted disabled:!opacity-100"
+                  : "bg-blue-600 text-white hover:bg-blue-600/90 border-blue-600"
+              }
+            >
               Issue To WH
             </Button>
           </DialogFooter>

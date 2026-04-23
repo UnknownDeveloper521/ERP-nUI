@@ -29,13 +29,6 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
-import {
   Dialog,
   DialogContent,
   DialogFooter,
@@ -68,6 +61,7 @@ import {
 import { Plus, Search, ChevronLeft, ChevronRight, ChevronsUpDown, Check, Calendar as CalendarIcon, ChevronDown, X } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { cn } from "@/lib/utils";
+import { SearchableSelect as SharedSearchableSelect } from "@/components/shared/SearchableSelect";
 import { DataTablePagination } from "@/components/shared/DataTablePagination";
 import { TableActionButtons } from "@/components/shared/TableActionButtons";
 import { 
@@ -94,6 +88,8 @@ const formatDate = (date: Date | string): string => {
 const getCurrentDateForInput = (): string => {
   return new Date().toISOString().split('T')[0];
 };
+
+const SHIFT_OPTIONS = ["Morning", "Night"];
 
 // ============================================================================
 // TYPE DEFINITIONS
@@ -283,9 +279,9 @@ function DatePicker({ date, setDate, disabled = false, minDate }: {
         }
 
         // Previous month's trailing days
-        const prevMonth = new Date(year, month - 1, 0);
+        const prevMonthLastDay = new Date(year, month, 0).getDate();
         for (let i = startingDayOfWeek - 1; i >= 0; i--) {
-            const dayDate = new Date(year, month - 1, prevMonth.getDate() - i);
+            const dayDate = new Date(year, month - 1, prevMonthLastDay - i);
             dayDate.setHours(0, 0, 0, 0);
             days.push({
                 date: dayDate,
@@ -882,7 +878,11 @@ export default function BatchTracking() {
       setBatchFormData({ ...batchFormData, startTime, savedBatchId: newBatch.id, status: newStatus, createdType: "SINGLE" });
     }
 
-    toast({ title: "Saved", description: qcRequired ? `Batch saved as ${newStatus}` : `Batch saved and QC skipped` });
+    toast({
+      variant: "success",
+      title: "Saved",
+      description: qcRequired ? `Batch saved as ${newStatus}` : `Batch saved and QC skipped`,
+    });
     setIsBatchFormModalOpen(false);
   };
 
@@ -926,7 +926,11 @@ export default function BatchTracking() {
         qcRequired
       });
       setBatchTrackings([...mockBatchRecords]);
-      toast({ title: "Success", description: `Batch ${batchFormData.batchNo} submitted successfully ${qcRequired ? "" : "(QC Skipped)"}` });
+      toast({
+        variant: "success",
+        title: "Success",
+        description: `Batch ${batchFormData.batchNo} submitted successfully ${qcRequired ? "" : "(QC Skipped)"}`,
+      });
       setIsViewBatchModalOpen(false); // Close the modal
     } else {
       const newBatch: BatchTracking = {
@@ -951,7 +955,11 @@ export default function BatchTracking() {
       };
       addBatchRecord(newBatch);
       setBatchTrackings([...mockBatchRecords]);
-      toast({ title: "Success", description: `Batch ${batchFormData.batchNo} submitted successfully ${qcRequired ? "" : "(QC Skipped)"}` });
+      toast({
+        variant: "success",
+        title: "Success",
+        description: `Batch ${batchFormData.batchNo} submitted successfully ${qcRequired ? "" : "(QC Skipped)"}`,
+      });
       setIsViewBatchModalOpen(false); // Close the modal
     }
   };
@@ -1073,6 +1081,12 @@ export default function BatchTracking() {
            batchFormData.inputItems.some(item => parseFloat(item.qtySupplied.toString()) > 0) &&
            batchFormData.outputItems.some(item => parseFloat(item.qtyProduced.toString()) > 0);
   };
+
+  const canSubmitBulkBatches =
+    Boolean(bulkBatchFormData.mrNo) &&
+    Boolean(bulkBatchFormData.shift) &&
+    parseFloat(String(bulkBatchFormData.numberOfBatches || 0)) >= 1 &&
+    !bulkBatchValidationError;
 
   // ============================================================================
   // BULK BATCH HANDLERS
@@ -1332,8 +1346,9 @@ export default function BatchTracking() {
     setBatchTrackings([...mockBatchRecords]);
     setIsBulkBatchModalOpen(false);
     toast({
+      variant: "success",
       title: "Success",
-      description: `${bulkBatchFormData.numberOfBatches} batches created successfully`
+      description: `${bulkBatchFormData.numberOfBatches} batches created successfully`,
     });
 
     setBulkBatchFormData({
@@ -1582,7 +1597,10 @@ export default function BatchTracking() {
           });
         }
       }}>
-        <DialogContent className="max-w-6xl max-h-[90vh] overflow-y-auto">
+        <DialogContent
+          className="max-w-6xl max-h-[90vh] overflow-y-auto"
+          onPointerDownOutside={(e) => e.preventDefault()}
+        >
           <DialogHeader>
             <DialogTitle>
               {batchFormMode === 'view' ? 'View Batch' : 'Edit Batch'}
@@ -1786,6 +1804,11 @@ export default function BatchTracking() {
                 <Button
                   onClick={handleBatchSubmit}
                   disabled={!isSubmitEnabled()}
+                  className={
+                    isSubmitEnabled()
+                      ? "bg-blue-600 text-white hover:bg-blue-600/90 border-blue-600"
+                      : "bg-muted text-muted-foreground border-muted hover:bg-muted disabled:!opacity-100"
+                  }
                 >
                   Send for QC
                 </Button>
@@ -1816,7 +1839,10 @@ export default function BatchTracking() {
           });
         }
       }}>
-        <DialogContent className="max-w-6xl max-h-[90vh] overflow-y-auto">
+        <DialogContent
+          className="max-w-6xl max-h-[90vh] overflow-y-auto"
+          onPointerDownOutside={(e) => e.preventDefault()}
+        >
           <DialogHeader>
             <DialogTitle>Create Batch</DialogTitle>
           </DialogHeader>
@@ -1830,23 +1856,23 @@ export default function BatchTracking() {
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                   <div>
                     <Label>Date</Label>
-                    <Input value={formatDate(batchFormData.date)} readOnly className="bg-muted" />
-                  </div>
-                  <div>
-                    <Label>Shift <span className="text-red-500">*</span></Label>
-                    <Select
-                      value={batchFormData.shift}
-                      onValueChange={(value: "Morning" | "Night") => setBatchFormData({ ...batchFormData, shift: value })}
+                    <div
+                      className="flex h-10 w-full items-center rounded-md border border-input bg-muted/30 px-3 text-sm text-foreground tabular-nums"
+                      aria-readonly="true"
                     >
-                      <SelectTrigger>
-                        <SelectValue placeholder="Select Shift" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="Morning">Morning</SelectItem>
-                        <SelectItem value="Night">Night</SelectItem>
-                      </SelectContent>
-                    </Select>
+                      {formatDate(batchFormData.date)}
+                    </div>
                   </div>
+                  <SharedSearchableSelect
+                    label="Shift"
+                    value={batchFormData.shift}
+                    options={SHIFT_OPTIONS}
+                    onChange={(val) =>
+                      setBatchFormData({ ...batchFormData, shift: val as "Morning" | "Night" })
+                    }
+                    required
+                    className="h-9 min-h-9"
+                  />
                   <SearchableSelect
                     label="MR No"
                     value={batchFormData.mrNo}
@@ -1977,12 +2003,22 @@ export default function BatchTracking() {
               variant="outline"
               onClick={handleBatchSave}
               disabled={!isSaveEnabled()}
+              className={
+                isSaveEnabled()
+                  ? ""
+                  : "bg-muted text-muted-foreground border-muted hover:bg-muted disabled:!opacity-100"
+              }
             >
               Save
             </Button>
             <Button
               onClick={() => setIsBatchSubmitConfirmOpen(true)}
               disabled={!isSubmitEnabled()}
+              className={
+                isSubmitEnabled()
+                  ? "bg-blue-600 text-white hover:bg-blue-600/90 border-blue-600"
+                  : "bg-muted text-muted-foreground border-muted hover:bg-muted disabled:!opacity-100"
+              }
             >
               Submit / Send for QC
             </Button>
@@ -2030,7 +2066,10 @@ export default function BatchTracking() {
           setActiveBulkBatchTab("batch-1");
         }
       }}>
-        <DialogContent className="max-w-4xl max-h-[90vh] overflow-y-auto">
+        <DialogContent
+          className="max-w-4xl max-h-[90vh] overflow-y-auto"
+          onPointerDownOutside={(e) => e.preventDefault()}
+        >
           <DialogHeader>
             <DialogTitle>Create Bulk Batches</DialogTitle>
           </DialogHeader>
@@ -2050,23 +2089,19 @@ export default function BatchTracking() {
                     required
                   />
 
-                  <div>
-                    <Label>Shift <span className="text-red-500">*</span></Label>
-                    <Select
-                      value={bulkBatchFormData.shift}
-                      onValueChange={(value: "Morning" | "Night") =>
-                        setBulkBatchFormData({ ...bulkBatchFormData, shift: value })
-                      }
-                    >
-                      <SelectTrigger>
-                        <SelectValue placeholder="Select Shift" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="Morning">Morning</SelectItem>
-                        <SelectItem value="Night">Night</SelectItem>
-                      </SelectContent>
-                    </Select>
-                  </div>
+                  <SharedSearchableSelect
+                    label="Shift"
+                    value={bulkBatchFormData.shift}
+                    options={SHIFT_OPTIONS}
+                    onChange={(val) =>
+                      setBulkBatchFormData({
+                        ...bulkBatchFormData,
+                        shift: val as "Morning" | "Night",
+                      })
+                    }
+                    required
+                    className="h-9 min-h-9"
+                  />
 
                   <div>
                     <Label>No. of Batches <span className="text-red-500">*</span></Label>
@@ -2086,11 +2121,12 @@ export default function BatchTracking() {
 
                   <div>
                     <Label>Date</Label>
-                    <Input
-                      value={formatDate(bulkBatchFormData.date)}
-                      readOnly
-                      className="bg-muted"
-                    />
+                    <div
+                      className="flex h-10 w-full items-center rounded-md border border-input bg-muted/30 px-3 text-sm text-foreground tabular-nums"
+                      aria-readonly="true"
+                    >
+                      {formatDate(bulkBatchFormData.date)}
+                    </div>
                   </div>
                 </div>
               </CardContent>
@@ -2155,7 +2191,12 @@ export default function BatchTracking() {
             </Button>
             <Button
               onClick={handleSubmitBulkBatches}
-              disabled={!!bulkBatchValidationError}
+              disabled={!canSubmitBulkBatches}
+              className={
+                canSubmitBulkBatches
+                  ? "bg-blue-600 text-white hover:bg-blue-600/90 border-blue-600"
+                  : "bg-muted text-muted-foreground border-muted hover:bg-muted disabled:!opacity-100"
+              }
             >
               Submit
             </Button>

@@ -59,6 +59,7 @@ import { AppListToolbar } from "@/components/shared/AppListToolbar";
 import { SearchableSelect as SharedSearchableSelect } from "@/components/shared/SearchableSelect";
 import { DatePicker as SharedDatePicker } from "@/components/shared/DatePicker";
 import { format } from "date-fns";
+import { INITIAL_PLANS } from "@/lib/productionPlanSharedData";
 
 // ============================================================================
 // HELPER FUNCTIONS
@@ -201,6 +202,7 @@ export default function MyRequest() {
   const [statusFilter, setStatusFilter] = useState("Requested to Warehouse");
   const [operationFilter, setOperationFilter] = useState("All");
   const [shiftFilter, setShiftFilter] = useState("All");
+  const [filterDate, setFilterDate] = useState("");
 
   // Modal state
   const [isViewModalOpen, setIsViewModalOpen] = useState(false);
@@ -309,6 +311,10 @@ export default function MyRequest() {
       toast({ variant: "destructive", title: "Validation Error", description: "Required Qty must be greater than 0 for all items" });
       return;
     }
+    if (!formData.productionPlanId) {
+      toast({ variant: "destructive", title: "Validation Error", description: "Production Plan is required" });
+      return;
+    }
     if (hasShortage()) {
       setShowShortageDialog(true);
     } else {
@@ -333,10 +339,18 @@ export default function MyRequest() {
 
     if (editingId) {
       updateMRRequest(editingId, newMR);
-      toast({ title: "Success", description: "MR Request updated successfully" });
+      toast({
+        variant: "success",
+        title: "Success",
+        description: "MR Request updated successfully",
+      });
     } else {
       addMRRequest(newMR);
-      toast({ title: "Success", description: "MR Request created successfully" });
+      toast({
+        variant: "success",
+        title: "Success",
+        description: "MR Request created successfully",
+      });
     }
     setMrRequests([...mockMRRequests]);
     setShowShortageDialog(false);
@@ -388,6 +402,7 @@ export default function MyRequest() {
     setIsViewModalOpen(false);
     setViewingMR(null);
     toast({
+      variant: "success",
       title: "Success",
       description: `MR ${viewingMR.mrNo} marked as received.`,
     });
@@ -423,6 +438,7 @@ export default function MyRequest() {
         workCenter: existingMR.workCenter,
         warehouse: existingMR.warehouse,
         shift: existingMR.shift,
+        productionPlanId: existingMR.productionPlanId,
         items: existingMR.items
       });
       setQtyValidationErrors({});
@@ -449,7 +465,11 @@ export default function MyRequest() {
     if (editingId) {
       const updatedRequests = mrRequests.filter(mr => mr.id !== editingId);
       setMrRequests(updatedRequests);
-      toast({ title: "Success", description: "MR Request deleted successfully" });
+      toast({
+        variant: "success",
+        title: "Success",
+        description: "MR Request deleted successfully",
+      });
       setIsDeleteOpen(false);
       handleCloseForm();
     }
@@ -465,7 +485,8 @@ export default function MyRequest() {
     const matchesStatus = statusFilter === "All" || item.status === statusFilter;
     const matchesOperation = operationFilter === "All" || item.operation === operationFilter;
     const matchesShift = shiftFilter === "All" || item.shift === shiftFilter;
-    return matchesSearch && matchesStatus && matchesOperation && matchesShift;
+    const matchesDate = !filterDate || formatDate(item.date) === filterDate;
+    return matchesSearch && matchesStatus && matchesOperation && matchesShift && matchesDate;
   });
 
   const totalPages = Math.ceil(filteredRequests.length / itemsPerPage);
@@ -484,7 +505,21 @@ export default function MyRequest() {
   // Reset to page 1 when filters change
   useEffect(() => {
     setCurrentPage(1);
-  }, [searchTerm, statusFilter, operationFilter, shiftFilter]);
+  }, [searchTerm, statusFilter, operationFilter, shiftFilter, filterDate]);
+
+  const canSaveRequest =
+    Boolean(formData.date) &&
+    Boolean(formData.requiredByDate) &&
+    Boolean(formData.shift) &&
+    Boolean(formData.operation) &&
+    Boolean(formData.workCenter) &&
+    Boolean(formData.warehouse) &&
+    Boolean(formData.productionPlanId) &&
+    (formData.items?.length ?? 0) > 0 &&
+    formData.items!.every((item) => {
+      const q = parseFloat(String(item.requiredQty));
+      return !Number.isNaN(q) && q > 0;
+    });
 
   // ============================================================================
   // RENDER - LISTING VIEW WITH MODAL FORM
@@ -541,6 +576,13 @@ export default function MyRequest() {
             ],
             onChange: setStatusFilter,
             searchable: true
+          },
+          {
+            type: 'date',
+            label: 'Date',
+            value: filterDate ? parseDateString(filterDate.split('-').reverse().join('-')) : undefined,
+            onChange: (date) => setFilterDate(date ? format(date, "dd-MM-yyyy") : ""),
+            showClear: !!filterDate
           }
         ]}
         actions={[
@@ -628,7 +670,10 @@ export default function MyRequest() {
 
       {/* View MR Modal */}
       <Dialog open={isViewModalOpen} onOpenChange={setIsViewModalOpen}>
-        <DialogContent className="max-w-4xl max-h-[90vh] overflow-y-auto">
+        <DialogContent
+          className="max-w-4xl max-h-[90vh] overflow-y-auto"
+          onPointerDownOutside={(e) => e.preventDefault()}
+        >
           <DialogHeader>
             <DialogTitle>Material Request: {viewingMR?.mrNo}</DialogTitle>
           </DialogHeader>
@@ -818,7 +863,10 @@ export default function MyRequest() {
 
       {/* New/Edit MR Request Form Modal */}
       <Dialog open={isFormModalOpen} onOpenChange={setIsFormModalOpen}>
-        <DialogContent className="sm:max-w-[900px] max-h-[90vh] flex flex-col p-0">
+        <DialogContent
+          className="sm:max-w-[900px] max-h-[90vh] flex flex-col p-0"
+          onPointerDownOutside={(e) => e.preventDefault()}
+        >
           <DialogHeader className="p-6 pb-4">
             <DialogTitle className="text-2xl font-bold">
               {editingId ? "Edit MR Request" : "New MR Request"}
@@ -882,6 +930,16 @@ export default function MyRequest() {
                       { value: "Night", label: "Night" }
                     ]}
                     onChange={(val) => setFormData({ ...formData, shift: val })}
+                  />
+                  <SharedSearchableSelect
+                    label="Production Plan *"
+                    placeholder="Select Production Plan"
+                    value={formData.productionPlanId?.toString() || ""}
+                    options={INITIAL_PLANS.map(p => ({
+                      value: p.id.toString(),
+                      label: `${p.planCode} - ${p.operationName}`
+                    }))}
+                    onChange={(val) => setFormData({ ...formData, productionPlanId: parseInt(val) })}
                   />
                 </div>
 
@@ -950,7 +1008,15 @@ export default function MyRequest() {
 
           <DialogFooter className="p-6 border-t">
             <Button variant="outline" onClick={handleCloseForm}>Cancel</Button>
-            <Button onClick={handleSubmit}>
+            <Button
+              onClick={handleSubmit}
+              disabled={!canSaveRequest}
+              className={
+                canSaveRequest
+                  ? "bg-blue-600 text-white hover:bg-blue-600/90 border-blue-600"
+                  : "bg-muted text-muted-foreground border-muted hover:bg-muted disabled:!opacity-100"
+              }
+            >
               {editingId ? "Update Request" : "Save Request"}
             </Button>
           </DialogFooter>

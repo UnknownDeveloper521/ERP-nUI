@@ -42,6 +42,7 @@ export interface MRRequest {
     issuedBy?: string;
     receivedDate?: string;
     receivedBy?: string;
+    productionPlanId?: number;
     items: MRItem[];
 }
 

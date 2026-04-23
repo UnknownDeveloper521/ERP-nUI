@@ -120,6 +120,9 @@ const parseDateString = (dateStr: string): Date => {
     return new Date(dateStr);
 };
 
+const BOM_NAME_MIN_LEN = 2;
+const BOM_NAME_MAX_LEN = 150;
+
 // ============================================================================
 // REUSABLE COMPONENTS
 // ============================================================================
@@ -216,9 +219,11 @@ export default function BOM() {
     });
 
     const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false);
+    const [bomNameError, setBomNameError] = useState("");
 
     const handleCreateClick = () => {
         setDialogMode("create");
+        setBomNameError("");
         setFormData({
             bomName: "",
             bomDescription: "",
@@ -230,6 +235,7 @@ export default function BOM() {
 
     const handleEditClick = (record: BOM2Record) => {
         setDialogMode("edit");
+        setBomNameError("");
         setFormData({
             id: record.id,
             bomName: record.bomName,
@@ -242,6 +248,7 @@ export default function BOM() {
 
     const handleViewClick = (record: BOM2Record) => {
         setDialogMode("view");
+        setBomNameError("");
         setFormData({
             bomCode: record.bomCode,
             bomName: record.bomName,
@@ -274,7 +281,24 @@ export default function BOM() {
     }, [formData.selectedItemId, dialogMode]);
 
     const handleSave = () => {
-        if (!formData.bomName.trim() || !formData.selectedItemId) {
+        const nameTrimmed = formData.bomName.trim();
+        if (
+            nameTrimmed.length < BOM_NAME_MIN_LEN ||
+            nameTrimmed.length > BOM_NAME_MAX_LEN
+        ) {
+            if (nameTrimmed.length > 0 && nameTrimmed.length < BOM_NAME_MIN_LEN) {
+                setBomNameError("Minimum 2 characters required");
+            } else {
+                setBomNameError("");
+            }
+            toast({
+                title: "Validation Error",
+                description: `BOM name must be between ${BOM_NAME_MIN_LEN} and ${BOM_NAME_MAX_LEN} characters.`,
+                variant: "destructive",
+            });
+            return;
+        }
+        if (!formData.selectedItemId) {
             toast({ title: "Validation Error", description: "Please fill all required fields", variant: "destructive" });
             return;
         }
@@ -283,7 +307,7 @@ export default function BOM() {
             const newRecord: BOM2Record = {
                 id: Date.now(),
                 bomCode: `BOM-${new Date().getFullYear()}-${String(bomRecords.length + 1).padStart(3, '0')}`,
-                bomName: formData.bomName,
+                bomName: nameTrimmed,
                 itemType: MOCK_ITEMS.find(i => i.id === formData.selectedItemId)?.type as "FG" | "SFG",
                 itemName: MOCK_ITEMS.find(i => i.id === formData.selectedItemId)?.name || "",
                 description: formData.bomDescription,
@@ -292,22 +316,34 @@ export default function BOM() {
                 components: formData.components
             };
             setBomRecords((prev: BOM2Record[]) => [newRecord, ...prev]);
-            toast({ title: "Success", description: "BOM created successfully" });
+            toast({
+                variant: "success",
+                title: "Success",
+                description: "BOM created successfully",
+            });
         } else {
             setBomRecords((prev: BOM2Record[]) => prev.map(r => r.id === formData.id ? {
                 ...r,
-                bomName: formData.bomName,
+                bomName: nameTrimmed,
                 description: formData.bomDescription,
                 components: formData.components
             } : r));
-            toast({ title: "Updated", description: "BOM updated successfully" });
+            toast({
+                variant: "success",
+                title: "Updated",
+                description: "BOM updated successfully",
+            });
         }
         setDialogOpen(false);
     };
 
     const handleDelete = () => {
         setBomRecords((prev: BOM2Record[]) => prev.filter(r => r.id !== formData.id));
-        toast({ title: "Deleted", description: "BOM record removed", variant: "destructive" });
+        toast({
+            variant: "success",
+            title: "Deleted",
+            description: "BOM record removed",
+        });
         setDialogOpen(false);
         setIsDeleteDialogOpen(false);
     };
@@ -349,6 +385,14 @@ export default function BOM() {
     useEffect(() => {
         setCurrentPage(1);
     }, [searchTerm, typeFilter, dateFilter]);
+
+    const bomNameTrimLen = formData.bomName.trim().length;
+    const canSaveBom =
+        bomNameTrimLen >= BOM_NAME_MIN_LEN &&
+        bomNameTrimLen <= BOM_NAME_MAX_LEN &&
+        Boolean(formData.selectedItemId) &&
+        formData.components.length > 0 &&
+        !formData.components.some((c: any) => c.quantity < 0 || c.quantity > 1000000);
 
     return (
         <div className="h-full flex flex-col gap-6 animate-in fade-in duration-500">
@@ -445,7 +489,10 @@ export default function BOM() {
 
             {/* Dialog Form */}
             <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
-                <DialogContent className="max-w-3xl max-h-[90vh] overflow-y-auto">
+                <DialogContent
+                    className="max-w-3xl max-h-[90vh] overflow-y-auto"
+                    onPointerDownOutside={(e) => e.preventDefault()}
+                >
                     <DialogHeader>
                         <DialogTitle className="uppercase tracking-tight text-xl font-bold">
                             {dialogMode === "create" ? "Create New BOM" : dialogMode === "edit" ? "Edit BOM" : "BOM Details"}
@@ -463,9 +510,29 @@ export default function BOM() {
                                 <Input
                                     placeholder="Enter BOM Name"
                                     value={formData.bomName}
-                                    onChange={(e) => setFormData((prev: BOMFormData) => ({ ...prev, bomName: e.target.value }))}
+                                    maxLength={BOM_NAME_MAX_LEN}
+                                    onChange={(e) => {
+                                        const v = e.target.value.slice(0, BOM_NAME_MAX_LEN);
+                                        setFormData((prev: BOMFormData) => ({
+                                            ...prev,
+                                            bomName: v,
+                                        }));
+                                        const t = v.trim();
+                                        if (t.length > 0 && t.length < BOM_NAME_MIN_LEN) {
+                                            setBomNameError("Minimum 2 characters required");
+                                        } else {
+                                            setBomNameError("");
+                                        }
+                                    }}
+                                    className={cn(
+                                        "h-9",
+                                        bomNameError && "border-red-500 focus-visible:ring-red-500"
+                                    )}
                                     disabled={dialogMode === "view"}
                                 />
+                                {bomNameError && dialogMode !== "view" && (
+                                    <p className="mt-1 text-xs text-red-500">{bomNameError}</p>
+                                )}
                             </div>
                             <SharedSearchableSelect
                                 label="SFG / FG *"
@@ -575,11 +642,11 @@ export default function BOM() {
                             {dialogMode !== "view" && (
                                 <Button
                                     onClick={handleSave}
-                                    disabled={
-                                        !formData.bomName.trim() ||
-                                        !formData.selectedItemId ||
-                                        formData.components.length === 0 ||
-                                        formData.components.some((c: any) => c.quantity < 0 || c.quantity > 1000000)
+                                    disabled={!canSaveBom}
+                                    className={
+                                        canSaveBom
+                                            ? "bg-blue-600 hover:bg-blue-600/90 text-white border-blue-600"
+                                            : "bg-muted text-muted-foreground border-muted hover:bg-muted disabled:!opacity-100"
                                     }
                                 >
                                     {dialogMode === "create" ? "Save BOM" : "Update Changes"}

@@ -13,13 +13,6 @@ import {
     TableRow,
 } from "@/components/ui/table";
 import {
-    Select,
-    SelectContent,
-    SelectItem,
-    SelectTrigger,
-    SelectValue,
-} from "@/components/ui/select";
-import {
     Dialog,
     DialogContent,
     DialogDescription,
@@ -59,10 +52,17 @@ import {
 } from "lucide-react";
 import { DataTablePagination } from "@/components/shared/DataTablePagination";
 import { TableActionButtons } from "@/components/shared/TableActionButtons";
-import { parse, isValid } from "date-fns";
+import { parse, isValid, differenceInDays, isAfter, isBefore, startOfDay } from "date-fns";
 import { AppListToolbar } from "@/components/shared/AppListToolbar";
 import { SearchableSelect as SharedSearchableSelect } from "@/components/shared/SearchableSelect";
 import { DatePicker as SharedDatePicker } from "@/components/shared/DatePicker";
+
+import { 
+    DailyFGPlan, 
+    INITIAL_PLANS, 
+    PlanStatus 
+} from "@/lib/productionPlanSharedData";
+
 import {
     AlertDialog,
     AlertDialogAction,
@@ -74,32 +74,22 @@ import {
     AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 
+const SHIFT_OPTIONS = ["Morning", "Night"];
 
 // ============================================================================
-// TYPE DEFINITIONS
+// PRODUCTION PLAN MANAGEMENT MODULE
+// ============================================================================
+// This module handles the creation and tracking of production plans.
+// Key Features:
+// - Date range planning (Start & End dates) with 30-day strict validation.
+// - Status lifecycle: To Do -> In Progress -> Completed -> Overdue.
+// - Real-time output tracking (Fulfilled vs Targeted quantity).
+// - Integration: Plans created here are linkable in Material Requests.
 // ============================================================================
 
-interface FGItem {
-    id?: string;
-    code: string;
-    name: string;
-    type?: string;
-    uom?: string;
-}
-
-interface DailyFGPlan {
-    id: number;
-    planCode: string;
-    planDate: string; // Added date field
-
-    operationName: string;
-    itemId: string;
-    itemName: string;
-    shift: "Morning" | "Night";
-    plannedQty: string;
-    uom: string;
-    status: string;
-}
+// ============================================================================
+// HELPERS
+// ============================================================================
 
 const formatDate = (date: Date | string): string => {
     if (!date) return "";
@@ -159,32 +149,7 @@ const MOCK_OPERATIONS = [
     }
 ];
 
-const INITIAL_PLANS: DailyFGPlan[] = [
-    {
-        id: 1,
-        planCode: "PLN-24-001",
-        planDate: format(new Date(), "dd-MM-yyyy"),
-        operationName: "Lead Generation & Purification",
-        itemId: "sfg-1",
-        itemName: "Purified Lead",
-        shift: "Morning",
-        plannedQty: "50.0",
-        uom: "kg",
-        status: "Planned"
-    },
-    {
-        id: 2,
-        planCode: "PLN-24-002",
-        planDate: format(new Date(), "dd-MM-yyyy"),
-        operationName: "Assembly line & Packaging",
-        itemId: "fg-1",
-        itemName: "GSV 7",
-        shift: "Night",
-        plannedQty: "25.0",
-        uom: "nos",
-        status: "Planned"
-    },
-];
+// Mock plans migrated to shared data
 
 // ============================================================================
 // MAIN COMPONENT
@@ -197,11 +162,10 @@ export default function ProductionPlan() {
     const [searchTerm, setSearchTerm] = useState("");
     const [opFilter, setOpFilter] = useState("All");
     const [shiftFilter, setShiftFilter] = useState("All");
+    const [statusFilter, setStatusFilter] = useState("All");
     const [filterDate, setFilterDate] = useState("");
     const [currentPage, setCurrentPage] = useState(1);
-    // Pagination state - using DataTablePagination component
     const [itemsPerPage, setItemsPerPage] = useState(10);
-
 
     // Data State
     const [plans, setPlans] = useState<DailyFGPlan[]>(INITIAL_PLANS);
@@ -212,21 +176,22 @@ export default function ProductionPlan() {
     const [currentPlan, setCurrentPlan] = useState<DailyFGPlan | null>(null);
 
     // Form State
-    const [formDate, setFormDate] = useState(format(new Date(), "dd-MM-yyyy"));
+    const [formStartDate, setFormStartDate] = useState(format(new Date(), "dd-MM-yyyy"));
+    const [formEndDate, setFormEndDate] = useState(format(new Date(), "dd-MM-yyyy"));
     const [formShift, setFormShift] = useState<"Morning" | "Night" | "">("");
     const [selectedOpId, setSelectedOpId] = useState("");
     const [formOutputs, setFormOutputs] = useState<any[]>([]);
-
+    const [formStatus, setFormStatus] = useState<PlanStatus>("To Do");
 
     // Filtering
     const filteredPlans = plans.filter(p => {
         const matchesSearch = p.planCode.toLowerCase().includes(searchTerm.toLowerCase());
         const matchesOp = opFilter === "All" || p.operationName === opFilter;
         const matchesShift = shiftFilter === "All" || p.shift === shiftFilter;
-        const matchesDate = !filterDate || p.planDate === filterDate;
-        return matchesSearch && matchesOp && matchesShift && matchesDate;
+        const matchesStatus = statusFilter === "All" || p.status === statusFilter;
+        const matchesDate = !filterDate || p.startDate === filterDate || p.endDate === filterDate;
+        return matchesSearch && matchesOp && matchesShift && matchesStatus && matchesDate;
     });
-
 
     const totalPages = Math.ceil(filteredPlans.length / itemsPerPage);
     const paginatedPlans = filteredPlans.slice((currentPage - 1) * itemsPerPage, currentPage * itemsPerPage);
@@ -241,7 +206,29 @@ export default function ProductionPlan() {
     // Reset to page 1 when filters change
     useEffect(() => {
         setCurrentPage(1);
-    }, [searchTerm, opFilter, shiftFilter, filterDate]);
+    }, [searchTerm, opFilter, shiftFilter, statusFilter, filterDate]);
+
+    /**
+     * Date Range Validation Logic:
+     * 1. End Date must be greater than or equal to Start Date.
+     * 2. The total duration cannot exceed 30 days per user requirement.
+     */
+    const getDateRangeError = () => {
+        if (!formStartDate || !formEndDate) return null;
+        const start = parseDateString(formStartDate);
+        const end = parseDateString(formEndDate);
+        
+        if (isBefore(end, start)) {
+            return "End Date must be greater than or equal to Start Date";
+        }
+        
+        const days = differenceInDays(end, start);
+        if (days > 30) {
+            return "Maximum range between start and end date is 30 days";
+        }
+        
+        return null;
+    };
 
     // Validation
     const isFormValid = () => {
@@ -249,7 +236,8 @@ export default function ProductionPlan() {
             selectedOpId !== "" &&
             formShift !== "" &&
             formOutputs.length > 0 &&
-            formOutputs.every(o => o.quantity > 0 && o.quantity <= 1000000)
+            formOutputs.every(o => o.quantity > 0 && o.quantity <= 1000000) &&
+            !getDateRangeError()
         );
     };
 
@@ -273,10 +261,12 @@ export default function ProductionPlan() {
     const handleCreatePlan = () => {
         setDialogMode("create");
         setCurrentPlan(null);
-        setFormDate(format(new Date(), "dd-MM-yyyy"));
+        setFormStartDate(format(new Date(), "dd-MM-yyyy"));
+        setFormEndDate(format(new Date(), "dd-MM-yyyy"));
         setFormShift("");
         setSelectedOpId("");
         setFormOutputs([]);
+        setFormStatus("To Do");
         setDialogOpen(true);
     };
 
@@ -286,8 +276,10 @@ export default function ProductionPlan() {
         if (plan) {
             setCurrentPlan(plan);
             setDialogMode("edit");
-            setFormDate(plan.planDate);
+            setFormStartDate(plan.startDate);
+            setFormEndDate(plan.endDate);
             setFormShift(plan.shift);
+            setFormStatus(plan.status);
 
             // Reconstruct the mock operation and outputs for editing
             const op = MOCK_OPERATIONS.find(o => o.outputs.some(out => out.item_id === plan.itemId));
@@ -306,8 +298,10 @@ export default function ProductionPlan() {
         if (plan) {
             setCurrentPlan(plan);
             setDialogMode("view");
-            setFormDate(plan.planDate);
+            setFormStartDate(plan.startDate);
+            setFormEndDate(plan.endDate);
             setFormShift(plan.shift);
+            setFormStatus(plan.status);
 
             const op = MOCK_OPERATIONS.find(o => o.outputs.some(out => out.item_id === plan.itemId));
             setSelectedOpId(op?.id || "");
@@ -323,7 +317,12 @@ export default function ProductionPlan() {
     const handleDeletePlan = () => {
         if (currentPlan) {
             setPlans(plans.filter(p => p.id !== currentPlan.id));
-            toast({ title: "Deleted", description: "Production Plan removed successfully" });
+            toast({
+                variant: "success",
+                title: "Deleted",
+                description: "Production Plan removed successfully",
+                duration: 15000
+            });
             setDialogOpen(false);
         }
     };
@@ -336,33 +335,48 @@ export default function ProductionPlan() {
             const newPlans: DailyFGPlan[] = formOutputs.map((out, idx) => ({
                 id: Date.now() + idx,
                 planCode: `PLN-${new Date().getFullYear().toString().slice(-2)}-${String(plans.length + 1 + idx).padStart(3, '0')}`,
-                planDate: formDate,
+                startDate: formStartDate,
+                endDate: formEndDate,
                 operationName: opName,
                 itemId: out.item_id,
+                itemCode: out.item?.code || "",
                 itemName: out.item?.name || "",
                 shift: formShift as "Morning" | "Night",
-
                 plannedQty: out.quantity.toString(),
+                fulfilledQty: "0",
                 uom: out.item?.uom || "",
-                status: "Planned"
+                status: formStatus
             }));
             setPlans([...newPlans, ...plans]);
-            toast({ title: "Success", description: `${newPlans.length} production plans created` });
+            toast({
+                variant: "success",
+                title: "Success",
+                description: `${newPlans.length} production plans created`,
+                duration: 15000
+            });
         } else if (dialogMode === "edit" && currentPlan) {
             const out = formOutputs[0];
             const opName = MOCK_OPERATIONS.find(o => o.id === selectedOpId)?.name || "";
             setPlans(plans.map(p => p.id === currentPlan.id ? {
                 ...p,
-                planDate: formDate,
+                startDate: formStartDate,
+                endDate: formEndDate,
                 operationName: opName,
                 itemId: out.item_id,
+                itemCode: out.item?.code || p.itemCode,
                 itemName: out.item?.name || "",
                 shift: formShift as "Morning" | "Night",
                 plannedQty: out.quantity.toString(),
-                uom: out.item?.uom || ""
+                uom: out.item?.uom || "",
+                status: formStatus
             } : p));
 
-            toast({ title: "Updated", description: "Production Plan updated successfully" });
+            toast({
+                variant: "success",
+                title: "Updated",
+                description: "Production Plan updated successfully",
+                duration: 15000
+            });
         }
         setDialogOpen(false);
     };
@@ -405,6 +419,20 @@ export default function ProductionPlan() {
                             searchable: true
                         },
                         {
+                            type: 'select',
+                            label: 'Status',
+                            value: statusFilter,
+                            options: [
+                                { label: "All Status", value: "All" },
+                                { label: "To Do", value: "To Do" },
+                                { label: "In Progress", value: "In Progress" },
+                                { label: "Completed", value: "Completed" },
+                                { label: "Overdue", value: "Overdue" }
+                            ],
+                            onChange: setStatusFilter,
+                            searchable: true
+                        },
+                        {
                             type: 'date',
                             label: 'Date',
                             value: filterDate ? parseDateString(filterDate) : undefined,
@@ -428,10 +456,12 @@ export default function ProductionPlan() {
                                 <TableHeader>
                                     <TableRow className="bg-muted/50">
                                         <TableHead>Plan Code</TableHead>
-                                        <TableHead>Plan Date</TableHead>
+                                        <TableHead>Start Date</TableHead>
+                                        <TableHead>End Date</TableHead>
                                         <TableHead>Operation</TableHead>
-
+                                        <TableHead>Output (Fulfilled / Targeted)</TableHead>
                                         <TableHead>Shift</TableHead>
+                                        <TableHead>Status</TableHead>
                                         <TableHead className="text-center font-bold text-[11px] tracking-wider py-4">Actions</TableHead>
                                     </TableRow>
                                 </TableHeader>
@@ -440,12 +470,19 @@ export default function ProductionPlan() {
                                         paginatedPlans.map((plan) => (
                                             <TableRow key={plan.id}>
                                                 <TableCell className="font-mono text-xs font-medium">{plan.planCode}</TableCell>
-                                                <TableCell className="text-xs font-semibold text-muted-foreground">{plan.planDate}</TableCell>
+                                                <TableCell className="text-xs font-semibold text-muted-foreground">{plan.startDate}</TableCell>
+                                                <TableCell className="text-xs font-semibold text-muted-foreground">{plan.endDate}</TableCell>
                                                 <TableCell>
-
                                                     <Badge variant="secondary" className="bg-blue-50 text-blue-700 border-blue-100 text-[10px] font-bold uppercase tracking-tight">
                                                         {plan.operationName}
                                                     </Badge>
+                                                </TableCell>
+                                                <TableCell>
+                                                    <div className="flex flex-col gap-1">
+                                                        <span className="text-xs font-extrabold text-slate-950">
+                                                            {plan.itemCode} ({plan.fulfilledQty} / {plan.plannedQty})
+                                                        </span>
+                                                    </div>
                                                 </TableCell>
                                                 <TableCell>
                                                     <Badge variant="outline" className={cn(
@@ -453,6 +490,18 @@ export default function ProductionPlan() {
                                                         plan.shift === "Morning" ? "bg-amber-50 text-amber-700 border-amber-200" : "bg-indigo-50 text-indigo-700 border-indigo-200"
                                                     )}>
                                                         {plan.shift}
+                                                    </Badge>
+                                                </TableCell>
+                                                <TableCell>
+                                                    <Badge className={cn(
+                                                        "font-bold text-[10px] px-2 py-0.5 uppercase tracking-wide border-none",
+                                                        plan.status === "To Do" ? "bg-slate-100 text-slate-700 hover:bg-slate-100" :
+                                                        plan.status === "In Progress" ? "bg-amber-100 text-amber-700 hover:bg-amber-100" :
+                                                        plan.status === "Completed" ? "bg-emerald-100 text-emerald-700 hover:bg-emerald-100" :
+                                                        plan.status === "Overdue" ? "bg-red-100 text-red-700 hover:bg-red-100" :
+                                                        "bg-slate-100 text-slate-700 hover:bg-slate-100"
+                                                    )}>
+                                                        {plan.status}
                                                     </Badge>
                                                 </TableCell>
                                                 <TableCell className="text-center py-4">
@@ -465,7 +514,7 @@ export default function ProductionPlan() {
                                         ))
                                     ) : (
                                         <TableRow>
-                                            <TableCell colSpan={6} className="h-24 text-center text-muted-foreground">
+                                            <TableCell colSpan={8} className="h-24 text-center text-muted-foreground">
                                                 No production plans found
                                             </TableCell>
                                         </TableRow>
@@ -492,7 +541,10 @@ export default function ProductionPlan() {
 
             {/* CREATE/EDIT/VIEW DIALOG - REPLICATING MATERIAL RELEASE STYLE */}
             <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
-                <DialogContent className="max-w-2xl overflow-hidden p-0">
+                <DialogContent
+                    className="max-w-2xl overflow-hidden p-0"
+                    onPointerDownOutside={(e) => e.preventDefault()}
+                >
                     <DialogHeader className="p-6 pb-2">
                         <DialogTitle className="text-xl font-bold uppercase tracking-tight text-foreground">
                             {dialogMode === "create" ? "Create Production Plan" : dialogMode === "edit" ? "Modify Production Plan" : "Production Plan Details"}
@@ -517,33 +569,35 @@ export default function ProductionPlan() {
                                     </div>
                                 )}
                                 <div className="space-y-1">
-                                    <Label className="text-[10px] uppercase font-bold text-muted-foreground block tracking-wider">Plan Date <span className="text-red-500">*</span></Label>
+                                    <Label className="text-[10px] uppercase font-bold text-muted-foreground block tracking-wider">Start Date <span className="text-red-500">*</span></Label>
                                     <SharedDatePicker
-                                        date={formDate ? parseDateString(formDate) : undefined}
-                                        setDate={(date) => setFormDate(date ? format(date, "dd-MM-yyyy") : "")}
+                                        date={formStartDate ? parseDateString(formStartDate) : undefined}
+                                        setDate={(date) => setFormStartDate(date ? format(date, "dd-MM-yyyy") : "")}
                                         disabled={dialogMode === "view"}
                                         showClear={false}
                                     />
                                 </div>
                                 <div className="space-y-1">
-                                    <Label className="text-[10px] uppercase font-bold text-muted-foreground block tracking-wider">Shift <span className="text-red-500">*</span></Label>
-                                    <Select
-                                        value={formShift}
-                                        onValueChange={(val: any) => setFormShift(val)}
+                                    <Label className="text-[10px] uppercase font-bold text-muted-foreground block tracking-wider">End Date <span className="text-red-500">*</span></Label>
+                                    <SharedDatePicker
+                                        date={formEndDate ? parseDateString(formEndDate) : undefined}
+                                        setDate={(date) => setFormEndDate(date ? format(date, "dd-MM-yyyy") : "")}
                                         disabled={dialogMode === "view"}
-                                    >
-                                        <SelectTrigger className="h-9 text-sm">
-                                            <SelectValue placeholder="Select Shift" />
-                                        </SelectTrigger>
-                                        <SelectContent>
-                                            <SelectItem value="Morning">Morning</SelectItem>
-                                            <SelectItem value="Night">Night</SelectItem>
-                                        </SelectContent>
-                                    </Select>
+                                        showClear={false}
+                                    />
+                                    {getDateRangeError() && <p className="text-[10px] text-red-500 font-bold mt-1">{getDateRangeError()}</p>}
                                 </div>
-                            </div>
-
-                            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                <div className="space-y-1">
+                                    <Label className="text-[10px] uppercase font-bold text-muted-foreground block tracking-wider">Shift <span className="text-red-500">*</span></Label>
+                                    <SharedSearchableSelect
+                                        value={formShift}
+                                        options={SHIFT_OPTIONS}
+                                        onChange={(val) => setFormShift(val as "Morning" | "Night")}
+                                        placeholder="Select shift..."
+                                        disabled={dialogMode === "view"}
+                                        className="h-9 min-h-9 text-sm"
+                                    />
+                                </div>
                                 <div className="space-y-1">
                                     <SharedSearchableSelect
                                         label="Operation *"
@@ -648,7 +702,12 @@ export default function ProductionPlan() {
                             <Button
                                 onClick={handleSave}
                                 disabled={!isFormValid()}
-                                className="h-9 px-8 font-bold uppercase tracking-wider text-[10px]"
+                                className={cn(
+                                    "h-9 px-8 font-bold uppercase tracking-wider text-[10px]",
+                                    isFormValid()
+                                        ? "bg-blue-600 text-white hover:bg-blue-600/90 border-blue-600"
+                                        : "bg-muted text-muted-foreground border-muted hover:bg-muted disabled:!opacity-100"
+                                )}
                             >
                                 {dialogMode === "create" ? "Save Plan" : "Update Changes"}
                             </Button>
