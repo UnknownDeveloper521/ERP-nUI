@@ -5,11 +5,9 @@ import {
   signInWithEmail,
   signOut,
   signUpWithEmail,
-  signInCompanyWithEmail
-} from './customAuth';
+} from './supabase';
 import { rolesPermissionsApi, RoleRecord, PermissionItem } from './api';
 import { usePermissionStore } from '../stores/permissionStore';
-import { transformPermissions } from '../utils/permissionHelper';
 
 // --- Types ---
 
@@ -415,6 +413,23 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     localStorage.setItem('attendance', JSON.stringify(attendance));
   }, [attendance]);
 
+  const mapSupabaseAuthUser = (supabaseUser: {
+    id: string;
+    email?: string;
+    user_metadata?: Record<string, unknown>;
+  }) => {
+    const meta = supabaseUser.user_metadata ?? {};
+    return {
+      email: supabaseUser.email,
+      id: supabaseUser.id,
+      role: (meta.role ?? meta.role_code) as string | undefined,
+      companyId: (meta.company_id ?? meta.companyId) as string | number | undefined,
+      tenantId: (meta.tenant_id ?? meta.tenantId) as string | number | undefined,
+      roleId: (meta.role_id ?? meta.roleId) as string | number | undefined,
+      employeeId: (meta.employee_id ?? meta.employeeId) as string | number | undefined,
+    };
+  };
+
   const upsertLocalUserFromEmail = (authUser: any) => {
     const { email, id: supabaseId, companyId, tenantId, roleId, employeeId, role } = authUser;
     const existing = users.find(u => u.email.toLowerCase() === email.toLowerCase());
@@ -465,36 +480,19 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const login = async (email: string, password: string): Promise<boolean> => {
     const { data, error } = await signInWithEmail(email, password);
-    if (error || !data) {
-      console.error("Custom auth login error:", error?.message || "No data returned", error);
+    if (error || !data?.user?.email) {
+      console.error("Supabase login error:", error?.message || "No user returned", error);
       return false;
     }
 
-    const authUser = data.user;
-    if (!authUser?.email) {
-      console.error("Custom auth login: no user email returned");
-      return false;
-    }
-
-    // New Permission Handling
-    const setPermissions = usePermissionStore.getState().setPermissions;
-    if (data.permissions) {
-      const transformed = transformPermissions(data.permissions);
-      setPermissions(transformed);
-    } else {
-      console.warn("⚠️ No permissions received in login response");
-      // Optional: logout if permissions are mandatory
-      // await logout();
-      // return false;
-    }
-
+    const authUser = mapSupabaseAuthUser(data.user);
     const localUser = upsertLocalUserFromEmail(authUser);
     if (localUser.status === "Inactive") {
       console.error("Local user is inactive");
       return false;
     }
     setUser(localUser);
-    
+
     return true;
   };
 
@@ -533,25 +531,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
     const init = async () => {
       try {
-        const authResult = await getCurrentUser();
-        const authUser = authResult?.user;
-        const authPermissions = authResult?.permissions;
+        const authUser = await getCurrentUser();
 
         if (authUser?.email) {
-          // Hydrate permissions if provided by verify API
-          if (authPermissions) {
-            const setPermissions = usePermissionStore.getState().setPermissions;
-            const transformed = transformPermissions(authPermissions);
-            setPermissions(transformed);
-          }
-
-          const localUser = upsertLocalUserFromEmail(authUser);
+          const localUser = upsertLocalUserFromEmail(mapSupabaseAuthUser(authUser));
           if (localUser.status !== "Inactive") {
             setUser(localUser);
           }
         } else {
-          // If verify API returns no user but we have one in local state (from localStorage init)
-          // we must clear it to avoid being stuck in "user but no permissions" state
           setUser(null);
           localStorage.removeItem('currentUser');
           usePermissionStore.getState().clearPermissions();
@@ -559,7 +546,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
         unsub = onAuthStateChange((nextUser) => {
           if (nextUser?.email) {
-            const localUser = upsertLocalUserFromEmail(nextUser);
+            const localUser = upsertLocalUserFromEmail(mapSupabaseAuthUser(nextUser));
             if (localUser.status !== "Inactive") {
               setUser(localUser);
             } else {

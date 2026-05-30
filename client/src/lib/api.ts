@@ -1,5 +1,5 @@
 // API client for ERP system
-import { getAccessToken } from './customAuth';
+import { getAccessToken } from './supabase';
 
 import { API_BASE } from './config';
 
