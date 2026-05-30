@@ -1,4 +1,5 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef, useMemo } from "react";
+import { useDebounce } from "@/hooks/useDebounce";
 import { useLocation } from "wouter";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -14,23 +15,40 @@ import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, 
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Command, CommandInputBorderless, CommandList, CommandEmpty, CommandGroup, CommandItem } from "@/components/ui/command";
-import { Plus, Calendar as CalendarIcon, ChevronLeft, ChevronRight, Edit, ChevronsUpDown, Check, ChevronDown, X, Trash2, Search } from "lucide-react";
+import { Plus, Calendar as CalendarIcon, ChevronLeft, ChevronRight, Edit, ChevronsUpDown, Check, ChevronDown, X, Trash2, Search, AlertCircle, Loader2 } from "lucide-react";
 import { AppListToolbar } from "@/components/shared/AppListToolbar";
 import { SearchableSelect } from "@/components/shared/SearchableSelect";
 import { DataTablePagination } from "@/components/shared/DataTablePagination";
 import { TableActionButtons } from "@/components/shared/TableActionButtons";
 import { format, parse } from "date-fns";
-import { cn } from "@/lib/utils";
+import { cn, resolveFileUrl } from "@/lib/utils";
 import { useToast } from "@/hooks/use-toast";
 import ImprovedLeaveCalendar from "@/components/hrms/ImprovedLeaveCalendar";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { leaveManagementApi, commonApi, LeaveRecord } from "@/lib/api";
+import { useCommonStore } from "@/store/commonStore";
+import { isLeaveTypeEntityName } from "@/services/loadCommonData";
+import { useHasPermission } from "@/hooks/usePermissions";
 
-// Tabs configuration - Only 3 tabs: Dashboard, Leave Entry, Calendar
+
+// Tabs configuration - Leave Entry, Calendar
 const tabsConfig = [
-  { id: "leave-entry", label: "Leave Entry", roles: ["ADMIN", "HR"] },
-  { id: "calendar", label: "Calendar", roles: ["ADMIN", "HR", "EMPLOYEE"] }
+  { id: "leave-entry", label: "Leave Entry", permissionKey: "HRMS:Leave Management:Leave Entry" },
+  { id: "calendar", label: "Calendar", permissionKey: "HRMS:Leave Management:Calendar" }
 ];
 
-function FormDatePicker({ date, setDate, disabled = false }: { date?: Date, setDate: (d?: Date) => void, disabled?: boolean }) {
+interface LeaveApplication {
+  id: string;
+  employeeCode: string;
+  employeeName: string;
+  leaveType: string;
+  fromDate: string;
+  toDate: string;
+  paidLeave: boolean;
+  remark: string;
+}
+
+function LeaveFormDatePicker({ date, setDate, disabled = false, minDate }: { date?: Date, setDate: (d?: Date) => void, disabled?: boolean, minDate?: Date }) {
   const [isOpen, setIsOpen] = useState(false);
   const [viewMode, setViewMode] = useState<"day" | "month" | "year">("day");
   const [visibleDate, setVisibleDate] = useState(() => date || new Date());
@@ -87,37 +105,51 @@ function FormDatePicker({ date, setDate, disabled = false }: { date?: Date, setD
 
     const days = [];
 
-    const prevMonth = new Date(year, month - 1, 0);
+    // Normalize minDate to midnight for comparison
+    const normalizedMinDate = minDate ? new Date(minDate.getFullYear(), minDate.getMonth(), minDate.getDate(), 0, 0, 0, 0) : null;
+
+    const prevMonthLastDay = new Date(year, month, 0).getDate();
     for (let i = startingDayOfWeek - 1; i >= 0; i--) {
+      const currentDate = new Date(year, month - 1, prevMonthLastDay - i);
+      const normalizedCurrentDate = new Date(currentDate.getFullYear(), currentDate.getMonth(), currentDate.getDate(), 0, 0, 0, 0);
+      const isDisabled = normalizedMinDate ? normalizedCurrentDate < normalizedMinDate : false;
       days.push({
-        date: new Date(year, month - 1, prevMonth.getDate() - i),
+        date: currentDate,
         isCurrentMonth: false,
         isToday: false,
-        isSelected: false
+        isSelected: false,
+        isDisabled
       });
     }
 
     for (let day = 1; day <= daysInMonth; day++) {
       const currentDate = new Date(year, month, day);
+      const normalizedCurrentDate = new Date(currentDate.getFullYear(), currentDate.getMonth(), currentDate.getDate(), 0, 0, 0, 0);
       const today = new Date();
       const isToday = currentDate.toDateString() === today.toDateString();
       const isSelected = date && currentDate.toDateString() === date.toDateString();
+      const isDisabled = normalizedMinDate ? normalizedCurrentDate < normalizedMinDate : false;
 
       days.push({
         date: currentDate,
         isCurrentMonth: true,
         isToday,
-        isSelected
+        isSelected,
+        isDisabled
       });
     }
 
     const remainingDays = 42 - days.length;
     for (let day = 1; day <= remainingDays; day++) {
+      const currentDate = new Date(year, month + 1, day);
+      const normalizedCurrentDate = new Date(currentDate.getFullYear(), currentDate.getMonth(), currentDate.getDate(), 0, 0, 0, 0);
+      const isDisabled = normalizedMinDate ? normalizedCurrentDate < normalizedMinDate : false;
       days.push({
-        date: new Date(year, month + 1, day),
+        date: currentDate,
         isCurrentMonth: false,
         isToday: false,
-        isSelected: false
+        isSelected: false,
+        isDisabled
       });
     }
 
@@ -188,9 +220,11 @@ function FormDatePicker({ date, setDate, disabled = false }: { date?: Date, setD
                 !day.isCurrentMonth && "text-muted-foreground opacity-50",
                 day.isToday && "bg-accent text-accent-foreground font-semibold",
                 day.isSelected && "bg-primary text-primary-foreground font-semibold",
-                day.isCurrentMonth && "hover:bg-accent hover:text-accent-foreground"
+                day.isCurrentMonth && "hover:bg-accent hover:text-accent-foreground",
+                day.isDisabled && "opacity-30 cursor-not-allowed hover:bg-transparent"
               )}
-              onClick={() => handleDateSelect(day.date)}
+              onClick={() => !day.isDisabled && handleDateSelect(day.date)}
+              disabled={day.isDisabled}
             >
               {day.date.getDate()}
             </Button>
@@ -319,105 +353,322 @@ function FormDatePicker({ date, setDate, disabled = false }: { date?: Date, setD
 }
 
 
+import Unauthorized from "../Unauthorized";
+
 export default function LeaveManagement() {
+  const queryClient = useQueryClient();
   const { toast } = useToast();
   const [location, setLocation] = useLocation();
-  const [activeTab, setActiveTab] = useState("leave-entry");
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const { isMenuVisible, hasPermission, canCreate, canEdit, canDelete } = useHasPermission();
+  const leaveEntryModuleName = "HRMS:Leave Management:Leave Entry";
+
+  const visibleTabs = React.useMemo(() => {
+      return tabsConfig.filter(tab => isMenuVisible(tab.permissionKey));
+  }, [isMenuVisible]);
+
+  // Early return if no tab access at all
+  if (visibleTabs.length === 0) {
+    return <Unauthorized />;
+  }
+
+  const defaultTab = visibleTabs.length > 0 ? visibleTabs[0].id : null;
+
+  const [activeTab, setActiveTab] = useState(() => {
+    const currentTab = location.split('/').pop();
+    if (visibleTabs.some(t => t.id === currentTab)) {
+      return currentTab as 'leave-entry' | 'calendar';
+    }
+    return defaultTab || (visibleTabs.length > 0 ? visibleTabs[0].id : "leave-entry") as 'leave-entry' | 'calendar';
+  });
+
+  // Sync tab with URL and handle redirection
+  useEffect(() => {
+    const currentTabInPath = location.split('/').pop();
+    
+    // 1. If we're at the base path, redirect to default tab
+    if (location === "/hrms/leave-management" && defaultTab) {
+      setActiveTab(defaultTab);
+      setLocation(`/hrms/leave-management/${defaultTab}`);
+      return;
+    }
+
+    // 2. If current tab in path is unauthorized, redirect to default authorized tab
+    if (currentTabInPath && (currentTabInPath === 'leave-entry' || currentTabInPath === 'calendar')) {
+      const isCurrentAuthorized = visibleTabs.some(t => t.id === currentTabInPath);
+      if (!isCurrentAuthorized && defaultTab) {
+        setActiveTab(defaultTab);
+        setLocation(`/hrms/leave-management/${defaultTab}`);
+      }
+    }
+  }, [location, defaultTab, visibleTabs, setLocation]);
 
   // Calendar state
   const [calendarView, setCalendarView] = useState<'week' | 'month'>('month');
   const [currentDate, setCurrentDate] = useState(new Date());
 
-  // Leave Entry Form State
-  const [formData, setFormData] = useState({
-    employee: "",
-    leaveType: "",
-    fromDate: undefined as Date | undefined,
-    toDate: undefined as Date | undefined,
-    paidLeave: true,
-    remark: "",
-    attachment: null as File | null
-  });
-
-  const [formErrors, setFormErrors] = useState<{ [key: string]: string }>({});
-  const [isAddEditModalOpen, setIsAddEditModalOpen] = useState(false);
-  const [editingLeave, setEditingLeave] = useState<LeaveApplication | null>(null);
-  const [isViewModalOpen, setIsViewModalOpen] = useState(false);
-  const [selectedApplication, setSelectedApplication] = useState<any>(null);
-  const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false);
-  const [leaveToDelete, setLeaveToDelete] = useState<string | null>(null);
-
   // Leave Entry Tab State - Filters
   const [searchQuery, setSearchQuery] = useState("");
+  const debouncedSearchQuery = useDebounce(searchQuery, 500);
   const [dateRangeFrom, setDateRangeFrom] = useState<Date | undefined>(undefined);
   const [dateRangeTo, setDateRangeTo] = useState<Date | undefined>(undefined);
 
   // Pagination State
   const [leaveEntryCurrentPage, setLeaveEntryCurrentPage] = useState(1);
-  // Pagination state - using DataTablePagination component
   const [itemsPerPage, setItemsPerPage] = useState(10);
 
-  // Define the leave application type
-  type LeaveApplication = {
-    id: string;
-    employeeCode: string;
-    employeeName: string;
-    leaveType: string;
-    fromDate: string;
-    toDate: string;
-    paidLeave: boolean;
-    remark: string;
-    attachment?: File | null;
+  // Modal State (needed before queries for lazy loading)
+  const [isAddEditModalOpen, setIsAddEditModalOpen] = useState(false);
+
+  // Queries
+  const { data: leavesData, isLoading: isLeavesLoading } = useQuery({
+    queryKey: ["leaves", leaveEntryCurrentPage, itemsPerPage, debouncedSearchQuery, dateRangeFrom, dateRangeTo],
+    queryFn: () => leaveManagementApi.getList({
+      page: leaveEntryCurrentPage,
+      limit: itemsPerPage,
+      search: debouncedSearchQuery,
+      from_date: dateRangeFrom ? format(dateRangeFrom, 'yyyy-MM-dd') : undefined,
+      to_date: dateRangeTo ? format(dateRangeTo, 'yyyy-MM-dd') : undefined,
+    }),
+    enabled: activeTab === "leave-entry", // Only fetch when on Leave Entry tab
+    staleTime: 0,
+    gcTime: 0,
+    refetchOnMount: "always",
+  });
+
+  const { data: employeesDropdownData } = useQuery({
+    queryKey: ["employees-dropdown"],
+    queryFn: () => commonApi.getEmployees({ employment_status_id: 17 }),
+    enabled: isAddEditModalOpen, // Only fetch when dialog is open
+    staleTime: 0,
+    gcTime: 0,
+    refetchOnMount: "always",
+  });
+
+  const leaveTypesFromStore = useCommonStore((state) => state.leaveTypes);
+  const entityValuesFromStore = useCommonStore((state) => state.entityValues);
+
+  /*
+  const { data: leaveTypesDropdownData } = useQuery({
+    queryKey: ["leave-types-dropdown"],
+    queryFn: () => commonApi.getLeaveTypes(),
+    enabled: isAddEditModalOpen, // Only fetch when dialog is open
+    staleTime: 0,
+    gcTime: 0,
+    refetchOnMount: "always",
+  });
+  const leaveTypeOptions = leaveTypesDropdownData?.data?.records || [];
+  */
+
+  const { data: calendarData } = useQuery({
+    queryKey: ["leave-calendar", currentDate.getMonth() + 1, currentDate.getFullYear()],
+    queryFn: () => leaveManagementApi.getCalendar(currentDate.getMonth() + 1, currentDate.getFullYear()),
+    enabled: activeTab === "calendar",
+    staleTime: 0,
+    gcTime: 0,
+    refetchOnMount: "always",
+  });
+
+  const employeeOptions = employeesDropdownData?.data?.records || [];
+  
+  // Table data for Leave Entry tab (Paginated)
+  const leaveApplications = leavesData?.data?.records || [];
+
+  // Leave types from login entity master (getleavetype / LEAVE_TYPE); fallback to entityValues if slice empty
+  const leaveTypeOptions = useMemo(() => {
+    const mapRow = (r: any) => ({
+      id: r.id,
+      leave_type_name: r.leave_type_name ?? r.value_name ?? r.name ?? "",
+    });
+    const fromSlice = (leaveTypesFromStore || []).map(mapRow);
+    if (fromSlice.length > 0) return fromSlice;
+    return (entityValuesFromStore || [])
+      .filter((r: any) => isLeaveTypeEntityName(r.entity_type_name))
+      .map(mapRow);
+  }, [leaveTypesFromStore, entityValuesFromStore]);
+
+  /**
+   * Data Transformation for Calendar - Separate from Table
+   * Transforms nested employee-leave structure into flat arrays for the original component
+   */
+  const calendarEmployees = (calendarData?.data?.employees || []).map((emp: any) => 
+    typeof emp.employee_name === 'object' && emp.employee_name !== null 
+      ? (emp.employee_name as any).employee_name 
+      : emp.employee_name
+  );
+
+  const calendarLeaveApplications = (calendarData?.data?.employees || []).flatMap((emp: any) => 
+    (emp.leaves || []).map((leave: any) => ({
+      id: `${emp.employee_code}-${leave.from_date}`,
+      employeeCode: emp.employee_code,
+      employeeName: typeof emp.employee_name === 'object' && emp.employee_name !== null 
+        ? (emp.employee_name as any).employee_name 
+        : emp.employee_name,
+      leaveType: typeof leave.leave_type_name === 'object' && leave.leave_type_name !== null 
+        ? (leave.leave_type_name as any).leave_type_name 
+        : leave.leave_type_name,
+      fromDate: leave.from_date,
+      toDate: leave.to_date,
+      paidLeave: leave.is_paid_leave,
+      remark: leave.remarks
+    }))
+  );
+
+  const leaveTypeColors: { [key: string]: string } = {
+    'Paid Leave': '#3b82f6',
+    'Sick Leave': '#ef4444',
+    'Casual Leave': '#f59e0b',
+    'Annual Leave': '#10b981',
+    'Unpaid Leave': '#6b7280'
   };
+  const totalLeaves = leavesData?.data?.pagination?.total || 0;
 
-  // Leave Applications State - Mock data with YYYY-MM-DD format
-  const [leaveApplications, setLeaveApplications] = useState<LeaveApplication[]>([
-    {
-      id: "leave_001",
-      employeeCode: "EMP001",
-      employeeName: "John Doe",
-      leaveType: "Paid Leave",
-      fromDate: "2026-03-10",
-      toDate: "2026-03-12",
-      paidLeave: true,
-      remark: "Family vacation"
-    },
-    {
-      id: "leave_002",
-      employeeCode: "EMP002",
-      employeeName: "Jane Smith",
-      leaveType: "Sick Leave",
-      fromDate: "2026-03-15",
-      toDate: "2026-03-16",
-      paidLeave: true,
-      remark: "Medical appointment"
+  // Leave Entry Form State
+  const [formData, setFormData] = useState({
+    id: undefined as number | undefined,
+    employee_id: "",
+    leave_type_id: "",
+    fromDate: undefined as Date | undefined,
+    toDate: undefined as Date | undefined,
+    paidLeave: true,
+    remark: "",
+    attachments: [] as { id: number; file_name: string; file_url: string }[],
+    newFiles: [] as File[]
+  });
+
+  const [formErrors, setFormErrors] = useState<{ [key: string]: string }>({});
+  const [editingLeave, setEditingLeave] = useState<any | null>(null);
+  const [isViewModalOpen, setIsViewModalOpen] = useState(false);
+  const [selectedApplication, setSelectedApplication] = useState<any>(null);
+  const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false);
+  const [leaveToDelete, setLeaveToDelete] = useState<number | null>(null);
+
+  // Get employee joining date from the already-fetched employee dropdown data
+  const selectedEmployee = employeeOptions.find((emp: any) => String(emp.id) === String(formData.employee_id));
+  const employeeJoiningDate = selectedEmployee?.date_of_joining 
+    ? (() => {
+        // Parse the date string carefully to avoid timezone issues
+        const dateStr = selectedEmployee.date_of_joining;
+        // If it's in YYYY-MM-DD format, parse it as local date
+        if (typeof dateStr === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(dateStr)) {
+          const [year, month, day] = dateStr.split('-').map(Number);
+          return new Date(year, month - 1, day); // month is 0-indexed
+        }
+        // Otherwise use default Date constructor
+        return new Date(dateStr);
+      })()
+    : undefined;
+
+  // Auto-clear dates if they're before joining date when employee changes
+  useEffect(() => {
+    if (employeeJoiningDate && formData.fromDate) {
+      const fromDate = formData.fromDate instanceof Date ? formData.fromDate : new Date(formData.fromDate);
+      fromDate.setHours(0, 0, 0, 0);
+      const joiningDate = new Date(employeeJoiningDate);
+      joiningDate.setHours(0, 0, 0, 0);
+      
+      if (fromDate < joiningDate) {
+        setFormData(prev => ({ ...prev, fromDate: undefined, toDate: undefined }));
+        setFormErrors(prev => ({ ...prev, fromDate: "Leave cannot be applied before employee's joining date" }));
+      }
     }
-  ]);
+    if (employeeJoiningDate && formData.toDate) {
+      const toDate = formData.toDate instanceof Date ? formData.toDate : new Date(formData.toDate);
+      toDate.setHours(0, 0, 0, 0);
+      const joiningDate = new Date(employeeJoiningDate);
+      joiningDate.setHours(0, 0, 0, 0);
+      
+      if (toDate < joiningDate) {
+        setFormData(prev => ({ ...prev, toDate: undefined }));
+      }
+    }
+  }, [formData.employee_id, employeeJoiningDate]);
 
-  // Configuration
-  const leaveTypeOptions = ['Paid Leave', 'Sick Leave', 'Casual Leave', 'Annual Leave', 'Unpaid Leave'];
-  const employeeOptions = ['EMP001 - John Doe', 'EMP002 - Jane Smith', 'EMP003 - Mike Johnson', 'EMP004 - Sarah Williams', 'EMP005 - David Brown'];
+  // Mutations
+  const createMutation = useMutation({
+    mutationFn: (data: FormData) => leaveManagementApi.create(data),
+    onSuccess: (res) => {
+      if (res.isSuccessful) {
+        toast({ title: "Success", description: res.message, className: "bg-green-50 border-green-200 text-green-900" });
+        queryClient.invalidateQueries({ queryKey: ["leaves"] });
+        queryClient.invalidateQueries({ queryKey: ["leave-calendar"] });
+        setIsAddEditModalOpen(false);
+        resetForm();
+      } else {
+        toast({ title: "Error", description: res.message, variant: "destructive" });
+      }
+    },
+  });
+
+  const updateMutation = useMutation({
+    mutationFn: ({ id, data }: { id: number; data: FormData }) => leaveManagementApi.update(id, data),
+    onSuccess: (res) => {
+      if (res.isSuccessful) {
+        toast({ title: "Success", description: res.message, className: "bg-green-50 border-green-200 text-green-900" });
+        queryClient.invalidateQueries({ queryKey: ["leaves"] });
+        queryClient.invalidateQueries({ queryKey: ["leave-calendar"] });
+        setIsAddEditModalOpen(false);
+        resetForm();
+      } else {
+        toast({ title: "Error", description: res.message, variant: "destructive" });
+      }
+    },
+  });
+
+  const deleteMutation = useMutation({
+    mutationFn: (id: number) => leaveManagementApi.delete(id),
+    onSuccess: (res) => {
+      if (res.isSuccessful) {
+        toast({ title: "Success", description: res.message, className: "bg-green-50 border-green-200 text-green-900" });
+        queryClient.invalidateQueries({ queryKey: ["leaves"] });
+        queryClient.invalidateQueries({ queryKey: ["leave-calendar"] });
+        setIsDeleteDialogOpen(false);
+        setIsAddEditModalOpen(false);
+        setEditingLeave(null);
+      } else {
+        toast({ title: "Error", description: res.message, variant: "destructive" });
+      }
+    },
+  });
+
+  const isSubmitting = createMutation.isPending || updateMutation.isPending || deleteMutation.isPending;
+
+  const deleteAttachmentsMutation = useMutation({
+    mutationFn: (leaveEntryId: number) => leaveManagementApi.deleteAttachments(leaveEntryId),
+    onSuccess: (res) => {
+      if (res.isSuccessful) {
+        toast({ title: "Success", description: res.message, className: "bg-green-50 border-green-200 text-green-900" });
+        // Clear attachments from form state
+        setFormData(prev => ({
+          ...prev,
+          attachments: []
+        }));
+      } else {
+        toast({ title: "Error", description: res.message, variant: "destructive" });
+      }
+    },
+    onError: (error: any) => {
+      toast({ title: "Error", description: error.message || "Failed to delete attachment", variant: "destructive" });
+    }
+  });
 
   // Set initial tab based on URL
   useEffect(() => {
-    if (location === '/hrms/leave-management/leave-entry') {
-      setActiveTab('leave-entry');
-    } else if (location === '/hrms/leave-management/calendar') {
-      setActiveTab('calendar');
-    } else if (location === '/hrms/leave-management') {
-      setLocation('/hrms/leave-management/leave-entry');
-    } else {
-      setActiveTab('leave-entry');
+    const currentTab = location.split('/').pop();
+    if (currentTab === 'leave-entry' || currentTab === 'calendar') {
+      setActiveTab(currentTab);
+    } else if (location === '/hrms/leave-management' || location === '/hrms/leave-management/') {
+      if (defaultTab) {
+        setLocation(`/hrms/leave-management/${defaultTab}`);
+      }
     }
-  }, [location, setLocation]);
+  }, [location, setLocation, defaultTab]);
 
   // Handle tab changes with URL routing
   const handleTabChange = (value: string) => {
     setActiveTab(value);
     setLocation(`/hrms/leave-management/${value}`);
   };
-
-  const visibleTabs = tabsConfig;
 
   // Calculate duration in days
   const calculateDuration = (from?: Date, to?: Date): number => {
@@ -430,20 +681,20 @@ export default function LeaveManagement() {
   // Form validation
   const validateForm = (): boolean => {
     const errors: { [key: string]: string } = {};
-    if (!formData.employee) errors.employee = "Employee is required";
-    if (!formData.leaveType) errors.leaveType = "Leave Type is required";
+    if (!formData.employee_id) errors.employee_id = "Employee is required";
+    if (!formData.leave_type_id) errors.leave_type_id = "Leave Type is required";
     if (!formData.fromDate) errors.fromDate = "From Date is required";
     if (!formData.toDate) errors.toDate = "To Date is required";
 
-    // Validate From Date is not in the past
-    if (formData.fromDate) {
-      const today = new Date();
-      today.setHours(0, 0, 0, 0);
+    // Validate From Date is not before employee's joining date
+    if (formData.fromDate && employeeJoiningDate) {
       const fromDate = formData.fromDate instanceof Date ? formData.fromDate : new Date(formData.fromDate);
       fromDate.setHours(0, 0, 0, 0);
+      const joiningDate = new Date(employeeJoiningDate);
+      joiningDate.setHours(0, 0, 0, 0);
 
-      if (fromDate < today) {
-        errors.fromDate = "From Date cannot be in the past";
+      if (fromDate < joiningDate) {
+        errors.fromDate = "Leave cannot be applied before employee's joining date";
       }
     }
 
@@ -465,44 +716,65 @@ export default function LeaveManagement() {
 
   // Handle form input changes
   const handleInputChange = (field: string, value: any) => {
-    setFormData(prev => {
-      const newData = { ...prev, [field]: value };
+    // 1. Update form data
+    const newData = { ...formData, [field]: value };
+    setFormData(newData);
 
-      // If From Date changes and To Date becomes invalid, clear To Date
-      if (field === 'fromDate' && value && newData.toDate) {
+    // 2. Clear errors for the changed field
+    setFormErrors(prev => {
+      const newErrors = { ...prev };
+      delete newErrors[field];
+
+      // 3. Real-time validation for date fields
+      if (field === 'toDate' || field === 'fromDate') {
+        const fromDate = field === 'fromDate' ? value : newData.fromDate;
+        const toDate = field === 'toDate' ? value : newData.toDate;
+
+        if (fromDate && toDate) {
+          const from = fromDate instanceof Date ? fromDate : new Date(fromDate);
+          from.setHours(0, 0, 0, 0);
+          const to = toDate instanceof Date ? toDate : new Date(toDate);
+          to.setHours(0, 0, 0, 0);
+
+          if (to < from) {
+            newErrors.toDate = "To Date must be same or after From Date";
+          } else {
+            // Important: Clear the toDate error if it was previously set due to date order
+            if (newErrors.toDate === "To Date must be same or after From Date") {
+              delete newErrors.toDate;
+            }
+          }
+        }
+      }
+      
+      // Also check joining date validation in real-time
+      if (field === 'fromDate' && value && employeeJoiningDate) {
         const fromDate = value instanceof Date ? value : new Date(value);
         fromDate.setHours(0, 0, 0, 0);
-        const toDate = newData.toDate instanceof Date ? newData.toDate : new Date(newData.toDate);
-        toDate.setHours(0, 0, 0, 0);
+        const joiningDate = new Date(employeeJoiningDate);
+        joiningDate.setHours(0, 0, 0, 0);
 
-        if (toDate < fromDate) {
-          newData.toDate = undefined;
+        if (fromDate < joiningDate) {
+          newErrors.fromDate = "Leave cannot be applied before employee's joining date";
         }
       }
 
-      return newData;
+      return newErrors;
     });
-
-    // Clear errors for the changed field
-    if (formErrors[field]) {
-      setFormErrors(prev => {
-        const newErrors = { ...prev };
-        delete newErrors[field];
-        return newErrors;
-      });
-    }
   };
 
   // Reset form
   const resetForm = () => {
     setFormData({
-      employee: "",
-      leaveType: "",
+      id: undefined,
+      employee_id: "",
+      leave_type_id: "",
       fromDate: undefined,
       toDate: undefined,
       paidLeave: true,
       remark: "",
-      attachment: null
+      attachments: [],
+      newFiles: []
     });
     setFormErrors({});
     setEditingLeave(null);
@@ -518,74 +790,63 @@ export default function LeaveManagement() {
   const handleSubmit = () => {
     if (!validateForm()) return;
 
-    if (editingLeave) {
-      setLeaveApplications(prev =>
-        prev.map(app =>
-          app.id === editingLeave.id
-            ? {
-              ...app,
-              employee: formData.employee,
-              leaveType: formData.leaveType,
-              fromDate: formData.fromDate ? format(formData.fromDate, 'yyyy-MM-dd') : '',
-              toDate: formData.toDate ? format(formData.toDate, 'yyyy-MM-dd') : '',
-              paidLeave: formData.paidLeave,
-              remark: formData.remark,
-              attachment: formData.attachment
-            }
-            : app
-        )
-      );
-      toast({
-        title: "Leave Updated Successfully",
-        description: "The leave entry has been updated.",
-        className: "bg-green-50 border-green-200 text-green-900"
-      });
-    } else {
-      const newLeave: LeaveApplication = {
-        id: `leave_${Date.now()}`,
-        employeeCode: formData.employee.split(" - ")[0] || "",
-        employeeName: formData.employee.split(" - ")[1] || formData.employee,
-        leaveType: formData.leaveType,
-        fromDate: formData.fromDate ? format(formData.fromDate, 'yyyy-MM-dd') : '',
-        toDate: formData.toDate ? format(formData.toDate, 'yyyy-MM-dd') : '',
-        paidLeave: formData.paidLeave,
-        remark: formData.remark,
-        attachment: formData.attachment
-      };
-      setLeaveApplications(prev => [newLeave, ...prev]);
-      toast({
-        title: "Leave Added Successfully",
-        description: "The leave entry has been created.",
-        className: "bg-green-50 border-green-200 text-green-900"
+    const fd = new FormData();
+    fd.append("employee_id", String(formData.employee_id));
+    fd.append("leave_type_id", String(formData.leave_type_id));
+    fd.append("from_date", formData.fromDate ? format(formData.fromDate, 'yyyy-MM-dd') : '');
+    fd.append("to_date", formData.toDate ? format(formData.toDate, 'yyyy-MM-dd') : '');
+    fd.append("is_paid_leave", String(formData.paidLeave));
+    fd.append("remarks", formData.remark);
+
+    if (formData.newFiles && formData.newFiles.length > 0) {
+      formData.newFiles.forEach(file => {
+        fd.append("attachments", file);
       });
     }
-    resetForm();
-    setIsAddEditModalOpen(false);
+
+    // Include existing attachments for update if necessary (server might need them to know what to keep)
+    if (editingLeave) {
+      fd.append("existing_attachments", JSON.stringify(formData.attachments));
+      updateMutation.mutate({ id: editingLeave.id, data: fd });
+    } else {
+      createMutation.mutate(fd);
+    }
   };
 
   // Handle view leave details
-  const handleViewLeave = (application: LeaveApplication) => {
-    setSelectedApplication(application);
-    setIsViewModalOpen(true);
+  const handleViewLeave = (application: any) => {
+    leaveManagementApi.getById(application.id).then(res => {
+      if (res.isSuccessful) {
+        setSelectedApplication(res.data);
+        setIsViewModalOpen(true);
+      }
+    });
   };
 
   // Handle edit leave
-  const handleEditLeave = (application: LeaveApplication) => {
-    setEditingLeave(application);
-    setFormData({
-      employee: `${application.employeeCode} - ${application.employeeName}`,
-      leaveType: application.leaveType,
-      fromDate: new Date(application.fromDate),
-      toDate: new Date(application.toDate),
-      paidLeave: application.paidLeave,
-      remark: application.remark,
-      attachment: application.attachment || null
+  const handleEditLeave = (application: any) => {
+    leaveManagementApi.getById(application.id).then(res => {
+      if (res.isSuccessful && res.data) {
+        const leave = res.data;
+        setEditingLeave(leave);
+        setFormData({
+          id: leave.id,
+          employee_id: String(leave.employee_id),
+          leave_type_id: String(leave.leave_type_id),
+          fromDate: new Date(leave.from_date),
+          toDate: new Date(leave.to_date),
+          paidLeave: leave.is_paid_leave,
+          remark: leave.remarks || "",
+          attachments: leave.attachments || [],
+          newFiles: []
+        });
+        setIsAddEditModalOpen(true);
+      }
     });
-    setIsAddEditModalOpen(true);
   };
 
   // Handle delete leave
-  const handleDeleteLeave = (leaveId: string) => {
+  const handleDeleteLeave = (leaveId: number) => {
     setLeaveToDelete(leaveId);
     setIsDeleteDialogOpen(true);
   };
@@ -593,61 +854,26 @@ export default function LeaveManagement() {
   // Confirm delete
   const confirmDelete = () => {
     if (leaveToDelete) {
-      setLeaveApplications(prev => prev.filter(app => app.id !== leaveToDelete));
-      toast({
-        title: "Leave Deleted Successfully",
-        description: "The leave entry has been removed.",
-        className: "bg-green-50 border-green-200 text-green-900"
-      });
-      setLeaveToDelete(null);
-      setIsDeleteDialogOpen(false);
+      deleteMutation.mutate(leaveToDelete);
       setIsViewModalOpen(false);
     }
   };
 
-  // Filter applications
-  const filteredApplications = leaveApplications.filter(app => {
-    const searchMatch = searchQuery === "" ||
-      (app.employeeCode && app.employeeCode.toLowerCase().includes(searchQuery.toLowerCase())) ||
-      (app.employeeName && app.employeeName.toLowerCase().includes(searchQuery.toLowerCase())) ||
-      app.leaveType.toLowerCase().includes(searchQuery.toLowerCase());
-
-    const dateMatch = (() => {
-      if (!dateRangeFrom && !dateRangeTo) return true;
-      const fromDate = new Date(app.fromDate);
-      const toDate = new Date(app.toDate);
-      let matchesFrom = true;
-      let matchesTo = true;
-      if (dateRangeFrom) {
-        const filterFrom = new Date(dateRangeFrom);
-        filterFrom.setHours(0, 0, 0, 0);
-        matchesFrom = toDate >= filterFrom;
-      }
-      if (dateRangeTo) {
-        const filterTo = new Date(dateRangeTo);
-        filterTo.setHours(23, 59, 59, 999);
-        matchesTo = fromDate <= filterTo;
-      }
-      return matchesFrom && matchesTo;
-    })();
-
-    return searchMatch && dateMatch;
-  });
+  // Use API-filtered data directly (server-side filtering and pagination)
+  const filteredApplications = leaveApplications;
 
   // Pagination
-  const leaveEntryTotalPages = Math.ceil(filteredApplications.length / itemsPerPage);
-  const leaveEntryStartIndex = (leaveEntryCurrentPage - 1) * itemsPerPage;
-  const leaveEntryEndIndex = leaveEntryStartIndex + itemsPerPage;
-  const paginatedLeaveEntries = filteredApplications.slice(leaveEntryStartIndex, leaveEntryEndIndex);
+  const leaveEntryTotalPages = Math.ceil(totalLeaves / itemsPerPage);
+  const paginatedLeaveEntries = filteredApplications;
 
   // Auto-adjust page when data changes
   useEffect(() => {
     if (leaveEntryCurrentPage > leaveEntryTotalPages && leaveEntryTotalPages > 0) {
       setLeaveEntryCurrentPage(leaveEntryTotalPages);
     }
-  }, [filteredApplications.length, leaveEntryCurrentPage, leaveEntryTotalPages]);
+  }, [totalLeaves, leaveEntryCurrentPage, leaveEntryTotalPages]);
 
-  // Reset to page 1 when filters change
+  // Reset to page 1 when search or date filters change
   useEffect(() => {
     setLeaveEntryCurrentPage(1);
   }, [searchQuery, dateRangeFrom, dateRangeTo]);
@@ -688,7 +914,7 @@ export default function LeaveManagement() {
 
   const getLeaveForDate = (date: Date) => {
     const dateStr = format(date, 'yyyy-MM-dd');
-    return leaveApplications.filter(app => {
+    return calendarLeaveApplications.filter(app => {
       const fromDate = new Date(app.fromDate);
       const toDate = new Date(app.toDate);
       const checkDate = new Date(dateStr);
@@ -736,7 +962,7 @@ export default function LeaveManagement() {
   // Check if employee has leave on a specific date
   const getEmployeeLeaveForDate = (employeeName: string, date: Date) => {
     const dateStr = format(date, 'yyyy-MM-dd');
-    return leaveApplications.find(app => {
+    return calendarLeaveApplications.find(app => {
       if (`${app.employeeCode} - ${app.employeeName}` !== employeeName && app.employeeName !== employeeName) return false;
       const fromDate = new Date(app.fromDate);
       const toDate = new Date(app.toDate);
@@ -777,8 +1003,10 @@ export default function LeaveManagement() {
     } | null>(null);
 
     // Get all leaves for an employee
-    const getEmployeeLeavesForMonth = (employeeName: string) => {
-      return leaveApplications.filter(app => `${app.employeeCode} - ${app.employeeName}` === employeeName || app.employeeName === employeeName);
+    const getEmployeeLeavesForMonth = (employee: any) => {
+      const employeeName = employee.employee_name;
+      const employeeCode = employee.code;
+      return calendarLeaveApplications.filter(app => (app.employeeCode === employeeCode && app.employeeName === employeeName) || app.employeeName === employeeName);
     };
 
     // Check if a date is within a leave range
@@ -815,7 +1043,7 @@ export default function LeaveManagement() {
         {/* Calendar Container - Full width with better spacing */}
         <div className="border rounded-xl bg-white overflow-hidden shadow-md">
           <div className="overflow-x-auto">
-            <div className="min-w-full">
+            <div className="min-w-full" style={{ marginRight: '20px' }}>
               {/* Header Row - Weekdays */}
               <div className="flex bg-gray-50 border-b sticky top-0 z-30">
                 {/* Empty cell for employee column */}
@@ -826,6 +1054,7 @@ export default function LeaveManagement() {
                   const dayOfWeek = weekdayAbbr[date.getDay()];
                   const isWeekend = date.getDay() === 0 || date.getDay() === 6;
                   const isToday = date.toDateString() === today.toDateString();
+                  const isLastCell = index === monthDates.length - 1;
                   return (
                     <div
                       key={index}
@@ -840,6 +1069,8 @@ export default function LeaveManagement() {
                     </div>
                   );
                 })}
+                {/* Spacer for scrollbar */}
+                <div className="w-8 flex-shrink-0 bg-gray-50"></div>
               </div>
 
               {/* Header Row - Date Numbers */}
@@ -853,6 +1084,7 @@ export default function LeaveManagement() {
                 {monthDates.map((date, index) => {
                   const isToday = date.toDateString() === today.toDateString();
                   const isWeekend = date.getDay() === 0 || date.getDay() === 6;
+                  const isLastCell = index === monthDates.length - 1;
                   return (
                     <div
                       key={index}
@@ -868,10 +1100,12 @@ export default function LeaveManagement() {
                     </div>
                   );
                 })}
+                {/* Spacer for scrollbar */}
+                <div className="w-8 flex-shrink-0 bg-gray-50"></div>
               </div>
 
               {/* Employee Rows */}
-              {employees.map((employee, empIndex) => {
+              {employees.map((employee: any, empIndex) => {
                 const employeeLeaves = getEmployeeLeavesForMonth(employee);
 
                 return (
@@ -881,13 +1115,13 @@ export default function LeaveManagement() {
                       {/* Avatar */}
                       <div
                         className="w-10 h-10 rounded-full flex items-center justify-center text-white text-sm font-bold flex-shrink-0 shadow-sm"
-                        style={{ backgroundColor: getAvatarColor(employee) }}
+                        style={{ backgroundColor: getAvatarColor(employee.employee_name) }}
                       >
-                        {getInitials(employee)}
+                        {getInitials(employee.employee_name)}
                       </div>
                       {/* Employee Name */}
                       <span className="text-sm font-medium text-gray-900 truncate">
-                        {employee}
+                        {employee.employee_name}
                       </span>
                     </div>
 
@@ -895,6 +1129,7 @@ export default function LeaveManagement() {
                     {monthDates.map((date, dateIndex) => {
                       const isWeekend = date.getDay() === 0 || date.getDay() === 6;
                       const isToday = date.toDateString() === today.toDateString();
+                      const isLastCell = dateIndex === monthDates.length - 1;
 
                       // Find if this date has any leave
                       const activeLeave = employeeLeaves.find(leave => isDateInLeave(leave, date));
@@ -913,7 +1148,7 @@ export default function LeaveManagement() {
                           {activeLeave && (
                             <div
                               className={cn(
-                                "absolute inset-y-2 inset-x-0 flex items-center justify-center cursor-pointer transition-all hover:opacity-90",
+                                "absolute inset-y-2 left-1 right-1 flex items-center justify-center cursor-pointer transition-all hover:opacity-90",
                                 isStart && "rounded-l-full",
                                 isEnd && "rounded-r-full",
                                 !isStart && !isEnd && "rounded-none"
@@ -942,6 +1177,8 @@ export default function LeaveManagement() {
                         </div>
                       );
                     })}
+                    {/* Spacer for scrollbar */}
+                    <div className="w-8 flex-shrink-0 h-16 bg-white"></div>
                   </div>
                 );
               })}
@@ -999,9 +1236,9 @@ export default function LeaveManagement() {
     const days = [];
     const today = new Date();
 
-    const prevMonth = new Date(year, month - 1, 0);
+    const prevMonthLastDay = new Date(year, month, 0).getDate();
     for (let i = startingDayOfWeek - 1; i >= 0; i--) {
-      const dayDate = new Date(year, month - 1, prevMonth.getDate() - i);
+      const dayDate = new Date(year, month - 1, prevMonthLastDay - i);
       days.push({ date: dayDate, isCurrentMonth: false, isToday: false, leaves: [] });
     }
 
@@ -1126,14 +1363,23 @@ export default function LeaveManagement() {
           </TabsList>
         </div>
 
-
+        {!visibleTabs.find(t => t.id === activeTab) ? (
+          <div className="flex-1 flex items-center justify-center mt-6">
+            <div className="text-center">
+              <AlertCircle className="mx-auto h-12 w-12 text-muted-foreground/50 mb-4" />
+              <h2 className="text-xl font-semibold mb-2">Access Denied</h2>
+              <p className="text-muted-foreground">You don't have access to this module.</p>
+            </div>
+          </div>
+        ) : (
+          <>
         {/* Leave Entry Tab */}
         <TabsContent value="leave-entry" className="flex-1 space-y-6 mt-6">
           <AppListToolbar
             search={{
               value: searchQuery,
               onChange: setSearchQuery,
-              placeholder: "Search by name, type..."
+              placeholder: "Search employees..."
             }}
             filters={[
               {
@@ -1152,6 +1398,7 @@ export default function LeaveManagement() {
                 type: 'date',
                 label: 'To Date',
                 value: dateRangeTo ? format(dateRangeTo, "yyyy-MM-dd") : "",
+                minDate: dateRangeFrom,
                 onChange: (val) => {
                   if (val) {
                     setDateRangeTo(new Date(val));
@@ -1161,19 +1408,22 @@ export default function LeaveManagement() {
                 }
               }
             ]}
-            actions={[
+            actions={canCreate(leaveEntryModuleName) ? [
               {
                 label: 'Add Leave',
                 icon: <Plus className="h-4 w-4" />,
-                onClick: () => setIsAddEditModalOpen(true),
+                onClick: () => {
+                  resetForm();
+                  setIsAddEditModalOpen(true);
+                },
                 variant: 'default'
               }
-            ]}
+            ] : []}
           />
 
           <Card className="shadow-sm">
             <CardContent className="pt-6">
-              <div className="rounded-md border mb-4">
+              <div className="rounded-md border mb-4 overflow-x-auto">
                 <Table>
                   <TableHeader>
                     <TableRow className="bg-muted/50">
@@ -1187,9 +1437,18 @@ export default function LeaveManagement() {
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {paginatedLeaveEntries.length === 0 ? (
+                    {isLeavesLoading ? (
                       <TableRow>
-                        <TableCell colSpan={6} className="h-48 text-center text-muted-foreground italic">
+                        <TableCell colSpan={7} className="h-48 text-center">
+                          <div className="flex flex-col items-center justify-center gap-3">
+                            <Loader2 className="h-8 w-8 animate-spin text-primary" />
+                            <p className="text-sm text-muted-foreground">Loading...</p>
+                          </div>
+                        </TableCell>
+                      </TableRow>
+                      ) : paginatedLeaveEntries.length === 0 ? (
+                      <TableRow>
+                        <TableCell colSpan={7} className="h-48 text-center text-muted-foreground italic">
                           <div className="flex flex-col items-center justify-center">
                             <CalendarIcon className="mx-auto h-12 w-12 mb-4 opacity-50" />
                             <p className="text-lg font-medium mb-2">No leave entries found</p>
@@ -1197,23 +1456,33 @@ export default function LeaveManagement() {
                           </div>
                         </TableCell>
                       </TableRow>
-                    ) : (
-                      paginatedLeaveEntries.map((application) => (
-                        <TableRow key={application.id} className="hover:bg-muted/30 transition-colors">
-                          <TableCell className="font-medium">{application.employeeCode}</TableCell>
-                          <TableCell>{application.employeeName}</TableCell>
-                          <TableCell>{application.leaveType}</TableCell>
-                          <TableCell>{formatDateTime(application.fromDate)}</TableCell>
-                          <TableCell>{formatDateTime(application.toDate)}</TableCell>
-                          <TableCell>
-                            <Badge variant={application.paidLeave ? "default" : "secondary"}>
-                              {application.paidLeave ? "Yes" : "No"}
+                      ) : (
+                      paginatedLeaveEntries.map((app, index) => (
+                        <TableRow key={app.id || index} className="hover:bg-muted/50 transition-colors border-b">
+                          <TableCell className="font-medium py-3">{app.code || 'N/A'}</TableCell>
+                          <TableCell className="py-3">
+                            {typeof app.employee_name === 'object' && app.employee_name !== null 
+                              ? (app.employee_name as any).employee_name 
+                              : app.employee_name}
+                          </TableCell>
+                          <TableCell className="py-3">
+                            <Badge variant="outline" className="font-normal bg-blue-50 text-blue-700 border-blue-200">
+                              {typeof app.leave_type_name === 'object' && app.leave_type_name !== null 
+                                ? (app.leave_type_name as any).leave_type_name 
+                                : app.leave_type_name}
                             </Badge>
                           </TableCell>
-                          <TableCell>
+                          <TableCell className="py-3">{formatDateTime(app.from_date)}</TableCell>
+                          <TableCell className="py-3">{formatDateTime(app.to_date)}</TableCell>
+                          <TableCell className="py-3">
+                            <Badge variant={app.is_paid_leave ? "default" : "secondary"} className="font-normal text-[11px] h-5">
+                              {app.is_paid_leave ? "Yes" : "No"}
+                            </Badge>
+                          </TableCell>
+                          <TableCell className="text-center py-3">
                             <TableActionButtons
-                              onView={() => handleViewLeave(application)}
-                              onEdit={() => handleEditLeave(application)}
+                              onView={() => handleViewLeave(app)}
+                              onEdit={canEdit(leaveEntryModuleName) ? () => handleEditLeave(app) : undefined}
                             />
                           </TableCell>
                         </TableRow>
@@ -1223,25 +1492,27 @@ export default function LeaveManagement() {
                 </Table>
               </div>
 
-              <DataTablePagination
-                currentPage={leaveEntryCurrentPage}
-                totalPages={leaveEntryTotalPages}
-                totalItems={filteredApplications.length}
-                itemsPerPage={itemsPerPage}
-                onPageChange={setLeaveEntryCurrentPage}
-                onItemsPerPageChange={setItemsPerPage}
-                options={[10, 15, 30, 50]}
-              />
+              {!isLeavesLoading && (
+                <DataTablePagination
+                  currentPage={leaveEntryCurrentPage}
+                  totalPages={leaveEntryTotalPages}
+                  totalItems={totalLeaves}
+                  itemsPerPage={itemsPerPage}
+                  onPageChange={setLeaveEntryCurrentPage}
+                  onItemsPerPageChange={setItemsPerPage}
+                  options={[10, 15, 30, 50]}
+                />
+              )}
             </CardContent>
           </Card>
         </TabsContent>
 
-        {/* Calendar Tab - Team Time Off Calendar */}
+        {/* Calendar Tab - Leave Calendar */}
         <TabsContent value="calendar" className="flex-1 mt-6">
-          <div className="space-y-6">
+          <div className="space-y-6" style={{ marginRight: '16px' }}>
             {/* Header with Month Navigation */}
             <div className="flex items-center justify-between px-1">
-              <h2 className="text-2xl font-bold text-gray-800">Team Time Off Calendar</h2>
+              <h2 className="text-2xl font-bold text-gray-800">Leave Calendar</h2>
               <div className="flex items-center gap-4">
                 <Button variant="outline" size="icon" onClick={() => navigateCalendar(-1)} className="h-10 w-10">
                   <ChevronLeft className="h-5 w-5" />
@@ -1259,12 +1530,9 @@ export default function LeaveManagement() {
             <div className="w-full">
               <ImprovedLeaveCalendar
                 currentDate={currentDate}
-                leaveApplications={leaveApplications}
-                employees={employeeOptions}
-                leaveTypeColors={leaveTypeOptions.reduce((acc, type) => {
-                  acc[type] = getLeaveTypeColor(type);
-                  return acc;
-                }, {} as { [key: string]: string })}
+                leaveApplications={calendarLeaveApplications}
+                employees={calendarEmployees}
+                leaveTypeColors={leaveTypeColors}
               />
             </div>
 
@@ -1272,66 +1540,91 @@ export default function LeaveManagement() {
             <Card className="shadow-sm">
               <CardContent className="p-5">
                 <div className="flex flex-wrap items-center justify-end gap-8">
-                  {leaveTypeOptions.map((leaveType) => (
-                    <div key={leaveType} className="flex items-center gap-2">
-                      <div
-                        className="w-5 h-5 rounded-full shadow-sm"
-                        style={{ backgroundColor: getLeaveTypeColor(leaveType) }}
-                      />
-                      <span className="text-sm font-medium text-gray-700">{leaveType}</span>
-                    </div>
-                  ))}
+                  {leaveTypeOptions.map((leaveType: any) => {
+                    // Extract name string safely for label display
+                    const typeName = typeof leaveType.leave_type_name === 'object' && leaveType.leave_type_name !== null
+                      ? leaveType.leave_type_name.leave_type_name
+                      : String(leaveType.leave_type_name || '');
+
+                    return (
+                      <div key={typeName} className="flex items-center gap-2">
+                        <div
+                          className="w-5 h-5 rounded-full shadow-sm"
+                          style={{ backgroundColor: getLeaveTypeColor(typeName) }}
+                        />
+                        <span className="text-sm font-medium text-gray-700">{typeName}</span>
+                      </div>
+                    );
+                  })}
                 </div>
               </CardContent>
             </Card>
           </div>
         </TabsContent>
+        </>
+        )}
       </Tabs>
 
       {/* Add/Edit Leave Modal */}
-      <Dialog open={isAddEditModalOpen} onOpenChange={setIsAddEditModalOpen}>
-        <DialogContent className="sm:max-w-2xl max-h-[90vh] overflow-y-auto">
-          <DialogHeader>
+      <Dialog open={isAddEditModalOpen} onOpenChange={(open) => {
+        // Allow closing via X button, Cancel, or Save
+        setIsAddEditModalOpen(open);
+        if (!open) {
+          resetForm();
+        }
+      }}>
+        <DialogContent
+          className="w-[95%] sm:max-w-3xl md:max-w-4xl lg:max-w-5xl xl:max-w-6xl md:min-h-[70vh] max-h-[90vh] overflow-y-auto"
+          onInteractOutside={(e) => {
+          // Prevent closing when clicking outside, but allow X button
+          e.preventDefault();
+        }}>
+          <DialogHeader className="space-y-2 pb-2">
             <DialogTitle>{editingLeave ? "Edit Leave" : "Add Leave"}</DialogTitle>
             <DialogDescription>
               {editingLeave ? "Update the leave entry details" : "Fill in the details to create a new leave entry"}
             </DialogDescription>
           </DialogHeader>
 
-          <div className="space-y-6 py-4">
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-              <SearchableSelect
-                label="Employee"
-                value={formData.employee}
-                options={employeeOptions}
-                onChange={(value) => handleInputChange('employee', value)}
-                required
-              />
-              {formErrors.employee && <p className="text-sm text-red-500 col-span-2">{formErrors.employee}</p>}
-
-              <SearchableSelect
-                label="Leave Type"
-                value={formData.leaveType}
-                options={leaveTypeOptions}
-                onChange={(value) => handleInputChange('leaveType', value)}
-                required
-              />
-              {formErrors.leaveType && <p className="text-sm text-red-500 col-span-2">{formErrors.leaveType}</p>}
+          <div className="space-y-8 py-6">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-y-8 md:gap-x-8">
+              <div className="space-y-2">
+                <Label htmlFor="employee" className="text-sm font-medium">EMPLOYEE <span className="text-red-500">*</span></Label>
+                <SearchableSelect
+                  placeholder="Select Employee"
+                  value={formData.employee_id}
+                  options={(employeeOptions as any[]).map(e => ({ label: `${e.code} - ${e.employee_name}`, value: String(e.id) }))}
+                  onChange={(val) => handleInputChange('employee_id', val)}
+                />
+                {formErrors.employee_id && <p className="text-xs text-red-500">{formErrors.employee_id}</p>}
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="leaveType" className="text-sm font-medium">LEAVE TYPE <span className="text-red-500">*</span></Label>
+                <SearchableSelect
+                  placeholder="Select Leave Type"
+                  value={formData.leave_type_id}
+                  options={(leaveTypeOptions as any[]).map(lt => ({ label: lt.leave_type_name, value: String(lt.id) }))}
+                  onChange={(val) => handleInputChange('leave_type_id', val)}
+                />
+                {formErrors.leave_type_id && <p className="text-xs text-red-500">{formErrors.leave_type_id}</p>}
+              </div>
 
               <div className="space-y-2">
                 <Label>From Date <span className="text-red-500">*</span></Label>
-                <FormDatePicker
+                <LeaveFormDatePicker
                   date={formData.fromDate}
                   setDate={(date) => handleInputChange('fromDate', date)}
+                  minDate={employeeJoiningDate}
                 />
                 {formErrors.fromDate && <p className="text-sm text-red-500">{formErrors.fromDate}</p>}
               </div>
 
               <div className="space-y-2">
                 <Label>To Date <span className="text-red-500">*</span></Label>
-                <FormDatePicker
+                <LeaveFormDatePicker
                   date={formData.toDate}
                   setDate={(date) => handleInputChange('toDate', date)}
+                  minDate={formData.fromDate}
                 />
                 {formErrors.toDate && <p className="text-sm text-red-500">{formErrors.toDate}</p>}
               </div>
@@ -1347,40 +1640,130 @@ export default function LeaveManagement() {
                 </div>
               </div>
 
-              <div className="space-y-2 md:col-span-2">
+              <div className="space-y-3 md:col-span-2">
                 <Label>Remark</Label>
                 <Textarea
                   placeholder="Enter remark..."
                   value={formData.remark}
                   onChange={(e) => handleInputChange('remark', e.target.value)}
-                  rows={3}
+                  rows={4}
+                  className="min-h-[110px]"
                 />
               </div>
 
-              <div className="space-y-2 md:col-span-2">
-                <Label>Attachment (Optional)</Label>
-                <Input
-                  type="file"
-                  onChange={(e) => {
-                    const file = e.target.files?.[0];
-                    if (file) handleInputChange('attachment', file);
-                  }}
-                  accept=".pdf,.doc,.docx,.jpg,.jpeg,.png"
-                />
-                {formData.attachment && (
-                  <p className="text-sm text-green-600">File selected: {formData.attachment?.name || ''}</p>
-                )}
+              <div className="space-y-3 md:col-span-2">
+                <div className="space-y-3 pt-3">
+                  <Label htmlFor="attachment" className="text-sm font-medium">Attachment (Optional)</Label>
+                  <Input
+                    ref={fileInputRef}
+                    id="attachment"
+                    type="file"
+                    className="h-9 cursor-pointer"
+                    disabled={formData.attachments.length > 0 || formData.newFiles.length > 0}
+                    onChange={(e) => {
+                      const files = e.target.files;
+                      if (files && files.length > 0) {
+                        // Only allow one file total
+                        const totalFiles = formData.attachments.length + formData.newFiles.length;
+                        if (totalFiles >= 1) {
+                          toast({ 
+                            variant: "destructive", 
+                            title: "File Limit", 
+                            description: "Only one attachment is allowed. Please remove the existing attachment first." 
+                          });
+                          if (fileInputRef.current) {
+                            fileInputRef.current.value = '';
+                          }
+                          return;
+                        }
+                        // Set the first file only
+                        setFormData(prev => ({ 
+                          ...prev, 
+                          newFiles: [files[0]] 
+                        }));
+                        // Reset the file input
+                        if (fileInputRef.current) {
+                          fileInputRef.current.value = '';
+                        }
+                      }
+                    }}
+                  />
+                  {formData.attachments && formData.attachments.length > 0 && (
+                    <div className="mt-2 space-y-1">
+                      <p className="text-xs font-medium text-muted-foreground">Existing Attachments:</p>
+                      {formData.attachments.map((att, idx) => (
+                        <div key={idx} className="flex items-center justify-between gap-2 text-xs bg-gray-50 p-2 rounded border">
+                          <span
+                            onClick={() => {
+                              window.open(resolveFileUrl(att.file_url), '_blank');
+                            }}
+                            className="text-blue-600 hover:text-blue-800 hover:underline cursor-pointer"
+                          >
+                            {att.file_name}
+                          </span>
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="sm"
+                            className="h-6 w-6 p-0 text-red-600 hover:text-red-700 hover:bg-red-50"
+                            onClick={() => {
+                              if (formData.id) {
+                                // Call API to delete attachment from server
+                                deleteAttachmentsMutation.mutate(formData.id);
+                              } else {
+                                // If no ID (new entry), just remove from local state
+                                setFormData(prev => ({
+                                  ...prev,
+                                  attachments: prev.attachments.filter((_, i) => i !== idx)
+                                }));
+                              }
+                            }}
+                          >
+                            <Trash2 className="h-4 w-4" />
+                          </Button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  {formData.newFiles && formData.newFiles.length > 0 && (
+                    <div className="mt-2 space-y-1">
+                      <p className="text-xs font-medium text-muted-foreground">New Files to Upload:</p>
+                      {formData.newFiles.map((file, idx) => (
+                        <div key={idx} className="flex items-center justify-between gap-2 text-xs bg-blue-50 p-2 rounded border border-blue-200">
+                          <span className="text-blue-700 font-medium">
+                            {file.name}
+                          </span>
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="sm"
+                            className="h-6 w-6 p-0 text-red-600 hover:text-red-700 hover:bg-red-50"
+                            onClick={() => {
+                              setFormData(prev => ({
+                                ...prev,
+                                newFiles: prev.newFiles.filter((_, i) => i !== idx)
+                              }));
+                            }}
+                          >
+                            <Trash2 className="h-4 w-4" />
+                          </Button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
               </div>
             </div>
           </div>
 
-          <DialogFooter className="flex justify-between items-center">
+          <DialogFooter className="mt-4 border-t pt-6 flex justify-between items-center">
             {editingLeave && (
               <AlertDialog open={isDeleteDialogOpen} onOpenChange={setIsDeleteDialogOpen}>
                 <AlertDialogTrigger asChild>
                   <Button
                     variant="destructive"
                     onClick={() => handleDeleteLeave(editingLeave.id)}
+                    className={!canDelete(leaveEntryModuleName) ? "hidden" : ""}
                   >
                     <Trash2 className="mr-2 h-4 w-4" />
                     Delete
@@ -1397,6 +1780,7 @@ export default function LeaveManagement() {
                     <AlertDialogCancel>Cancel</AlertDialogCancel>
                     <AlertDialogAction
                       onClick={confirmDelete}
+                      loading={isSubmitting}
                       className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
                     >
                       Delete
@@ -1409,7 +1793,9 @@ export default function LeaveManagement() {
               <Button variant="outline" onClick={handleCancel}>Cancel</Button>
               <Button
                 onClick={handleSubmit}
-                disabled={!formData.employee || !formData.leaveType || !formData.fromDate || !formData.toDate}
+                loading={isSubmitting}
+                disabled={!formData.employee_id || !formData.leave_type_id || !formData.fromDate || !formData.toDate || Object.keys(formErrors).length > 0 || (!canCreate(leaveEntryModuleName) && !canEdit(leaveEntryModuleName))}
+                className="disabled:opacity-50 disabled:cursor-not-allowed disabled:bg-gray-300 disabled:text-gray-500"
               >
                 Save
               </Button>
@@ -1420,62 +1806,75 @@ export default function LeaveManagement() {
 
       {/* View Leave Modal */}
       <Dialog open={isViewModalOpen} onOpenChange={setIsViewModalOpen}>
-        <DialogContent className="sm:max-w-2xl max-h-[90vh] overflow-y-auto">
-          <DialogHeader>
+        <DialogContent className="w-[95%] sm:max-w-3xl md:max-w-4xl lg:max-w-5xl xl:max-w-6xl md:min-h-[70vh] max-h-[90vh] overflow-y-auto">
+          <DialogHeader className="space-y-2 pb-2">
             <DialogTitle>Leave Details</DialogTitle>
             <DialogDescription>View complete details of the leave entry</DialogDescription>
           </DialogHeader>
 
           {selectedApplication && (
-            <div className="space-y-6 py-4">
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+            <div className="space-y-8 py-6">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-y-8 md:gap-x-8">
                 <div className="space-y-2">
                   <Label>Employee Code</Label>
-                  <Input value={selectedApplication.employeeCode} disabled className="bg-muted" />
+                  <Input value={selectedApplication.employee_code || selectedApplication.code} disabled className="bg-muted" />
                 </div>
                 <div className="space-y-2">
                   <Label>Employee Name</Label>
-                  <Input value={selectedApplication.employeeName} disabled className="bg-muted" />
+                  <Input value={selectedApplication.employee_name} disabled className="bg-muted" />
                 </div>
                 <div className="space-y-2">
                   <Label>Leave Type</Label>
-                  <Input value={selectedApplication.leaveType} disabled className="bg-muted" />
+                  <Input value={selectedApplication.leave_type_name} disabled className="bg-muted" />
                 </div>
                 <div className="space-y-2">
                   <Label>From Date</Label>
-                  <Input value={formatDateTime(selectedApplication.fromDate)} disabled className="bg-muted" />
+                  <Input value={formatDateTime(selectedApplication.from_date)} disabled className="bg-muted" />
                 </div>
                 <div className="space-y-2">
                   <Label>To Date</Label>
-                  <Input value={formatDateTime(selectedApplication.toDate)} disabled className="bg-muted" />
+                  <Input value={formatDateTime(selectedApplication.to_date)} disabled className="bg-muted" />
                 </div>
                 <div className="space-y-2">
                   <Label>Paid Leave</Label>
-                  <Input value={selectedApplication.paidLeave ? 'Yes' : 'No'} disabled className="bg-muted" />
+                  <Input value={selectedApplication.is_paid_leave ? 'Yes' : 'No'} disabled className="bg-muted" />
                 </div>
                 <div className="space-y-2">
                   <Label>Duration</Label>
                   <Input
-                    value={`${calculateDuration(parse(selectedApplication.fromDate, 'dd-MM-yyyy', new Date()), parse(selectedApplication.toDate, 'dd-MM-yyyy', new Date()))} days`}
+                    value={`${selectedApplication.duration} days`}
                     disabled
                     className="bg-muted"
                   />
                 </div>
                 <div className="space-y-2 md:col-span-2">
                   <Label>Remark</Label>
-                  <Textarea value={selectedApplication.remark} disabled className="bg-muted" rows={3} />
+                  <Textarea value={selectedApplication.remarks} disabled className="bg-muted" rows={3} />
                 </div>
-                {selectedApplication.attachment && (
+                {selectedApplication.attachments && selectedApplication.attachments.length > 0 && (
                   <div className="space-y-2 md:col-span-2">
-                    <Label>Attachment</Label>
-                    <Input value={selectedApplication.attachment.name} disabled className="bg-muted" />
+                    <Label>Attachments</Label>
+                    <div className="mt-2 space-y-1">
+                      {selectedApplication.attachments.map((att: any, idx: number) => (
+                        <div key={idx} className="flex items-center gap-2 text-xs bg-blue-50 p-2 rounded border border-blue-100">
+                          <span
+                            onClick={() => {
+                              window.open(resolveFileUrl(att.file_url), '_blank');
+                            }}
+                            className="text-blue-600 hover:text-blue-800 hover:underline cursor-pointer italic"
+                          >
+                            {att.file_name}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
                   </div>
                 )}
               </div>
             </div>
           )}
 
-          <DialogFooter>
+          <DialogFooter className="mt-4 border-t pt-6">
             <Button variant="outline" onClick={() => setIsViewModalOpen(false)}>Close</Button>
           </DialogFooter>
         </DialogContent>

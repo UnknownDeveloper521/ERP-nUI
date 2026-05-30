@@ -20,6 +20,7 @@ import { ReactNode, useState } from "react";
 import * as React from "react";
 import { Link, useLocation } from "wouter";
 import { useAuth } from "@/lib/store";
+import { useHasPermission } from "@/hooks/usePermissions";
 import {
   LayoutDashboard,
   Users,
@@ -113,7 +114,8 @@ interface SidebarProps {
  */
 const Sidebar = ({ className }: SidebarProps) => {
   const [location] = useLocation();
-  const { isModuleVisible } = useAuth();
+  const { user } = useAuth();
+  const { isMenuVisible } = useHasPermission();
 
   // ==========================================================================
   // MODULE CONFIGURATION
@@ -123,14 +125,14 @@ const Sidebar = ({ className }: SidebarProps) => {
   // KEEP: Essential for navigation - modify when adding/removing modules
   // ==========================================================================
   const moduleConfig: { [key: string]: { name: string; icon: any; path: string; subItems?: { name: string; path: string }[] } } = {
-    "Dashboard": { name: "Dashboard", icon: LayoutDashboard, path: "/" },
+    "Dashboard": { name: "Executive Dashboard", icon: LayoutDashboard, path: "/executive-dashboard" },
 
     "HRMS": {
       name: "HRMS & Payroll",
       icon: Users,
-      path: "/hrms",
+      path: "/hrms/dashboard",
       subItems: [
-        { name: "Dashboard", path: "/hrms" },
+        { name: "Dashboard", path: "/hrms/dashboard" },
         { name: "Core HR", path: "/hrms/core-hr" },
         { name: "Attendance", path: "/hrms/attendance" },
         { name: "Leave Management", path: "/hrms/leave-management" },
@@ -168,7 +170,7 @@ const Sidebar = ({ className }: SidebarProps) => {
         { name: "Material Release", path: "/production/material-release" },
       ]
     },
-    "QualityCheck": {
+    "Quality_Check": {
       name: "Quality Check",
       icon: CheckCircle,
       path: "/quality-check",
@@ -190,7 +192,7 @@ const Sidebar = ({ className }: SidebarProps) => {
         { name: "Follow Up", path: "/sales/follow-up" }, // Updated: Changed from /sales-invoicing/follow-up
       ]
     },
-    "Purchases": {
+    "Procurement": {
       name: "Procurement",
       icon: CreditCard,
       path: "/procurement",
@@ -200,7 +202,7 @@ const Sidebar = ({ className }: SidebarProps) => {
         { name: "PO", path: "/procurement/po" },
       ]
     },
-    "ServiceCenter": {
+    "Service_Center": {
       name: "Service Center",
       icon: Wrench,
       path: "/service-center",
@@ -214,16 +216,16 @@ const Sidebar = ({ className }: SidebarProps) => {
     "Accounting": {
       name: "Accounting",
       icon: FileText,
-      path: "/accounting",
+      path: "/accounting/invoicing",
       subItems: [
         { name: "Invoicing", path: "/accounting/invoicing" },
         { name: "Worker Payments", path: "/accounting/worker-payments" },
         { name: "Pending Payment", path: "/accounting/pending-payment" }
       ]
     },
-    "UserManagement": { name: "User Management", icon: User, path: "/user-management" },
-    "RolesPermissions": { name: "Roles & Permissions", icon: Settings, path: "/settings" },
-    "HRSetup": {
+    "RolesPermissions": { name: "Roles & Permissions", icon: Settings, path: "/system/roles-permissions" },
+    "AuditLogs": { name: "Audit Logs", icon: FileText, path: "/system/audit-logs" },
+    "HR_Setup": {
       name: "HR Setup",
       icon: Settings,
       path: "/hr-setup/assign-employee-salary",
@@ -255,8 +257,8 @@ const Sidebar = ({ className }: SidebarProps) => {
   // WHY NEEDED: Creates logical grouping in sidebar (Core, Optional, System)
   // KEEP: Essential for sidebar structure
   // ==========================================================================
-  const coreModules = ["Dashboard", "Chat", "HRMS", "Vendors", "Customers", "Inventory", "Production", "QualityCheck", "Sales", "Purchases", "ServiceCenter", "Accounting"];
-  const systemModules = ["UserManagement", "RolesPermissions", "HRSetup", "Masters"];
+  const coreModules = ["Dashboard", "Chat", "HRMS", "Vendors", "Customers", "Inventory", "Production", "Quality_Check", "Sales", "Procurement", "Service_Center", "Accounting"];
+  const systemModules = ["RolesPermissions", "AuditLogs", "HR_Setup", "Masters"];
   // ==========================================================================
   // ROLE-BASED FILTERING
   // ==========================================================================
@@ -265,7 +267,59 @@ const Sidebar = ({ className }: SidebarProps) => {
   // KEEP: Essential for security and role-based access control
   // ==========================================================================
   const filterVisibleModules = (modules: string[]) => {
-    return modules.filter(mod => isModuleVisible(mod)).map(mod => moduleConfig[mod]).filter(Boolean);
+    return modules
+      .map(modKey => {
+        const item = moduleConfig[modKey];
+        if (!item) return null;
+
+        // If the item has subItems, it's likely a "Group" in the API structure
+        if (item.subItems) {
+          const visibleSubItems = item.subItems.filter(sub => {
+            const apiGroupName = modKey.toUpperCase();
+            
+            // Check both Group/Module and just Module patterns
+            const apiModuleName = `${apiGroupName}/${sub.name.toUpperCase().replace(/\s+/g, '_')}`;
+            const altApiModuleName = sub.name.toUpperCase().replace(/\s+/g, '_');
+            
+            // Special handling for Leave Management to only check for Leave Entry and Calendar
+            if (sub.name === "Leave Management") {
+              return isMenuVisible("HRMS/LEAVE_MANAGEMENT/LEAVE_ENTRY") || isMenuVisible("HRMS/LEAVE_MANAGEMENT/CALENDAR");
+            }
+
+            if (modKey === "Masters") {
+              return isMenuVisible(apiModuleName);
+            }
+
+            return isMenuVisible(apiModuleName) || isMenuVisible(altApiModuleName);
+          });
+
+          // If no subitems are visible, don't show the group (unless it has a path itself)
+          if (visibleSubItems.length === 0 && item.subItems.length > 0) return null;
+          return { ...item, subItems: visibleSubItems };
+        }
+
+        // For top-level items without subitems (check GENERAL/ prefix as well)
+        let topLevelKey = modKey.toUpperCase();
+        
+        if (modKey === "RolesPermissions") {
+          topLevelKey = "SYSTEM/ROLES_PERMISSIONS";
+        }
+
+        if (modKey === "AuditLogs") {
+          topLevelKey = "SYSTEM/AUDIT_LOGS";
+        }
+
+        if (modKey === "Dashboard") {
+          return (isMenuVisible("DASHBOARD") || isMenuVisible("GENERAL/DASHBOARD")) ? item : null;
+        }
+
+        if (modKey === "Vendors" || modKey === "Customers") {
+          return (isMenuVisible(topLevelKey) || isMenuVisible(`GENERAL/${topLevelKey}`)) ? item : null;
+        }
+        
+        return isMenuVisible(topLevelKey) ? item : null;
+      })
+      .filter((item): item is NonNullable<typeof item> => item !== null);
   };
 
   const visibleCoreModules = filterVisibleModules(coreModules);
@@ -283,9 +337,8 @@ const Sidebar = ({ className }: SidebarProps) => {
     ...(visibleSystemModules.length > 0 ? [{
       title: "System", items: [
         ...visibleSystemModules,
-        { name: "My Account", icon: Users, path: "/my-account" }
       ]
-    }] : [{ title: "System", items: [{ name: "My Account", icon: Users, path: "/my-account" }] }]),
+    }] : []),
   ];
 
   return (
@@ -375,12 +428,14 @@ const Sidebar = ({ className }: SidebarProps) => {
       <div className="border-t border-sidebar-border p-4">
         <div className="flex items-center gap-3 rounded-lg bg-sidebar-accent/20 p-3">
           <Avatar className="h-9 w-9 rounded-md">
-            <AvatarImage src="https://github.com/shadcn.png" />
-            <AvatarFallback>AD</AvatarFallback>
+            <AvatarImage src={user?.avatar || `https://api.dicebear.com/7.x/avataaars/svg?seed=${user?.email}`} />
+            <AvatarFallback>{user?.name?.[0] || user?.email?.[0] || 'U'}</AvatarFallback>
           </Avatar>
           <div className="flex flex-col overflow-hidden">
-            <span className="truncate text-sm font-medium text-sidebar-foreground">Admin User</span>
-            <span className="truncate text-xs text-sidebar-foreground/70">admin@tassos.com</span>
+            <span className="truncate text-sm font-medium text-sidebar-foreground">
+              {user?.name || user?.email?.split('@')[0] || "User"}
+            </span>
+            <span className="truncate text-xs text-sidebar-foreground/70">{user?.email || "No email"}</span>
           </div>
         </div>
       </div>
@@ -407,7 +462,10 @@ const Sidebar = ({ className }: SidebarProps) => {
  */
 export default function MainLayout({ children }: { children: ReactNode }) {
   const [, setLocation] = useLocation();
-  const { logout } = useAuth();
+  const { user, logout } = useAuth();
+  
+  // Get primary role for display (e.g. "HR", "Admin")
+  const displayRole = user?.roles?.[0] || "User";
 
   // ==========================================================================
   // SEARCH STATE
@@ -529,7 +587,7 @@ export default function MainLayout({ children }: { children: ReactNode }) {
   // KEEP: Essential for search feature
   // ==========================================================================
   const modules = [
-    { name: "Dashboard", path: "/" },
+    { name: "Dashboard", path: "/dashboard" },
     { name: "HRMS", path: "/hrms" },
     { name: "Payroll Management", path: "/hrms/payroll-management" },
     // { name: "Employee Payslip", path: "/hrms/employee-payslip" }, // Hidden submodule
@@ -545,7 +603,7 @@ export default function MainLayout({ children }: { children: ReactNode }) {
     { name: "Follow Up", path: "/sales/follow-up" }, // Updated: Changed from /sales-invoicing/follow-up
     { name: "Invoicing", path: "/accounting/invoicing" }, // Moved: Invoicing to Accounting
     { name: "Pending Payment", path: "/accounting/pending-payment" }, // Pending Payment in Accounting
-    { name: "Purchases", path: "/purchases" },
+    { name: "Procurement", path: "/procurement" },
     { name: "Accounting", path: "/accounting" },
     { name: "Worker Payments", path: "/accounting/worker-payments" },
     { name: "Performance", path: "/performance" },
@@ -554,8 +612,7 @@ export default function MainLayout({ children }: { children: ReactNode }) {
     { name: "Salary Structure", path: "/hr-setup/salary-structure" },
     { name: "Pay Period", path: "/hr-setup/pay-period" },
     { name: "Workers wage Period", path: "/hr-setup/workers-wage-period" },
-    { name: "User Management", path: "/user-management" },
-    { name: "Roles & Permissions", path: "/settings" },
+    { name: "Roles & Permissions", path: "/system/roles-permissions" },
     { name: "My Account", path: "/my-account" },
   ];
 
@@ -635,6 +692,7 @@ export default function MainLayout({ children }: { children: ReactNode }) {
                WHY HIDDEN ON MOBILE: Limited space on mobile header
                KEEP: Essential for quick navigation
                ================================================================ */}
+          {/* 
           <div className="flex flex-1 items-center gap-4 px-4 md:px-8">
             <div className="relative w-full max-w-sm hidden md:block">
               <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-primary-foreground/70" />
@@ -645,7 +703,6 @@ export default function MainLayout({ children }: { children: ReactNode }) {
                 onChange={(e) => setSearchQuery(e.target.value)}
                 className="w-full rounded-lg bg-primary-foreground/20 pl-9 md:w-[300px] lg:w-[400px] text-primary-foreground placeholder:text-primary-foreground/50 border-primary-foreground/20"
               />
-              {/* Search Results Dropdown */}
               {searchQuery && filteredModules.length > 0 && (
                 <div className="absolute top-full left-0 mt-2 w-full bg-white border rounded-lg shadow-lg z-50">
                   {filteredModules.map((module) => (
@@ -662,6 +719,8 @@ export default function MainLayout({ children }: { children: ReactNode }) {
               )}
             </div>
           </div>
+          */}
+          <div className="flex-1" />
 
           {/* ================================================================
                HEADER RIGHT SECTION
@@ -680,6 +739,7 @@ export default function MainLayout({ children }: { children: ReactNode }) {
                  - Different icons for success/warning/info
                  KEEP: Essential for notification system
                  ============================================================== */}
+            {/* 
             <DropdownMenu open={isNotificationOpen} onOpenChange={setIsNotificationOpen}>
               <DropdownMenuTrigger asChild>
                 <Button variant="ghost" size="icon" className="relative text-primary-foreground hover:bg-primary-foreground/20" data-testid="button-notifications">
@@ -774,23 +834,15 @@ export default function MainLayout({ children }: { children: ReactNode }) {
                 )}
               </DropdownMenuContent>
             </DropdownMenu>
+            */}
 
-            {/* ==============================================================
-                 USER PROFILE DROPDOWN
-                 ==============================================================
-                 PURPOSE: User menu with profile, settings, logout
-                 KEEP: Essential for user account management
-                 ============================================================== */}
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
-                <Button variant="ghost" className="gap-2 pl-0 hover:bg-primary-foreground/20 text-primary-foreground">
+                <Button variant="ghost" className="gap-2 px-2 hover:bg-primary-foreground/20 text-primary-foreground">
                   <Avatar className="h-8 w-8">
-                    <AvatarImage src="https://github.com/shadcn.png" />
-                    <AvatarFallback>AD</AvatarFallback>
+                    <AvatarImage src={user?.avatar || `https://api.dicebear.com/7.x/avataaars/svg?seed=${user?.email}`} />
+                    <AvatarFallback>{user?.name?.[0] || 'U'}</AvatarFallback>
                   </Avatar>
-                  <div className="hidden flex-col items-start text-sm md:flex">
-                    <span className="font-medium">Admin User</span>
-                  </div>
                   <ChevronDown className="h-4 w-4" />
                 </Button>
               </DropdownMenuTrigger>
@@ -803,12 +855,14 @@ export default function MainLayout({ children }: { children: ReactNode }) {
                     Profile
                   </DropdownMenuItem>
                 </Link>
+                {/* 
                 <Link href="/settings">
                   <DropdownMenuItem className="cursor-pointer">
                     <Settings className="mr-2 h-4 w-4" />
                     Settings
                   </DropdownMenuItem>
-                </Link>
+                </Link> 
+                */}
                 <DropdownMenuSeparator />
                 <DropdownMenuItem
                   className="text-destructive cursor-pointer"

@@ -22,7 +22,7 @@ export interface WorkersWagePeriod {
     year: number;
     startDate: string;
     endDate: string;
-    status: "Open" | "Locked" | "Processed" | "Paid";
+    status: "Active" | "Open" | "Locked" | "Processed" | "Paid" | "Draft";
     notes?: string;
 }
 

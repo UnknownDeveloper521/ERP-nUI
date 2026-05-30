@@ -4,6 +4,7 @@
 // This file contains shared data and types for MR Requests used by both:
 // - Service Center MR Request module (for creating and receiving requests)
 // - Inventory MR Request module (for issuing materials)
+// - Production My Request module (for linking MRs to Production Plans)
 // ============================================================================
 
 import { mockSemiFinishedGoods, mockFinishedGoods } from "./masterMockData";
@@ -21,9 +22,9 @@ export interface MRItem {
     itemName: string;
     uom: string;
     availableQty: number;
-    requiredQty: number | string;
+    requiredQty: number;
     issuedQty?: number;
-    receivedQty?: number | string;
+    receivedQty?: number;
 }
 
 // MR Request data structure
@@ -42,7 +43,11 @@ export interface MRRequest {
     issuedBy?: string;
     receivedDate?: string;
     receivedBy?: string;
-    productionPlanId?: number;
+    /**
+     * Integration: Reference to linked Production Plan ID
+     * Links this Material Request to a specific DailyFGPlan
+     */
+    productionPlanId?: number; 
     items: MRItem[];
 }
 

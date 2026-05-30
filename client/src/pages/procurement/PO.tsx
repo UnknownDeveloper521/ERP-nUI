@@ -1,5 +1,6 @@
-import React, { useState, useEffect, useRef } from "react";
-import { format, parse, isValid } from "date-fns";
+import React, { useState, useEffect, useRef, useMemo } from "react";
+import { useDebounce } from "@/hooks/useDebounce";
+import { format, parse, isValid, startOfDay, isBefore } from "date-fns";
 import { Card, CardContent } from "@/components/ui/card";
 import {
     Search,
@@ -16,7 +17,8 @@ import {
     Package,
     Printer,
     Download,
-    ChevronsUpDown
+    ChevronsUpDown,
+    Loader2
 } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -24,6 +26,9 @@ import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { DataTablePagination } from "@/components/shared/DataTablePagination";
 import { AppListToolbar } from "@/components/shared/AppListToolbar";
+import { commonApi, procurementApi, POListRecord, POSubmitRequest } from "@/lib/api";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useCommonStore } from "@/store/commonStore";
 import {
     Table,
     TableBody,
@@ -33,6 +38,8 @@ import {
     TableRow,
 } from "@/components/ui/table";
 import { TableActionButtons } from "@/components/shared/TableActionButtons";
+import { useHasPermission } from "@/hooks/usePermissions";
+import Unauthorized from "@/pages/Unauthorized";
 import {
     Tabs,
     TabsContent,
@@ -79,9 +86,14 @@ import {
     CommandItem,
 } from "@/components/ui/command";
 import { Checkbox } from "@/components/ui/checkbox";
-import { cn } from "@/lib/utils";
+import { cn, resolveFileUrl, getFileName, truncateFileName } from "@/lib/utils";
 import { useToast } from "@/hooks/use-toast";
 import { mockWarehouses, mockLocations, mockTransporters } from "@/lib/masterMockData";
+import {
+    getAssignedIds,
+    getFirstAssignedMatch,
+    prioritizeByAssigned,
+} from "@/utils/assignedDropdown";
 
 import {
     MRStatus,
@@ -95,6 +107,9 @@ import {
     getStoredPOs,
     savePOs
 } from "@/lib/procurementSharedData";
+import { CURRENCY_SYMBOL } from "@/config/appConfig";
+import { SearchableSelect } from "@/components/shared/SearchableSelect";
+import { isCurrencyEntityName } from "@/services/loadCommonData";
 
 // ============================================================================
 // HELPERS
@@ -132,6 +147,61 @@ const formatDate = (date: Date | string): string => {
     return format(d, "dd-MM-yyyy");
 };
 
+type CurrencyEntity = {
+    id?: number;
+    value_id?: number;
+    code?: string;
+    value_code?: string;
+    entity_value?: string;
+};
+
+/** PO API currency_id maps to entity value_id when present (not entity_values row id). */
+const getCurrencyEntityId = (c: CurrencyEntity) => c.value_id ?? c.id;
+
+const findCurrencyByEntityId = (
+    list: CurrencyEntity[],
+    entityId?: number | string | null
+): CurrencyEntity | undefined => {
+    if (entityId == null || entityId === "") return undefined;
+    const n = Number(entityId);
+    return list.find((c) => Number(c.value_id) === n || Number(c.id) === n);
+};
+
+const getCurrencyCode = (c?: CurrencyEntity) =>
+    c?.code || c?.value_code || c?.entity_value || "";
+
+const getCurrencySymbol = (currency: string): string => {
+    if (!currency) return "";
+    const clean = currency.trim().toUpperCase();
+    const symbols: Record<string, string> = {
+        USD: "$",
+        "US DOLLAR": "$",
+        EUR: "€",
+        EURO: "€",
+        GBP: "£",
+        "BRITISH POUND": "£",
+        INR: "₹",
+        "INDIAN RUPEE": "₹",
+        JPY: "¥",
+        "JAPANESE YEN": "¥",
+        CNY: "¥",
+        "CHINESE YUAN": "¥",
+        AUD: "A$",
+        "AUSTRALIAN DOLLAR": "A$",
+        CAD: "C$",
+        "CANADIAN DOLLAR": "C$",
+        CHF: "CHF",
+        "SWISS FRANC": "CHF",
+        SEK: "kr",
+        "SWEDISH KRONA": "kr",
+        NZD: "NZ$",
+        "NEW ZEALAND DOLLAR": "NZ$",
+        UGX: "USh",
+        "UGANDA SHILLING": "USh",
+    };
+    return symbols[clean] || currency;
+};
+
 const getPOStatusBadge = (status: POStatus) => {
     switch (status) {
         case "Draft PO": return <Badge className="bg-slate-500 hover:bg-slate-600">Draft PO</Badge>;
@@ -142,13 +212,18 @@ const getPOStatusBadge = (status: POStatus) => {
     }
 };
 
-function DatePicker({ date, setDate, disabled = false }: {
+function DatePicker({ date, setDate, disabled = false, disablePastDates = false }: {
     date?: Date,
     setDate: (d?: Date) => void,
-    disabled?: boolean
+    disabled?: boolean,
+    /** When true, only today and future calendar days can be selected. */
+    disablePastDates?: boolean,
 }) {
     const [isOpen, setIsOpen] = useState(false);
     const [visibleDate, setVisibleDate] = useState(() => date || new Date());
+
+    const isDayBeforeToday = (d: Date) =>
+        isBefore(startOfDay(d), startOfDay(new Date()));
 
     const monthNames = [
         "January", "February", "March", "April", "May", "June",
@@ -165,6 +240,9 @@ function DatePicker({ date, setDate, disabled = false }: {
     };
 
     const handleDateSelect = (selectedDate: Date) => {
+        if (disablePastDates && isDayBeforeToday(selectedDate)) {
+            return;
+        }
         setDate(selectedDate);
         setIsOpen(false);
     };
@@ -183,21 +261,27 @@ function DatePicker({ date, setDate, disabled = false }: {
         const startingDayOfWeek = firstDay.getDay();
 
         const days = [];
-        const prevMonth = new Date(year, month - 1, 0);
+        const prevMonthLastDay = new Date(year, month, 0).getDate();
+        const today = new Date();
+        today.setHours(0, 0, 0, 0);
+
         for (let i = startingDayOfWeek - 1; i >= 0; i--) {
-            days.push({ date: new Date(year, month - 1, prevMonth.getDate() - i), isCurrentMonth: false });
+            const d = new Date(year, month - 1, prevMonthLastDay - i);
+            days.push({
+                date: d,
+                isCurrentMonth: false,
+                isDisabled: disablePastDates && isDayBeforeToday(d),
+            });
         }
 
         for (let day = 1; day <= daysInMonth; day++) {
             const currentDate = new Date(year, month, day);
-            const today = new Date();
-            today.setHours(0, 0, 0, 0);
             days.push({
                 date: currentDate,
                 isCurrentMonth: true,
                 isToday: today.toDateString() === currentDate.toDateString(),
                 isSelected: date && currentDate.toDateString() === date.toDateString(),
-                isDisabled: false
+                isDisabled: disablePastDates && isDayBeforeToday(currentDate),
             });
         }
 
@@ -207,7 +291,7 @@ function DatePicker({ date, setDate, disabled = false }: {
             days.push({
                 date: currentDate,
                 isCurrentMonth: false,
-                isDisabled: false
+                isDisabled: disablePastDates && isDayBeforeToday(currentDate),
             });
         }
         return days;
@@ -276,9 +360,59 @@ function DatePicker({ date, setDate, disabled = false }: {
 }
 
 const PO = () => {
+    const { isMenuVisible, canCreate, canEdit, canDelete, canPrint } = useHasPermission();
+    const permissionModule = "PROCUREMENT/PO";
+
+    if (!isMenuVisible(permissionModule)) {
+        return <Unauthorized />;
+    }
+
+    // Local interface extension to avoid modifying shared procurementSharedData.ts
+    interface ExtendedPOData extends POData {
+        payment_term_id?: string | number;
+        currency_id?: string | number;
+        currencyName?: string;
+    }
+
     const { toast } = useToast();
+    const queryClient = useQueryClient();
+    const poStatuses = useCommonStore(state => state.poStatuses);
+    const paymentTerms = useCommonStore(state => state.paymentTerms);
+    const currenciesFromStore = useCommonStore(state => state.currencies);
+    const entityValues = useCommonStore(state => state.entityValues);
+    const currencies = useMemo(() => {
+        if (currenciesFromStore.length > 0) return currenciesFromStore;
+        return entityValues.filter((r: { entity_type_name?: string; entity_type_code?: string }) =>
+            isCurrencyEntityName(r?.entity_type_name, r?.entity_type_code)
+        );
+    }, [currenciesFromStore, entityValues]);
+    const [isSaving, setIsSaving] = useState(false);
+    const [isSavingDraft, setIsSavingDraft] = useState(false);
+    const [isSubmittingPO, setIsSubmittingPO] = useState(false);
+
+    // Filter states - moved to top to avoid use-before-define errors
+    const [poSearchTerm, setPoSearchTerm] = useState("");
+    const debouncedPoSearchTerm = useDebounce(poSearchTerm, 500);
+    const [poFilterDate, setPoFilterDate] = useState<Date | undefined>(undefined);
+    const [poFilterWarehouse, setPoFilterWarehouse] = useState<number | string>("all");
+    const appliedWarehouseFilterDefault = useRef(false);
+    const [poFilterStatus, setPoFilterStatus] = useState<number | string>("");
+    const [openingPOId, setOpeningPOId] = useState<number | null>(null);
+
+    // Pagination state
+    const [currentPage, setCurrentPage] = useState(1);
+    const [itemsPerPage, setItemsPerPage] = useState(10);
+    const [totalItems, setTotalItems] = useState(0);
 
     const [requests, setRequests] = useState<MRRequestData[]>([]);
+    const [pos, setPos] = useState<POData[]>([]);
+    const [warehouses, setWarehouses] = useState<any[]>([]);
+
+    const assignedWarehouseIds = getAssignedIds("warehouse");
+    const orderedWarehouses = useMemo(
+        () => prioritizeByAssigned(warehouses, assignedWarehouseIds, (wh) => wh.id),
+        [warehouses, assignedWarehouseIds]
+    );
 
     useEffect(() => {
         setRequests(getStoredMRs());
@@ -292,16 +426,59 @@ const PO = () => {
         window.addEventListener("storage", handleStorageChange);
         return () => window.removeEventListener("storage", handleStorageChange);
     }, []);
-
+    
     const updateRequests = (newRequests: MRRequestData[]) => {
         setRequests(newRequests);
         saveMRs(newRequests);
     };
 
-    const [pos, setPos] = useState<POData[]>([]);
+    useEffect(() => {
+        // Fetch Warehouses from API
+        const fetchWarehouses = async () => {
+            try {
+                const res = await commonApi.getWarehouses();
+                if (res.isSuccessful && res.data?.records) {
+                    setWarehouses(res.data.records.map((wh: any) => ({
+                        id: Number(wh.warehouse_id || wh.id),
+                        name: wh.warehouse_name || wh.name || wh.value_name || "Unknown Warehouse",
+                        code: wh.warehouse_code || wh.code || wh.value_code
+                    })));
+                }
+            } catch (error) {
+                console.error("Failed to fetch warehouses:", error);
+            }
+        };
+
+        fetchWarehouses();
+    }, []);
+
+    // Auto-select first assigned warehouse in listing filter (once, when assigned exist)
+    useEffect(() => {
+        if (appliedWarehouseFilterDefault.current) return;
+        if (!assignedWarehouseIds.length || orderedWarehouses.length === 0) return;
+
+        const firstAssigned = getFirstAssignedMatch(
+            assignedWarehouseIds,
+            orderedWarehouses.map((wh) => wh.id)
+        );
+        if (firstAssigned) {
+            setPoFilterWarehouse(String(firstAssigned));
+            appliedWarehouseFilterDefault.current = true;
+        }
+    }, [assignedWarehouseIds, orderedWarehouses]);
+
+    // Set default status to 'Draft PO' reactively when statuses load
+    useEffect(() => {
+        if (poFilterStatus === "" && poStatuses.length > 0) {
+            const draft = poStatuses.find(s => s.name === "Draft PO");
+            if (draft) {
+                setPoFilterStatus(draft.id);
+            }
+        }
+    }, [poStatuses, poFilterStatus]);
 
     useEffect(() => {
-        setPos(getStoredPOs());
+        // Only load if needed or rely on useQuery
 
         const handleStorageChange = (e: StorageEvent) => {
             if (e.key === "erp_mock_pos") {
@@ -313,29 +490,279 @@ const PO = () => {
         return () => window.removeEventListener("storage", handleStorageChange);
     }, []);
 
+    useEffect(() => {
+        setCurrentPage(1);
+    }, [debouncedPoSearchTerm, poFilterDate, poFilterWarehouse, poFilterStatus]);
+
     const updatePos = (newPos: POData[]) => {
         setPos(newPos);
         savePOs(newPos);
     };
 
-    const [poSearchTerm, setPoSearchTerm] = useState("");
-    const [poFilterDate, setPoFilterDate] = useState<Date | undefined>(undefined);
-    const [poFilterWarehouse, setPoFilterWarehouse] = useState<string>("all");
-    const [poFilterStatus, setPoFilterStatus] = useState<string>("Draft PO");
+    const { data: poResponse, isLoading: isPoLoading, isFetching: isPoFetching, refetch } = useQuery({
+        queryKey: ['po-list', debouncedPoSearchTerm, poFilterDate, poFilterWarehouse, poFilterStatus, currentPage, itemsPerPage],
+        queryFn: async () => {
+            const res = await procurementApi.getPOList({
+                page: currentPage,
+                limit: itemsPerPage,
+                text_search: debouncedPoSearchTerm,
+                warehouse: String(poFilterWarehouse),
+                date: poFilterDate ? format(poFilterDate, "yyyy-MM-dd") : undefined,
+                status: String(poFilterStatus)
+            });
+            if (res.isSuccessful && res.data) {
+                // Map API names to local names to avoid UI changes
+                const mappedPos = res.data.records.map((r: any) => ({
+                    id: r.id,
+                    poNumber: r.po_code,
+                    poDate: r.po_date,
+                    vendorName: r.vendor_name,
+                    location: r.location_name,
+                    warehouseName: r.warehouse_name,
+                    status: r.status_name as POStatus,
+                    // Fallback fields for simplified listing (full details fetched on View/Edit)
+                    mrCode: "",
+                    department: "",
+                    workCenter: "",
+                    createdBy: "",
+                    paymentTerms: "",
+                    items: [],
+                    receptions: []
+                }));
+                // We keep the internal state as POData for the list, 
+                // but activePO will use the extended interface
+                setPos(mappedPos);
+                setTotalItems(res.data.pagination.totalCount);
+                return res.data;
+            }
+            return null;
+        },
+        staleTime: 0,
+        gcTime: 0,
+        refetchOnWindowFocus: true,
+        refetchOnMount: true,
+        enabled: poStatuses.length > 0 && poFilterStatus !== "",
+    });
+
+    const deleteMutation = useMutation({
+        mutationFn: (id: number) => procurementApi.deletePO(id),
+        onSuccess: (res) => {
+            if (res.isSuccessful) {
+                toast({
+                    variant: "success",
+                    title: "PO Deleted",
+                    description: res.message || "Purchase Order deleted successfully.",
+                    duration: 15000
+                });
+                queryClient.invalidateQueries({ queryKey: ['po-list'] });
+                setIsDeletePOAlertOpen(false);
+                setIsPODialogOpen(false);
+            } else {
+                const errorTitle = (res as any).errorType === 'validation' ? "Validation Error" :
+                                   (res as any).errorType === 'business' ? "Business Error" : "Delete Failed";
+                toast({
+                    variant: "destructive",
+                    title: errorTitle,
+                    description: res.message,
+                    duration: 15000
+                });
+            }
+        },
+        onError: (error: any) => {
+            console.error("Error deleting PO:", error);
+            toast({
+                variant: "destructive",
+                title: "Error",
+                description: error.message,
+                duration: 15000
+            });
+        }
+    });
 
     const [isPODialogOpen, setIsPODialogOpen] = useState(false);
-    const [activePO, setActivePO] = useState<POData | null>(null);
+    const [activePO, setActivePO] = useState<ExtendedPOData | null>(null);
     const [isPOEdit, setIsPOEdit] = useState(false);
+    const isPOFormValid = activePO ? (
+        activePO.items.every(item => (item.price && Number(item.price) > 0) && !!item.deliveryDate) &&
+        (!!activePO.payment_term_id && String(activePO.payment_term_id) !== "0") &&
+        (!!activePO.currency_id && String(activePO.currency_id) !== "0")
+    ) : false;
+
+    const poCurrencyDisplay = useMemo(() => {
+        const code =
+            activePO?.currencyName ||
+            getCurrencyCode(findCurrencyByEntityId(currencies, activePO?.currency_id));
+        return code ? getCurrencySymbol(code) : CURRENCY_SYMBOL;
+    }, [activePO?.currencyName, activePO?.currency_id, currencies]);
+
     const [isDeletePOAlertOpen, setIsDeletePOAlertOpen] = useState(false);
     const [poToDeleteRecord, setPoToDeleteRecord] = useState<POData | null>(null);
     const [isCreatePOOpen, setIsCreatePOOpen] = useState(false);
 
+    // Re-resolve currency when master data loads after PO detail fetch
+    useEffect(() => {
+        if (!isPODialogOpen || !activePO?.currency_id || currencies.length === 0) return;
+        const match = findCurrencyByEntityId(currencies, activePO.currency_id);
+        if (!match) return;
+        const resolvedId = String(getCurrencyEntityId(match));
+        const resolvedCode = getCurrencyCode(match);
+        if (
+            String(activePO.currency_id) !== resolvedId ||
+            (resolvedCode && activePO.currencyName !== resolvedCode)
+        ) {
+            setActivePO((prev) =>
+                prev
+                    ? { ...prev, currency_id: resolvedId, currencyName: resolvedCode || prev.currencyName }
+                    : null
+            );
+        }
+    }, [isPODialogOpen, currencies, activePO?.id, activePO?.currency_id, activePO?.currencyName]);
 
-    const handleOpenPO = (po: POData, isEdit: boolean) => {
-        const poCopy = JSON.parse(JSON.stringify(po)) as POData;
-        setActivePO(poCopy);
+    const handleOpenPO = async (po: POData, isEdit: boolean) => {
+        if (isPoLoading || isPoFetching || openingPOId !== null) return;
+
+        setOpeningPOId(po.id);
+        // Show dialog immediately with list data while fetching details
+        setActivePO(po as ExtendedPOData);
         setIsPOEdit(isEdit);
         setIsPODialogOpen(true);
+
+        try {
+            // Fetch both Detail and Receipts in parallel
+            const [detailRes, receiptsRes] = await Promise.all([
+                procurementApi.getPODetail(po.id),
+                procurementApi.getPOReceiptItems(po.id)
+            ]);
+
+            if (detailRes.isSuccessful && detailRes.data) {
+                const det = detailRes.data;
+                // Robust mapping to handle potential double-nesting from different backend versions
+                const receiptsData = receiptsRes.isSuccessful && receiptsRes.data ? (receiptsRes.data as any).data : null;
+                const receipts = receiptsData?.receipts || (receiptsRes.data as any)?.receipts || [];
+                
+                const currencyMatch = findCurrencyByEntityId(currencies, det.currency_id);
+                const detailedPO: ExtendedPOData = {
+                    ...po, // Retain existing summary fields
+                    id: det.id,
+                    poNumber: det.po_code,
+                    poDate: det.po_date,
+                    location: det.location_name,
+                    vendorName: det.vendor_name,
+                    warehouseName: det.warehouse_name,
+                    status: det.status_name as POStatus,
+                    payment_term_id: det.payment_term_id || "",
+                    paymentTerms: det.payment_term_name || "",
+                    currency_id: currencyMatch
+                        ? String(getCurrencyEntityId(currencyMatch))
+                        : (det.currency_id != null ? String(det.currency_id) : ""),
+                    currencyName: currencyMatch
+                        ? getCurrencyCode(currencyMatch)
+                        : (det.currency_name || ""),
+                    notes: String(det.remarks ?? "").trim(),
+                    items: det.items.map(item => ({
+                        id: item.id,
+                        itemCode: item.item_code,
+                        itemName: item.item_name,
+                        uom: item.uom,
+                        type: "RM", 
+                        requiredQty: item.requested_qty,
+                        availableQty: 0,
+                        quotations: [],
+                        qtyReceived: item.received_qty,
+                        price: Number(item.price_per_uom) || 0,
+                        deliveryDate: item.delivery_date || ""
+                    })),
+                    receptions: receipts.map((r: any) => ({
+                        id: r.grn_item_id,
+                        itemCode: r.item.code,
+                        itemName: r.item.name,
+                        receivedQty: r.received_qty,
+                        deliveryDate: r.receive_date,
+                        note: r.remarks || "",
+                        attachmentName: r.document_name ? getFileName(r.document_name) : undefined,
+                        fileUrl: r.document_name || undefined
+                    }))
+                };
+                setActivePO(detailedPO);
+            }
+        } catch (error) {
+            console.error("Failed to fetch PO details/receipts:", error);
+            toast({
+                variant: "destructive",
+                title: "Error fetching details",
+                description: "Could not load full purchase order details. Please try again.",
+                duration: 15000
+            });
+        } finally {
+            setOpeningPOId(null);
+        }
+    };
+    
+    // API Submit Logic
+    const handleSaveOrSubmitPO = async (submitType: 'draft' | 'submit') => {
+        if (!activePO) return;
+        
+        // Validation for Submit
+        if (submitType === 'submit') {
+            const incomplete = activePO.items.some(i => !i.price || !i.deliveryDate);
+            if (incomplete) {
+                toast({ 
+                    title: "Incomplete PO", 
+                    description: "Please fill price and delivery date for all items before submitting.", 
+                    variant: "destructive",
+                    duration: 15000 
+                });
+                return;
+            }
+        }
+        
+        if (submitType === 'draft') {
+            setIsSavingDraft(true);
+        } else {
+            setIsSubmittingPO(true);
+        }
+        setIsSaving(true);
+        try {
+            const payload: POSubmitRequest = {
+                payment_term_id: Number(activePO.payment_term_id) || 0,
+                currency_id: Number(activePO.currency_id) || 0,
+                remarks: activePO.notes || "",
+                items: activePO.items.map(item => ({
+                    id: item.id,
+                    price_per_uom: Number(item.price) || 0,
+                    delivery_date: item.deliveryDate ? (() => {
+                        const d = parseDateString(item.deliveryDate);
+                        return isValid(d) ? format(d, "yyyy-MM-dd") : "";
+                    })() : ""
+                }))
+            };
+            
+            const res = submitType === 'draft' 
+                ? await procurementApi.savePODraft(activePO.id, payload)
+                : await procurementApi.submitPO(activePO.id, payload);
+                
+            if (res.isSuccessful) {
+                toast({ 
+                    variant: "success", 
+                    title: submitType === 'draft' ? "PO Draft Saved" : "PO Submitted Successfully",
+                    description: res.message,
+                    duration: 15000 
+                });
+                setIsPODialogOpen(false);
+                refetch(); // Reload the list to show updated status
+            } else {
+                const errorTitle = (res as any).errorType === 'validation' ? "Validation Error" :
+                                   (res as any).errorType === 'business' ? "Business Error" : "Error";
+                toast({ variant: "destructive", title: errorTitle, description: res.message, duration: 15000 });
+            }
+        } catch (error: any) {
+            console.error(`Failed to ${submitType} PO:`, error);
+            toast({ variant: "destructive", title: "Operation Failed", description: error.message, duration: 15000 });
+        } finally {
+            setIsSavingDraft(false);
+            setIsSubmittingPO(false);
+            setIsSaving(false);
+        }
     };
 
     const handleUpdateItemPrice = (itemId: number, value: string) => {
@@ -363,51 +790,28 @@ const PO = () => {
         setActivePO({
             ...activePO,
             items: activePO.items.map(item => 
-                item.id === itemId ? { ...item, price: cleanedValue } : item
+                item.id === itemId ? { ...item, price: parseFloat(cleanedValue) || 0 } : item
             )
         });
     };
 
     const handleDeletePO = (poId: number) => {
-        const poToDelete = pos.find(p => p.id === poId);
-        if (!poToDelete) return;
-
-        updatePos(pos.filter(p => p.id !== poId));
-
-        const updatedRequests = requests.map(mr => {
-            if (mr.mrCode === poToDelete.mrCode) {
-                const updatedItems = mr.items.map(item => {
-                    if (poToDelete.items.some(poi => poi.id === item.id)) {
-                        return { ...item, poNumber: undefined };
-                    }
-                    return item;
-                });
-
-                const hasPendingItems = updatedItems.some(i => !i.poNumber);
-                let newStatus = mr.status;
-                if (hasPendingItems && (mr.status === "FullFilled MR" || mr.status === "MR in Fullfillment")) {
-                    newStatus = "Requested MR";
-                }
-
-                return { ...mr, items: updatedItems, status: newStatus };
-            }
-            return mr;
-        });
-        updateRequests(updatedRequests);
-
-        setIsPODialogOpen(false);
-        toast({
-            title: "PO Deleted",
-            description: `Purchase Order ${poToDelete.poNumber} has been deleted and MR items have been reset.`,
-        });
+        deleteMutation.mutate(poId);
     };
 
     const savePO = () => {
         if (!activePO) return;
-        const updatedPO: POData = { ...activePO, status: "PO Confirmed" as POStatus };
+        // Destructure to remove local-only field before saving to POData-typed state
+        const { payment_term_id, ...poBase } = activePO;
+        const updatedPO: POData = { ...poBase, status: "PO Confirmed" as POStatus };
         updatePos(pos.map((p: POData) => p.id === updatedPO.id ? updatedPO : p));
         setIsPODialogOpen(false);
-        toast({ title: "PO Saved", description: `Purchase Order ${updatedPO.poNumber} confirmed.` });
+        toast({
+            variant: "success",
+            title: "PO Saved",
+            description: `Purchase Order ${updatedPO.poNumber} confirmed.`,
+            duration: 15000
+        });
     };
 
     const handlePrintPO = () => {
@@ -450,22 +854,22 @@ const PO = () => {
         }
     };
 
-    const handleDownloadQuotation = (attachmentName: string) => {
-        const blob = new Blob(["This is a dummy file content for " + attachmentName], { type: "text/plain" });
-        const url = window.URL.createObjectURL(blob);
-        const a = document.createElement("a");
-        a.href = url;
-        a.download = attachmentName;
-        document.body.appendChild(a);
-        a.click();
-        window.URL.revokeObjectURL(url);
-        document.body.removeChild(a);
+    const handleDownloadQuotation = (fileUrl: string) => {
+        if (!fileUrl) {
+            toast({
+                variant: "destructive",
+                title: "Error",
+                description: "No file available.",
+                duration: 15000
+            });
+            return;
+        }
 
-        toast({
-            title: "Download Started",
-            description: `Downloading ${attachmentName}...`
-        });
+        window.open(resolveFileUrl(fileUrl), '_blank');
     };
+
+    const isTableLoading = isPoLoading || isPoFetching;
+    const isActionBusy = isTableLoading || openingPOId !== null;
 
     return (
         <div className="h-full flex flex-col gap-6 animate-in fade-in duration-500">
@@ -477,15 +881,18 @@ const PO = () => {
                 search={{
                     value: poSearchTerm,
                     onChange: setPoSearchTerm,
-                    placeholder: "Search by PO#, Vendor or Warehouse..."
+                    placeholder: "Search by PO Code, Vendor or Warehouse..."
                 }}
                 filters={[
                     {
                         type: 'select',
                         label: 'Warehouse',
                         value: poFilterWarehouse,
-                        options: [{ label: "All Warehouses", value: "all" }, ...Array.from(new Set(pos.map(po => po.warehouseName)))],
-                        onChange: setPoFilterWarehouse,
+                        options: [
+                            { label: "All Warehouse", value: "all" },
+                            ...orderedWarehouses.map((wh) => ({ label: wh.name, value: String(wh.id) })),
+                        ],
+                        onChange: (val) => setPoFilterWarehouse(val === "all" ? "all" : String(val)),
                         searchable: true
                     },
                     {
@@ -499,7 +906,10 @@ const PO = () => {
                         type: 'select',
                         label: 'Status',
                         value: poFilterStatus,
-                        options: [{ label: "All Status", value: "all" }, "Draft PO", "Submitted PO", "Partially Completed PO", "Completed PO"],
+                        options: [
+                            { label: "All Status", value: "all" },
+                            ...poStatuses.map(s => ({ label: s.name, value: s.id }))
+                        ],
                         onChange: setPoFilterStatus,
                         searchable: true
                     }
@@ -512,7 +922,7 @@ const PO = () => {
                         <Table>
                             <TableHeader>
                                 <TableRow className="bg-muted/50 hover:bg-muted/50">
-                                    <TableHead className="font-semibold text-xs uppercase tracking-wider">PO No</TableHead>
+                                    <TableHead className="font-semibold text-xs uppercase tracking-wider">PO Code</TableHead>
                                     <TableHead className="font-semibold text-xs uppercase tracking-wider">PO Date</TableHead>
                                     <TableHead className="font-semibold text-xs uppercase tracking-wider">Vendor</TableHead>
                                     <TableHead className="font-semibold text-xs uppercase tracking-wider">Location</TableHead>
@@ -522,28 +932,23 @@ const PO = () => {
                                 </TableRow>
                             </TableHeader>
                             <TableBody>
-                                {pos.filter(po => {
-                                    const matchesSearch = po.poNumber.toLowerCase().includes(poSearchTerm.toLowerCase()) ||
-                                        po.department.toLowerCase().includes(poSearchTerm.toLowerCase());
-                                    const matchesWarehouse = poFilterWarehouse === "all" || po.warehouseName === poFilterWarehouse;
-                                    const matchesStatus = poFilterStatus === "all" || po.status === poFilterStatus;
-                                    const matchesDate = !poFilterDate || po.poDate === format(poFilterDate, "dd-MM-yyyy");
-                                    return matchesSearch && matchesWarehouse && matchesStatus && matchesDate;
-                                }).length === 0 ? (
+                                {isTableLoading ? (
+                                    <TableRow>
+                                        <TableCell colSpan={7} className="h-32 text-center">
+                                            <div className="flex flex-col items-center justify-center gap-3">
+                                                <Loader2 className="h-8 w-8 animate-spin text-primary" />
+                                                <p className="text-sm text-muted-foreground">Loading...</p>
+                                            </div>
+                                        </TableCell>
+                                    </TableRow>
+                                ) : pos.length === 0 ? (
                                     <TableRow>
                                         <TableCell colSpan={7} className="h-32 text-center text-muted-foreground">
                                             No Purchase Orders found
                                         </TableCell>
                                     </TableRow>
                                 ) : (
-                                    pos.filter(po => {
-                                        const matchesSearch = po.poNumber.toLowerCase().includes(poSearchTerm.toLowerCase()) ||
-                                            po.department.toLowerCase().includes(poSearchTerm.toLowerCase());
-                                        const matchesWarehouse = poFilterWarehouse === "all" || po.warehouseName === poFilterWarehouse;
-                                        const matchesStatus = poFilterStatus === "all" || po.status === poFilterStatus;
-                                        const matchesDate = !poFilterDate || po.poDate === format(poFilterDate, "dd-MM-yyyy");
-                                        return matchesSearch && matchesWarehouse && matchesStatus && matchesDate;
-                                    }).map((po) => (
+                                    pos.map((po) => (
                                         <TableRow key={po.id} className="hover:bg-muted/30 transition-colors border-b">
                                             <TableCell className="py-4 font-medium font-mono">{po.poNumber}</TableCell>
                                             <TableCell>{formatDate(po.poDate)}</TableCell>
@@ -554,10 +959,12 @@ const PO = () => {
                                                 {getPOStatusBadge(po.status)}
                                             </TableCell>
                                             <TableCell className="text-center">
-                                                <TableActionButtons
-                                                    onView={() => handleOpenPO(po, false)}
-                                                    onEdit={(po.status === "Draft PO" || po.status === "Partially Completed PO") ? () => handleOpenPO(po, true) : undefined}
-                                                />
+                                                <div className={cn(isActionBusy && "pointer-events-none opacity-50")}>
+                                                    <TableActionButtons
+                                                        onView={() => handleOpenPO(po, false)}
+                                                        onEdit={(po.status === "Draft PO" || po.status === "Partially Completed PO") && canEdit(permissionModule) ? () => handleOpenPO(po, true) : undefined}
+                                                    />
+                                                </div>
                                             </TableCell>
                                         </TableRow>
                                     ))
@@ -566,28 +973,14 @@ const PO = () => {
                         </Table>
                     </div>
 
-                    {pos.filter(po => {
-                        const matchesSearch = po.poNumber.toLowerCase().includes(poSearchTerm.toLowerCase()) ||
-                            po.department.toLowerCase().includes(poSearchTerm.toLowerCase());
-                        const matchesWarehouse = poFilterWarehouse === "all" || po.warehouseName === poFilterWarehouse;
-                        const matchesStatus = poFilterStatus === "all" || po.status === poFilterStatus;
-                        const matchesDate = !poFilterDate || po.poDate === format(poFilterDate, "dd-MM-yyyy");
-                        return matchesSearch && matchesWarehouse && matchesStatus && matchesDate;
-                    }).length > 0 && (
+                    {pos.length > 0 && (
                         <DataTablePagination
-                            currentPage={1}
-                            totalPages={1}
-                            totalItems={pos.filter(po => {
-                                const matchesSearch = po.poNumber.toLowerCase().includes(poSearchTerm.toLowerCase()) ||
-                                    po.department.toLowerCase().includes(poSearchTerm.toLowerCase());
-                                const matchesWarehouse = poFilterWarehouse === "all" || po.warehouseName === poFilterWarehouse;
-                                const matchesStatus = poFilterStatus === "all" || po.status === poFilterStatus;
-                                const matchesDate = !poFilterDate || po.poDate === format(poFilterDate, "dd-MM-yyyy");
-                                return matchesSearch && matchesWarehouse && matchesStatus && matchesDate;
-                            }).length}
-                            itemsPerPage={10}
-                            onPageChange={() => {}}
-                            onItemsPerPageChange={() => {}}
+                            currentPage={currentPage}
+                            totalPages={Math.ceil(totalItems / itemsPerPage)}
+                            totalItems={totalItems}
+                            itemsPerPage={itemsPerPage}
+                            onPageChange={(page) => setCurrentPage(page)}
+                            onItemsPerPageChange={(limit) => setItemsPerPage(limit)}
                             options={[10, 15, 30, 50]}
                         />
                     )}
@@ -596,22 +989,30 @@ const PO = () => {
 
             {/* PO VIEW/EDIT DIALOG */}
             <Dialog open={isPODialogOpen} onOpenChange={setIsPODialogOpen}>
-                <DialogContent className="sm:max-w-[1000px] max-h-[95vh] flex flex-col p-0">
-                    <DialogHeader className="p-6 pb-2">
-                        <DialogTitle className="text-2xl font-bold flex items-center gap-2">
-                            <FileText className="h-5 w-5 text-primary" />
-                            {(activePO?.status === "Draft PO" || activePO?.status === "Partially Completed PO") && isPOEdit 
-                                ? "Edit Purchase Order" 
-                                : "View Purchase Order"}: {activePO?.poNumber}
+                <DialogContent
+                    className="flex! min-h-0 w-[95%] max-h-[82vh] flex-col gap-0 overflow-hidden bg-white p-0 sm:max-w-3xl md:max-w-4xl lg:max-w-5xl xl:max-w-6xl"
+                    onOpenAutoFocus={(e) => e.preventDefault()}
+                    onPointerDownOutside={(e) => e.preventDefault()}
+                >
+                    <DialogHeader className="shrink-0 space-y-1 p-4 pb-2 sm:p-5 sm:pb-3">
+                        <DialogTitle className="flex items-center gap-2 text-lg font-bold sm:text-xl">
+                            <FileText className="h-5 w-5 shrink-0 text-primary" />
+                            <span className="truncate">
+                                {(activePO?.status === "Draft PO" || activePO?.status === "Partially Completed PO") && isPOEdit
+                                    ? "Edit Purchase Order"
+                                    : "View Purchase Order"}
+                                : {activePO?.poNumber}
+                            </span>
                         </DialogTitle>
-                        <DialogDescription>
-                            {(activePO?.status === "Draft PO" || activePO?.status === "Partially Completed PO") && isPOEdit 
-                                ? "Update PO details, pricing and delivery dates." 
+                        <DialogDescription className="text-xs leading-snug sm:text-sm">
+                            {(activePO?.status === "Draft PO" || activePO?.status === "Partially Completed PO") && isPOEdit
+                                ? "Update PO details, pricing and delivery dates."
                                 : "Review PO details and item reception status."}
                         </DialogDescription>
                     </DialogHeader>
 
-                    <div className="flex-1 overflow-y-auto px-6 py-4 space-y-6">
+                    <div className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto px-4 py-3 sm:px-5 sm:py-4">
+                        <div className="space-y-5">
                         {/* Printable Content */}
                         <div id="printable-po-content" className="hidden">
                             <div className="header" style={{ textAlign: "center", marginBottom: "30px", borderBottom: "2px solid #eee", paddingBottom: "10px" }}>
@@ -662,7 +1063,7 @@ const PO = () => {
                                             <td style={{ border: "1px solid #eee", padding: "12px", textAlign: "left", fontSize: "12px" }}>{item.itemName}</td>
                                             <td style={{ border: "1px solid #eee", padding: "12px", textAlign: "left", fontSize: "12px" }}>{item.uom}</td>
                                             <td style={{ border: "1px solid #eee", padding: "12px", textAlign: "left", fontSize: "12px" }}>{item.requiredQty}</td>
-                                            <td style={{ border: "1px solid #eee", padding: "12px", textAlign: "left", fontSize: "12px" }}>USh {typeof item.price === 'number' ? item.price.toLocaleString() : (Number(item.price) || 0).toLocaleString()}</td>
+                                            <td style={{ border: "1px solid #eee", padding: "12px", textAlign: "left", fontSize: "12px" }}>{poCurrencyDisplay} {typeof item.price === 'number' ? item.price.toLocaleString() : (Number(item.price) || 0).toLocaleString()}</td>
                                             <td style={{ border: "1px solid #eee", padding: "12px", textAlign: "left", fontSize: "12px" }}>{item.deliveryDate ? formatDate(item.deliveryDate) : "N/A"}</td>
                                         </tr>
                                     ))}
@@ -675,9 +1076,9 @@ const PO = () => {
                         </div>
 
                         {/* Visual UI */}
-                        <div className="p-4 bg-muted/30 rounded-lg grid grid-cols-4 gap-4 border">
+                        <div className="grid grid-cols-1 gap-3 rounded-lg border bg-muted/30 p-3 sm:grid-cols-2 sm:p-4 lg:grid-cols-3 xl:grid-cols-4 sm:gap-4">
                             <div className="space-y-1">
-                                <Label className="text-[10px] uppercase font-bold text-muted-foreground">PO Number</Label>
+                                <Label className="text-[10px] uppercase font-bold text-muted-foreground">PO Code</Label>
                                 <p className="text-sm font-bold text-primary">{activePO?.poNumber}</p>
                             </div>
                             <div className="space-y-1">
@@ -692,7 +1093,7 @@ const PO = () => {
                                 <Label className="text-[10px] uppercase font-bold text-muted-foreground block">PO Status</Label>
                                 {activePO && getPOStatusBadge(activePO.status)}
                             </div>
-                            <div className="space-y-1 col-span-2">
+                            <div className="space-y-1">
                                 <Label className="text-[10px] uppercase font-bold text-muted-foreground">Vendor</Label>
                                 <p className="text-sm font-bold text-primary">{activePO?.vendorName || "N/A"}</p>
                             </div>
@@ -701,37 +1102,72 @@ const PO = () => {
                                 <p className="text-sm font-medium">{activePO?.warehouseName || "N/A"}</p>
                             </div>
                             <div className="space-y-1 flex flex-col">
-                                <Label className="text-[10px] uppercase font-bold text-muted-foreground mb-1">Payment Terms</Label>
+                                <Label className="text-[10px] uppercase font-bold text-muted-foreground mb-1">Payment Terms<span className="text-destructive font-bold ml-0.5">*</span></Label>
                                 {activePO?.status === "Draft PO" && isPOEdit ? (
-                                    <Select
-                                        value={activePO.paymentTerms || ""}
-                                        onValueChange={(val) => setActivePO(prev => prev ? { ...prev, paymentTerms: val } : null)}
-                                    >
-                                        <SelectTrigger className="h-8 py-0">
-                                            <SelectValue placeholder="Terms" />
-                                        </SelectTrigger>
-                                        <SelectContent>
-                                            <SelectItem value="Net 30">Net 30</SelectItem>
-                                            <SelectItem value="Net 15">Net 15</SelectItem>
-                                            <SelectItem value="Advance">Advance</SelectItem>
-                                            <SelectItem value="COD">COD</SelectItem>
-                                        </SelectContent>
-                                    </Select>
+                                    <SearchableSelect
+                                        value={String(activePO?.payment_term_id || "")}
+                                        options={paymentTerms.map(term => ({ value: String(term.id), label: term.name }))}
+                                        onChange={(val) => {
+                                            const selectedTerm = paymentTerms.find(t => String(t.id) === val);
+                                            setActivePO((prev) => (prev ? { 
+                                                ...prev, 
+                                                payment_term_id: val,
+                                                paymentTerms: selectedTerm ? selectedTerm.name : "" 
+                                            } : null));
+                                        }}
+                                        placeholder="Select terms..."
+                                        className="h-8 min-h-8 py-0"
+                                    />
                                 ) : (
                                     <p className="text-sm font-medium">{activePO?.paymentTerms}</p>
+                                )}
+                            </div>
+                            <div className="space-y-1 flex flex-col">
+                                <Label className="text-[10px] uppercase font-bold text-muted-foreground mb-1">Currency<span className="text-destructive font-bold ml-0.5">*</span></Label>
+                                {activePO?.status === "Draft PO" && isPOEdit ? (
+                                    <SearchableSelect
+                                        value={String(activePO?.currency_id || "")}
+                                        options={currencies.map((c) => ({
+                                            value: String(getCurrencyEntityId(c) ?? ""),
+                                            label: getCurrencyCode(c) || "—",
+                                        }))}
+                                        onChange={(val) => {
+                                            const selected = findCurrencyByEntityId(currencies, val);
+                                            setActivePO((prev) => (prev ? {
+                                                ...prev,
+                                                currency_id: val,
+                                                currencyName: selected ? getCurrencyCode(selected) : "",
+                                            } : null));
+                                        }}
+                                        placeholder="Select currency..."
+                                        className="h-8 min-h-8 py-0"
+                                    />
+                                ) : (
+                                    <p className="text-sm font-medium">
+                                        {activePO?.currencyName ||
+                                            getCurrencyCode(findCurrencyByEntityId(currencies, activePO?.currency_id)) ||
+                                            "—"}
+                                    </p>
                                 )}
                             </div>
                         </div>
 
                         <Tabs defaultValue="po-items" className="w-full">
-                            <TabsList className="grid w-full grid-cols-2 mb-6">
+                            <TabsList className="mb-4 grid w-full grid-cols-2 sm:mb-5">
                                 <TabsTrigger value="po-items" className="font-bold">PO Items</TabsTrigger>
                                 <TabsTrigger value="receive-items" className="font-bold">Receive Items</TabsTrigger>
                             </TabsList>
 
-                            <TabsContent value="po-items" className="space-y-6 outline-none">
-                                <div className="rounded-xl border shadow-sm overflow-hidden bg-white">
-                                    <Table>
+                            <TabsContent value="po-items" className="space-y-4 outline-none sm:space-y-5">
+                                <div className="overflow-hidden rounded-md border bg-white shadow-sm">
+                                    <div
+                                        className={cn(
+                                            "overflow-x-auto",
+                                            (activePO?.items.length ?? 0) > 4 &&
+                                                "max-h-[min(42vh,380px)] overflow-y-auto custom-scrollbar"
+                                        )}
+                                    >
+                                    <Table className="w-full min-w-[720px]">
                                         <TableHeader>
                                             <TableRow className="bg-muted/50">
                                                 <TableHead className="text-[10px] font-bold uppercase py-3 pl-6">Items</TableHead>
@@ -765,7 +1201,7 @@ const PO = () => {
                                                         <>
                                                             <TableCell className="text-center min-w-[120px]">
                                                                 <div className="flex items-center justify-center gap-1">
-                                                                    <span className="text-xs font-bold text-slate-500">USh</span>
+                                                                    <span className="text-xs font-bold text-slate-500">{poCurrencyDisplay}</span>
                                                                     <Input
                                                                         type="text"
                                                                         inputMode="decimal"
@@ -779,10 +1215,11 @@ const PO = () => {
                                                             </TableCell>
                                                             <TableCell className="text-right pr-6">
                                                                 <DatePicker
+                                                                    disablePastDates
                                                                     date={item.deliveryDate ? parseDateString(item.deliveryDate) : undefined}
                                                                     setDate={(d) => {
-                                                                        if (d && d < new Date()) {
-                                                                            toast({ title: "Invalid Date", description: "Delivery date cannot be in the past.", variant: "destructive" });
+                                                                        if (d && isBefore(startOfDay(d), startOfDay(new Date()))) {
+                                                                            toast({ title: "Invalid Date", description: "Delivery date cannot be in the past.", variant: "destructive", duration: 15000 });
                                                                             return;
                                                                         }
                                                                         setActivePO(prev => {
@@ -799,7 +1236,7 @@ const PO = () => {
                                                     ) : (
                                                         <>
                                                             <TableCell className="text-center font-bold text-xs text-slate-700">
-                                                                USh {typeof item.price === 'number' ? item.price.toLocaleString() : (Number(item.price) || 0).toLocaleString()}/{item.uom}
+                                                                {poCurrencyDisplay} {typeof item.price === 'number' ? item.price.toLocaleString() : (Number(item.price) || 0).toLocaleString()}/{item.uom}
                                                             </TableCell>
                                                             <TableCell className="text-center text-xs font-medium text-slate-600">
                                                                 {item.deliveryDate ? formatDate(item.deliveryDate) : "N/A"}
@@ -813,16 +1250,24 @@ const PO = () => {
                                             ))}
                                         </TableBody>
                                     </Table>
+                                    </div>
                                 </div>
                             </TabsContent>
 
                             <TabsContent value="receive-items" className="mt-0 focus-visible:outline-none focus-visible:ring-0">
-                                <div className="border rounded-2xl overflow-hidden shadow-sm bg-white">
-                                    <div className="bg-slate-50 px-6 py-3 border-b border-slate-200 flex items-center gap-2">
+                                <div className="overflow-hidden rounded-md border bg-white shadow-sm">
+                                    <div className="flex shrink-0 items-center gap-2 border-b border-slate-200 bg-slate-50 px-4 py-3 sm:px-6">
                                         <FileText className="h-4 w-4 text-slate-400" />
-                                        <span className="text-xs font-bold text-slate-600 uppercase tracking-wider">Reception Entries</span>
+                                        <span className="text-xs font-bold uppercase tracking-wider text-slate-600">Reception Entries</span>
                                     </div>
-                                    <Table>
+                                    <div
+                                        className={cn(
+                                            "overflow-x-auto",
+                                            (activePO?.receptions?.length ?? 0) > 4 &&
+                                                "max-h-[min(42vh,380px)] overflow-y-auto custom-scrollbar"
+                                        )}
+                                    >
+                                    <Table className="w-full min-w-[640px]">
                                         <TableHeader className="bg-slate-50/50">
                                             <TableRow className="hover:bg-transparent">
                                                 <TableHead className="font-bold text-slate-500 py-3 uppercase text-[10px] tracking-wider pl-6">Item</TableHead>
@@ -845,10 +1290,10 @@ const PO = () => {
                                                         <TableCell className="text-slate-600 text-xs">{r.deliveryDate ? formatDate(r.deliveryDate) : "N/A"}</TableCell>
                                                         <TableCell>
                                                             {r.attachmentName ? (
-                                                                <Badge variant="secondary" className="bg-blue-50 text-blue-600 border-none font-medium flex items-center gap-1 w-fit">
-                                                                    <Paperclip className="h-3 w-3" />
-                                                                    {r.attachmentName}
-                                                                </Badge>
+                                                                    <Badge variant="secondary" className="bg-blue-50 text-blue-600 border-none font-medium flex items-center gap-1 w-fit cursor-pointer hover:bg-blue-100" onClick={() => handleDownloadQuotation(r.fileUrl!)}>
+                                                                        <Paperclip className="h-3 w-3" />
+                                                                        {truncateFileName(r.attachmentName!)}
+                                                                    </Badge>
                                                             ) : "-"}
                                                         </TableCell>
                                                         <TableCell className="text-slate-600 text-xs">{r.note || "-"}</TableCell>
@@ -859,7 +1304,7 @@ const PO = () => {
                                                                     size="icon"
                                                                     className="h-8 w-8 text-blue-400 hover:text-blue-600 hover:bg-blue-50"
                                                                     title="Download Document"
-                                                                    onClick={() => handleDownloadQuotation(r.attachmentName!)}
+                                                                    onClick={() => handleDownloadQuotation(r.fileUrl!)}
                                                                 >
                                                                     <Download className="h-4 w-4" />
                                                                 </Button>
@@ -870,35 +1315,50 @@ const PO = () => {
                                             ) : (
                                                 <TableRow>
                                                     <TableCell colSpan={6} className="text-center py-8 text-slate-400">
-                                                        No reception entries yet
+                                                        No items received yet. Items will appear here once received.
                                                     </TableCell>
                                                 </TableRow>
                                             )}
                                         </TableBody>
                                     </Table>
+                                    </div>
                                 </div>
                             </TabsContent>
                         </Tabs>
 
-                        <div className="space-y-2 mt-6">
+                        <div className="shrink-0 space-y-2">
                             <Label className="text-sm font-bold text-slate-700">Notes / Remarks</Label>
-                            <Textarea
-                                placeholder="Add any notes or remarks about this purchase order..."
-                                className="min-h-[80px] bg-white border-slate-200 resize-none"
-                                value={activePO?.notes || ""}
-                                onChange={(e) => setActivePO(prev => prev ? { ...prev, notes: e.target.value } : null)}
-                                disabled={!(activePO?.status === "Draft PO" && isPOEdit)}
-                            />
+                            {activePO?.status === "Draft PO" && isPOEdit ? (
+                                <Textarea
+                                    placeholder="Add any notes or remarks about this purchase order..."
+                                    className="min-h-[80px] max-h-[80px] overflow-y-auto bg-white border-slate-200 resize-none custom-scrollbar"
+                                    value={activePO?.notes || ""}
+                                    onChange={(e) =>
+                                        setActivePO((prev) => (prev ? { ...prev, notes: e.target.value } : null))
+                                    }
+                                />
+                            ) : (
+                                <div className="min-h-[80px] max-h-[80px] overflow-y-auto custom-scrollbar w-full rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-sm">
+                                    {activePO?.notes?.trim() ? (
+                                        <p className="whitespace-pre-wrap text-slate-900">{activePO.notes}</p>
+                                    ) : (
+                                        <p className="text-muted-foreground">—</p>
+                                    )}
+                                </div>
+                            )}
+                        </div>
                         </div>
                     </div>
 
-                    <DialogFooter className="p-6 border-t mt-auto flex sm:flex-row flex-col-reverse sm:justify-between justify-between items-center w-full sm:space-x-0">
-                        <div className="flex justify-start">
-                            {activePO?.status === "Draft PO" && isPOEdit && (
-                                <Button 
-                                    variant="destructive" 
+                    <DialogFooter className="shrink-0 flex-col-reverse gap-2 border-t bg-background px-4 pb-4 pt-3 sm:flex-row sm:items-center sm:justify-between sm:px-5">
+                        <div className="flex w-full justify-start sm:w-auto">
+                            {activePO?.status === "Draft PO" && isPOEdit && canDelete(permissionModule) && (
+                                <Button
+                                    variant="destructive"
+                                    disabled={isSaving}
+                                    className="w-full sm:w-auto"
                                     onClick={() => {
-                                        setPoToDeleteRecord(activePO);
+                                        setPoToDeleteRecord(activePO as POData);
                                         setIsDeletePOAlertOpen(true);
                                     }}
                                 >
@@ -908,49 +1368,46 @@ const PO = () => {
                             )}
                         </div>
 
-                        <div className="flex gap-2">
-                            <Button variant="outline" onClick={() => setIsPODialogOpen(false)}>Close</Button>
+                        <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row">
+                            <Button variant="outline" onClick={() => setIsPODialogOpen(false)} className="w-full sm:w-auto">
+                                Close
+                            </Button>
 
-                            {activePO?.status === "Draft PO" && isPOEdit && (
+                            {activePO?.status === "Draft PO" && isPOEdit && canEdit(permissionModule) && (
                                 <>
                                     <Button
                                         variant="secondary"
-                                        className="font-bold text-sm"
-                                        onClick={() => {
-                                            updatePos(pos.map(p => p.id === activePO.id ? activePO : p));
-                                            setIsPODialogOpen(false);
-                                            toast({ title: "PO Saved", description: "Draft changes have been saved." });
-                                        }}
+                                        className="w-full font-bold text-sm sm:w-auto"
+                                        disabled={isSaving || !isPOFormValid}
+                                        loading={isSavingDraft}
+                                        onClick={() => handleSaveOrSubmitPO('draft')}
                                     >
                                         Save Draft
                                     </Button>
                                     <Button
-                                        className="bg-emerald-600 hover:bg-emerald-700 font-bold"
-                                        onClick={() => {
-                                            const incomplete = activePO.items.some(i => !i.price || !i.deliveryDate);
-                                            if (incomplete) {
-                                                toast({ title: "Incomplete PO", description: "Please fill price and delivery date for all items.", variant: "destructive" });
-                                                return;
-                                            }
-                                            const submittedPO = { ...activePO, status: "Submitted PO" as POStatus };
-                                            updatePos(pos.map(p => p.id === activePO.id ? submittedPO : p));
-                                            setIsPODialogOpen(false);
-                                            toast({ title: "PO Submitted", description: "PO status updated to Submitted." });
-                                        }}
+                                        className="w-full bg-emerald-600 font-bold hover:bg-emerald-700 sm:w-auto"
+                                        disabled={isSaving || !isPOFormValid}
+                                        loading={isSubmittingPO}
+                                        onClick={() => handleSaveOrSubmitPO('submit')}
                                     >
                                         Submit PO
                                     </Button>
                                 </>
                             )}
 
-                            {activePO?.status === "Partially Completed PO" && isPOEdit && (
+                            {activePO?.status === "Partially Completed PO" && isPOEdit && canEdit(permissionModule) && (
                                 <Button
-                                    className="bg-primary hover:bg-primary/90 font-bold"
+                                    className="w-full bg-primary font-bold hover:bg-primary/90 sm:w-auto"
                                     onClick={() => {
                                         const completedPO = { ...activePO, status: "Completed PO" as POStatus };
                                         updatePos(pos.map(p => p.id === activePO.id ? completedPO : p));
                                         setIsPODialogOpen(false);
-                                        toast({ title: "PO Completed", description: "Purchase Order has been marked as Completed." });
+                                        toast({
+                                            variant: "success",
+                                            title: "PO Completed",
+                                            description: "Purchase Order has been marked as Completed.",
+                                            duration: 15000
+                                        });
                                     }}
                                 >
                                     <Check className="h-4 w-4 mr-2" />
@@ -958,9 +1415,12 @@ const PO = () => {
                                 </Button>
                             )}
 
-                            {activePO?.status === "Submitted PO" && !isPOEdit && (
-                                <Button variant="secondary" onClick={handlePrintPO} className="font-bold">
-                                    <Printer className="h-4 w-4 mr-2" />
+                            {activePO?.status === "Submitted PO" && !isPOEdit && canPrint(permissionModule) && (
+                                <Button
+                                    onClick={handlePrintPO}
+                                    className="w-full bg-blue-600 font-bold text-white hover:bg-blue-600/90 sm:w-auto"
+                                >
+                                    <Printer className="mr-2 h-4 w-4" />
                                     Print PO
                                 </Button>
                             )}
@@ -974,6 +1434,7 @@ const PO = () => {
                 setOpen={setIsDeletePOAlertOpen}
                 po={poToDeleteRecord}
                 onDelete={handleDeletePO}
+                isDeleting={deleteMutation.isPending}
             />
             
             <CreatePODialog
@@ -983,16 +1444,18 @@ const PO = () => {
                 pos={pos}
                 updatePos={updatePos}
                 updateRequests={updateRequests}
+                warehouses={warehouses}
             />
         </div>
     );
 };
 
-const DeletePOAlert = ({ isOpen, setOpen, po, onDelete }: {
+const DeletePOAlert = ({ isOpen, setOpen, po, onDelete, isDeleting }: {
     isOpen: boolean,
     setOpen: (o: boolean) => void,
     po: POData | null,
-    onDelete: (id: number) => void
+    onDelete: (id: number) => void,
+    isDeleting: boolean
 }) => {
     return (
         <AlertDialog open={isOpen} onOpenChange={setOpen}>
@@ -1005,29 +1468,33 @@ const DeletePOAlert = ({ isOpen, setOpen, po, onDelete }: {
                 </AlertDialogHeader>
                 <AlertDialogFooter>
                     <AlertDialogCancel>Cancel</AlertDialogCancel>
-                    <AlertDialogAction
-                        className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
-                        onClick={() => {
+                    <Button
+                        variant="destructive"
+                        disabled={isDeleting}
+                        loading={isDeleting}
+                        onClick={(e) => {
+                            e.preventDefault(); // Prevent closing immediately to show loading
                             if (po) {
                                 onDelete(po.id);
                             }
                         }}
                     >
                         Delete
-                    </AlertDialogAction>
+                    </Button>
                 </AlertDialogFooter>
             </AlertDialogContent>
         </AlertDialog>
     );
 };
 
-const CreatePODialog = ({ isOpen, setOpen, requests, pos, updatePos, updateRequests }: {
+const CreatePODialog = ({ isOpen, setOpen, requests, pos, updatePos, updateRequests, warehouses }: {
     isOpen: boolean,
     setOpen: (o: boolean) => void,
     requests: MRRequestData[],
     pos: POData[],
     updatePos: (newPos: POData[]) => void,
-    updateRequests: (newRequests: MRRequestData[]) => void
+    updateRequests: (newRequests: MRRequestData[]) => void,
+    warehouses: any[]
 }) => {
     const { toast } = useToast();
     const [selectedMRId, setSelectedMRId] = useState<number | null>(null);
@@ -1089,7 +1556,12 @@ const CreatePODialog = ({ isOpen, setOpen, requests, pos, updatePos, updateReque
         setSelectedWarehouse("");
         setSelectedVendor("");
         
-        toast({ title: "PO Created", description: `Purchase Order ${poNum} successfully generated.` });
+        toast({
+            variant: "success",
+            title: "PO Created",
+            description: `Purchase Order ${poNum} successfully generated.`,
+            duration: 15000
+        });
     };
 
     return (
@@ -1100,7 +1572,10 @@ const CreatePODialog = ({ isOpen, setOpen, requests, pos, updatePos, updateReque
                 setSelectedItemIds([]);
             }
         }}>
-            <DialogContent className="sm:max-w-[700px]">
+            <DialogContent
+                className="sm:max-w-[700px]"
+                onPointerDownOutside={(e) => e.preventDefault()}
+            >
                 <DialogHeader>
                     <DialogTitle className="flex items-center gap-2">
                         <Plus className="h-5 w-5 text-primary" />
@@ -1212,7 +1687,7 @@ const CreatePODialog = ({ isOpen, setOpen, requests, pos, updatePos, updateReque
                                             <SelectValue placeholder="Choose Warehouse..." />
                                         </SelectTrigger>
                                         <SelectContent>
-                                            {mockWarehouses.map(wh => (
+                                            {warehouses.map(wh => (
                                                 <SelectItem key={wh.id} value={wh.name}>{wh.name}</SelectItem>
                                             ))}
                                         </SelectContent>

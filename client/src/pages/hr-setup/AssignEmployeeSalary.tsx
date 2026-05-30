@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from "react";
+import React, { useState, useEffect, useMemo, useRef } from "react";
 import { useLocation, useRoute, useSearch } from "wouter";
 import {
     Table,
@@ -54,26 +54,31 @@ import {
     TooltipProvider,
     TooltipTrigger,
 } from "@/components/ui/tooltip";
-import { Search, Plus, Edit, ArrowLeft, Trash2, Check, ChevronsUpDown, Info, ChevronLeft, ChevronRight, Eye, Pencil } from "lucide-react";
+import { Search, Plus, Edit, ArrowLeft, Trash2, Check, ChevronsUpDown, Info, ChevronLeft, ChevronRight, Eye, Pencil, Loader2 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { cn } from "@/lib/utils";
 import { TableActionButtons } from "@/components/shared/TableActionButtons";
-import { format } from "date-fns";
-import { 
-    getSalaryAssignments, 
-    setSalaryAssignments, 
-    upsertSalaryAssignment, 
+import { useCommonStore } from "@/store/commonStore";
+import { DatePicker } from "@/components/shared/DatePicker";
+import { format, parseISO, isValid as isValidDate } from "date-fns";
+import { commonApi, employeeSalaryApi, salaryStructureApi } from "@/lib/api";
+import { CURRENCY_SYMBOL } from "@/config/appConfig";
+import {
+    upsertSalaryAssignment,
     removeSalaryAssignment,
     type Assignment,
     type SalaryComponent,
     type SalaryRule,
     type ComputedRow,
     type CalcMode,
-    type Category,
-    type StructureMode
+    type Category
 } from "@/lib/salaryAssignmentSharedData";
 
-// --- Types ---
+import { useDebounce } from "@/hooks/useDebounce";
+import { useHasPermission } from "@/hooks/usePermissions";
+import Unauthorized from "../Unauthorized";
+
+// --- Types & Constants ---
 // Types are now imported from shared data store
 
 interface SalaryStructure {
@@ -91,100 +96,199 @@ interface Employee {
     joiningDate: string;
 }
 
-// --- Mock Data ---
+const normalizeText = (value?: string) => String(value || "").trim().toLowerCase();
 
-// ⚠️ SAFE GUARD: Added mock records to prevent runtime crashes
-// This ensures salary details page never crashes when empty
-// ============================================================================
-const mockEmployees: Employee[] = [
-    { id: "emp-001", code: "EMP001", name: "John Doe", department: "Engineering", designation: "Software Engineer", joiningDate: "2025-01-15" },
-    { id: "emp-002", code: "EMP002", name: "Sarah Johnson", department: "Finance", designation: "Manager", joiningDate: "2025-02-01" }
-];
-const mockDepartments = ["All Departments", "Engineering", "HR", "Finance"];
-const mockDesignations = ["Software Engineer", "Manager", "Team Lead", "HR Manager"];
-
-const mockComponents: { earnings: SalaryComponent[], deductions: SalaryComponent[] } = {
-    earnings: [
-        { code: "BASIC", name: "Basic Salary", category: "earning" },
-        { code: "HRA", name: "House Rent Allowance", category: "earning" }
-    ],
-    deductions: [
-        { code: "PF", name: "Provident Fund", category: "deduction" },
-        { code: "TAX", name: "Income Tax", category: "deduction" }
-    ]
+const roundToTwo = (num: number) => {
+    return Math.round((num + Number.EPSILON) * 100) / 100;
 };
 
-const mockStructures: SalaryStructure[] = [
-    {
-        id: "struct-exec",
-        name: "Executive Standard",
-        rules: [
-            { componentCode: "BASIC", name: "Basic Salary", category: "earning", calcMode: "PCT_CTC", value: 50, isBase: true },
-            { componentCode: "HRA", name: "House Rent Allowance", category: "earning", calcMode: "PCT_BASIC", value: 40, isBase: true },
-            { componentCode: "FIXED", name: "Special Allowance", category: "earning", calcMode: "REMAINING", value: 0, isBase: true }
-        ]
-    },
-    {
-        id: "struct-assoc",
-        name: "Associate Standard",
-        rules: [
-            { componentCode: "BASIC", name: "Basic Salary", category: "earning", calcMode: "PCT_CTC", value: 45, isBase: true },
-            { componentCode: "HRA", name: "House Rent Allowance", category: "earning", calcMode: "PCT_BASIC", value: 30, isBase: true },
-            { componentCode: "FIXED", name: "Special Allowance", category: "earning", calcMode: "REMAINING", value: 0, isBase: true }
-        ]
-    }
-];
-
-// Initial Assignments Data - Load from shared store
-const loadAssignmentsFromSharedStore = (): Assignment[] => {
-    const sharedAssignments = getSalaryAssignments();
-    return sharedAssignments.map((shared: Assignment) => ({
-        id: shared.id,
-        employeeId: shared.employeeId,
-        employeeName: shared.employeeName,
-        employeeCode: shared.employeeCode,
-        department: shared.department,
-        designation: shared.designation,
-        structureMode: shared.structureMode,
-        structureId: shared.structureId,
-        annualCTC: shared.annualCTC,
-        monthlyCTC: shared.monthlyCTC,
-        effectiveFrom: shared.effectiveFrom,
-        status: shared.status,
-        earnings: shared.earnings.map((e: ComputedRow) => ({
-            componentCode: e.componentCode,
-            name: e.name,
-            category: "earning" as Category,
-            calcMode: e.calcMode,
-            value: e.value,
-            isBase: e.isBase,
-            monthlyAmount: e.monthlyAmount,
-            annualAmount: e.annualAmount
-        })),
-        deductions: shared.deductions.map((d: ComputedRow) => ({
-            componentCode: d.componentCode,
-            name: d.name,
-            category: "deduction" as Category,
-            calcMode: d.calcMode,
-            value: d.value,
-            isBase: d.isBase,
-            monthlyAmount: d.monthlyAmount,
-            annualAmount: d.monthlyAmount * 12
-        }))
-    }));
+const mapNameToMode = (name?: string): CalcMode | null => {
+    const n = normalizeText(name);
+    if (!n) return null;
+    if (n.includes("ctc")) return "PCT_CTC";
+    if (n.includes("basic")) return "PCT_BASIC";
+    if (n.includes("remain")) return "REMAINING";
+    if (n.includes("fixed") || n.includes("flat")) return "FLAT";
+    return null;
 };
 
-const initialAssignments: Assignment[] = loadAssignmentsFromSharedStore();
+/** Salary structure / assignment APIs may use snake_case, camelCase, or PascalCase for the type label. */
+const getLineCalculationTypeLabel = (line: any): string | undefined => {
+    if (!line || typeof line !== "object") return undefined;
+    const v =
+        line.calculation_type ??
+        line.calculation_type_name ??
+        line.calculationType ??
+        line.CalculationType;
+    return typeof v === "string" && v.trim() ? v.trim() : undefined;
+};
+
+const isBasicComponent = (row: { name?: string; componentCode?: string }) => {
+    const n = normalizeText(row.name);
+    const c = normalizeText(row.componentCode);
+    return n.includes("basic") || c === "basic" || c === "basic_salary";
+};
+
+const isSpecialComponent = (row: { name?: string; componentCode?: string; calcMode?: string }, specialPoolId?: string) => {
+    const n = normalizeText(row.name);
+    const c = normalizeText(row.componentCode);
+    const isModeMatch = row.calcMode === "REMAINING";
+    const isIdMatch = specialPoolId && (c === specialPoolId || String(c) === String(specialPoolId));
+    return n.includes("special") || c.includes("special") || isModeMatch || isIdMatch;
+};
+
+/** Backend stores NULL for custom assignments; 0 or invalid ids are treated as custom in the UI. */
+const hasSalaryStructureId = (raw: unknown): boolean => {
+    if (raw === null || raw === undefined || raw === "") return false;
+    const n = Number(raw);
+    return Number.isFinite(n) && n > 0;
+};
+
+/** Custom assignment: explicit mode or no valid FK (covers new form default before a structure is picked). */
+const isCustomStructureAssignment = (
+    mode: Assignment["structureMode"] | undefined,
+    structureId: string | undefined
+): boolean => mode === "custom" || !hasSalaryStructureId(structureId);
+
+/** Custom structure starter: Special Allowance only — Basic is added via "+ Add Earning" like other components. */
+const getCustomStarterEarnings = (earningsPool: SalaryComponent[]): ComputedRow[] => {
+    const specialComponent = earningsPool.find((c) => normalizeText(c.name).includes("special"));
+    return [
+        {
+            componentCode: specialComponent?.code || "FIXED",
+            name: specialComponent?.name || "Special Allowance",
+            category: "earning",
+            calcMode: "REMAINING",
+            value: 0,
+            isBase: false,
+            monthlyAmount: 0,
+            annualAmount: 0,
+        },
+    ];
+};
+
+/** Hides native browser up/down spinners on number inputs (styling only). */
+const noNumberSpinnerClass =
+    "[appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none";
+
+/** Visible default border for salary amount fields (matches Annual CTC; avoids invisible `border-input` on white). */
+const salaryAmountInputBorderClass =
+    "border border-gray-300 bg-background shadow-sm focus-visible:border-gray-400";
+
+type SanitizedDecimalInput = { value: number; display: string };
+
+/** Stable display when not actively editing a draft (avoid 10.300000004 from floats). */
+const formatTwoDecimalForInput = (n: number): string => {
+    if (!Number.isFinite(n) || n === 0) return "";
+    return (Math.round(n * 100) / 100).toString();
+};
+
+/**
+ * % of CTC / % of Basic: digits + one `.`, up to 2 decimal places. Max 100.
+ * `display` keeps a trailing `.` while typing (e.g. "10.") so controlled inputs don't strip it.
+ */
+const sanitizePercentTwoDecimalsInput = (raw: string): SanitizedDecimalInput => {
+    const cleaned = raw.replace(/[^\d.]/g, "");
+    if (!cleaned) return { value: 0, display: "" };
+    const firstDot = cleaned.indexOf(".");
+    const intRaw = firstDot === -1 ? cleaned : cleaned.slice(0, firstDot);
+    const decRaw = firstDot === -1 ? "" : cleaned.slice(firstDot + 1).replace(/\./g, "");
+    const intPart = intRaw.replace(/\D/g, "").slice(0, 3);
+    const decPart = decRaw.replace(/\D/g, "").slice(0, 2);
+    const trailingDot = firstDot !== -1 && decPart.length === 0 && decRaw.length === 0;
+    const s = decPart.length > 0 ? `${intPart || "0"}.${decPart}` : intPart;
+    const n = parseFloat(s || "0");
+    const value = Number.isFinite(n) ? Math.min(100, Math.max(0, n)) : 0;
+    let display: string;
+    if (trailingDot) display = `${intPart || "0"}.`;
+    else if (decPart.length > 0) display = `${intPart || "0"}.${decPart}`;
+    else display = intPart;
+    return { value, display };
+};
+
+/** Max integer digits for fixed monthly amounts (earnings/deductions). */
+const MAX_FIXED_AMOUNT_INTEGER_DIGITS = 11;
+
+/**
+ * Fixed monthly amount: up to 11 integer digits + up to 2 decimal places.
+ * `display` preserves "10." while typing.
+ */
+const sanitizeFixedAmountTwoDecimalsInput = (raw: string): SanitizedDecimalInput => {
+    const cleaned = raw.replace(/[^\d.]/g, "");
+    if (!cleaned) return { value: 0, display: "" };
+    const firstDot = cleaned.indexOf(".");
+    const intRaw = firstDot === -1 ? cleaned : cleaned.slice(0, firstDot);
+    const decRaw = firstDot === -1 ? "" : cleaned.slice(firstDot + 1).replace(/\./g, "");
+    const intPart = intRaw.replace(/\D/g, "").slice(0, MAX_FIXED_AMOUNT_INTEGER_DIGITS);
+    const decPart = decRaw.replace(/\D/g, "").slice(0, 2);
+    const trailingDot = firstDot !== -1 && decPart.length === 0 && decRaw.length === 0;
+    const s = decPart.length > 0 ? `${intPart || "0"}.${decPart}` : intPart;
+    const n = parseFloat(s || "0");
+    const value = Number.isFinite(n) ? Math.max(0, n) : 0;
+    let display: string;
+    if (trailingDot) display = `${intPart || "0"}.`;
+    else if (decPart.length > 0) display = `${intPart || "0"}.${decPart}`;
+    else display = intPart;
+    return { value, display };
+};
+
+/** Annual CTC: whole amount only; max 11 integer digits. */
+const MAX_ANNUAL_CTC_DIGITS = 11;
+
+const sanitizeAnnualCtcInput = (raw: string): number => {
+    const intPart = raw.split(".")[0] ?? raw;
+    const digits = intPart.replace(/\D/g, "").slice(0, MAX_ANNUAL_CTC_DIGITS);
+    if (!digits) return 0;
+    const n = parseInt(digits, 10);
+    return Number.isFinite(n) ? n : 0;
+};
+
+/** Unique Command value when multiple options share the same display label. */
+const toCommandItemValue = (label: string, uniqueId: string | number) => `${label}|${uniqueId}`;
+
+const commandLabelFilter = (value: string, search: string) => {
+    const label = value.split("|")[0] ?? value;
+    return label.toLowerCase().includes(search.toLowerCase()) ? 1 : 0;
+};
 
 export default function AssignEmployeeSalary() {
+    const { isMenuVisible, canCreate, canEdit, canDelete } = useHasPermission();
+    const permissionModule = "HR_Setup:Assign Employee Salary";
+
+    if (!isMenuVisible(permissionModule)) {
+        return <Unauthorized />;
+    }
+
     // --- Main State ---
 
-    // Using initial mock data (no persistence)
-    const [availableStructures, setAvailableStructures] = useState<SalaryStructure[]>(mockStructures);
-    const [availableComponents, setAvailableComponents] = useState(mockComponents);
+    const [availableStructures, setAvailableStructures] = useState<SalaryStructure[]>([]);
+    const [availableComponents, setAvailableComponents] = useState<{ earnings: SalaryComponent[]; deductions: SalaryComponent[] }>({
+        earnings: [],
+        deductions: [],
+    });
 
     const [viewMode, setViewMode] = useState<"list" | "form">("list");
-    const [assignments, setAssignments] = useState<Assignment[]>(initialAssignments);
+    const [assignments, setAssignments] = useState<Assignment[]>([]);
+    const [employees, setEmployees] = useState<Employee[]>([]);
+    const [departments, setDepartments] = useState<{ id: number; name: string }[]>([]);
+    const [designations, setDesignations] = useState<{ id: number; name: string }[]>([]);
+    const [calculationTypes, setCalculationTypes] = useState<{ id: number; name: string }[]>([]);
+    const [assignedEmployeeIds, setAssignedEmployeeIds] = useState<Set<string>>(new Set());
+
+    // Store-based master data
+    const storeDepartments = useCommonStore((state) => state.departments);
+    const storeDesignations = useCommonStore((state) => state.designations);
+    const storeCalculationTypes = useCommonStore((state) => state.calculationTypes);
+    const isStoreLoaded = useCommonStore((state) => state.isLoaded);
+
+    // Sync store data to local state for initial lists
+    useEffect(() => {
+        if (isStoreLoaded) {
+            setDepartments(storeDepartments.map(d => ({ id: Number(d.id), name: String(d.name || d.department_name || "") })));
+            setDesignations(storeDesignations.map(d => ({ id: Number(d.id), name: String(d.name || "") })));
+            setCalculationTypes(storeCalculationTypes.map(c => ({ id: Number(c.id), name: String(c.name || "") })));
+        }
+    }, [isStoreLoaded, storeDepartments, storeDesignations, storeCalculationTypes]);
     const { toast } = useToast();
 
     // --- Routing Hooks ---
@@ -193,29 +297,122 @@ export default function AssignEmployeeSalary() {
     const [matchEdit, params] = useRoute("/hr-setup/assign-employee-salary/:id");
     const searchString = useSearch();
 
-    // Sync local state with shared store on mount and when view mode changes
-    useEffect(() => {
-        const sharedAssignments = getSalaryAssignments();
-        setAssignments(sharedAssignments);
-    }, [viewMode]);
+    const loadAssignments = async () => {
+        setIsListLoading(true);
+        try {
+            const response = await employeeSalaryApi.getList({
+                page: currentPage,
+                limit: itemsPerPage,
+                search: debouncedSearchTerm || undefined,
+            });
+            const records = response?.data?.records || [];
+            const mapped: Assignment[] = records.map((r: any) => {
+                const nameStr = String(r.salary_structure_name || "").trim();
+                const idOk = hasSalaryStructureId(r.salary_structure_id);
+                const isCustomName =
+                    !nameStr || /^custom(\s+structure)?$/i.test(nameStr) || nameStr.toLowerCase() === "custom";
+                /** Treat as template structure if we have a valid FK *or* a non-custom name from API (some responses omit/null the id). */
+                const useStructureRow = idOk || (!!nameStr && !isCustomName);
+                return {
+                    id: String(r.id),
+                    employeeId: String(r.employee_id),
+                    employeeName: String(r.employee_name || ""),
+                    employeeCode: String(r.employee_code || ""),
+                    department: String(r.department_name || ""),
+                    designation: String(r.designation_name || ""),
+                    structureMode: useStructureRow ? "structure" : "custom",
+                    structureId: idOk ? String(r.salary_structure_id) : undefined,
+                    structureName: useStructureRow
+                        ? nameStr || undefined
+                        : nameStr || "Custom Structure",
+                    annualCTC: Number(r.annual_ctc || 0),
+                    monthlyCTC: Math.round(Number(r.annual_ctc || 0) / 12),
+                    effectiveFrom: String(r.effective_from || ""),
+                    status: Number(r.status) === 1 ? "active" : "inactive",
+                    earnings: [],
+                    deductions: [],
+                };
+            });
+            setAssignments(mapped);
+            setTotalItems(response?.data?.pagination?.totalCount || mapped.length);
+            setServerTotalPages(response?.data?.pagination?.totalPages || Math.ceil((response?.data?.pagination?.totalCount || mapped.length) / itemsPerPage));
+        } catch (error: any) {
+            toast({ variant: "destructive", title: "Error", description: error.message || "Failed to load employee salaries" });
+        } finally {
+            setIsListLoading(false);
+        }
+    };
 
-    // Note: We do NOT sync local assignments back to shared store automatically
-    // The shared store is only updated via upsertSalaryAssignment() and removeSalaryAssignment()
-    // when explicitly saving or deleting assignments
+    const loadCommonDropdowns = async () => {
+        try {
+            /*
+            const [deptRes, desigRes, employeesRes, structuresRes, earningsRes, deductionsRes, calcTypesRes] = await Promise.all([
+                commonApi.getDepartments(),
+                commonApi.getDesignations(1),
+                commonApi.getEmployees(),
+                commonApi.getSalaryStructures(1),
+                commonApi.getEarningComponents({ status: 1 }),
+                commonApi.getDeductions(1),
+                commonApi.getCalculationTypes(1),
+            ]);
+            */
+            const [employeesRes, structuresRes, earningsRes, deductionsRes] = await Promise.all([
+                commonApi.getEmployeesWithoutSalary(),
+                commonApi.getSalaryStructures(1),
+                commonApi.getEarningComponents({ status: 1 }),
+                commonApi.getDeductions(1),
+            ]);
 
+            /*
+            setDepartments((deptRes?.data?.records || []).map((d: any) => ({ id: Number(d.id), name: String(d.name || d.department_name || "") })).filter((d: any) => d.id && d.name));
+            setDesignations((desigRes?.data?.records || []).map((d: any) => ({ id: Number(d.id), name: String(d.name || "") })).filter((d: any) => d.id && d.name));
+            */
+            setEmployees((employeesRes?.data?.records || []).map((e: any) => ({
+                id: String(e.id),
+                code: String(e.code || ""),
+                name: String(e.employee_name || ""),
+                department: String(e.department_name || ""),
+                designation: String(e.designation_name || ""),
+                joiningDate: "",
+            })));
+            setAvailableStructures((structuresRes?.data?.records || []).map((s: any) => ({
+                id: String(s.id),
+                name: String(s.name || ""),
+                rules: [],
+            })));
+            setAvailableComponents({
+                earnings: (earningsRes?.data?.records || []).map((c: any) => ({ code: String(c.id), name: String(c.name || ""), category: "earning" as Category })),
+                deductions: (deductionsRes?.data?.records || []).map((c: any) => ({ code: String(c.id), name: String(c.name || ""), category: "deduction" as Category })),
+            });
+            /*
+            setCalculationTypes((calcTypesRes?.data?.records || []).map((c: any) => ({ id: Number(c.id), name: String(c.name || "") })).filter((c: any) => d.id && d.name));
+            */
 
+            // Fetch a larger sample of assignments to track which employees are already assigned
+            const assignmentsRes = await employeeSalaryApi.getList({ limit: 1000 });
+            const assignedIds = new Set<string>((assignmentsRes?.data?.records || []).map((r: any) => String(r.employee_id)));
+            setAssignedEmployeeIds(assignedIds);
+        } catch (error: any) {
+            toast({ variant: "destructive", title: "Error", description: error.message || "Failed to load dropdowns" });
+        }
+    };
 
     // --- List View State ---
     const [searchTerm, setSearchTerm] = useState("");
+    const debouncedSearchTerm = useDebounce(searchTerm, 500);
     const [deptFilter, setDeptFilter] = useState("All Departments");
     const [currentPage, setCurrentPage] = useState(1);
     const [itemsPerPage, setItemsPerPage] = useState(10);
+    const [totalItems, setTotalItems] = useState(0);
+    const [serverTotalPages, setServerTotalPages] = useState(0);
 
     // --- Form View State ---
     const [formState, setFormState] = useState<Partial<Assignment>>({});
     const [isEditMode, setIsEditMode] = useState(false); // Are we editing an existing assignment?
     const [earningsRows, setEarningsRows] = useState<ComputedRow[]>([]);
     const [deductionsRows, setDeductionsRows] = useState<ComputedRow[]>([]);
+    /** Preserves partial typing (e.g. "10.") in controlled salary inputs until blur. */
+    const [salaryNumericDrafts, setSalaryNumericDrafts] = useState<Record<string, string>>({});
 
     // Dropdown States
     const [openEmpCombo, setOpenEmpCombo] = useState(false);
@@ -225,6 +422,49 @@ export default function AssignEmployeeSalary() {
     const [openAddEarning, setOpenAddEarning] = useState(false);
     const [openAddDeduction, setOpenAddDeduction] = useState(false);
     const [openDeleteDialog, setOpenDeleteDialog] = useState(false);
+
+    const [isSubmitting, setIsSubmitting] = useState(false);
+    const [isListLoading, setIsListLoading] = useState(false);
+    // Ref to track detailed fetch to avoid duplicate API calls
+    const lastFetchedIdRef = useRef<string | null>(null);
+
+    useEffect(() => {
+        setSalaryNumericDrafts({});
+    }, [viewMode, formState.id]);
+
+    useEffect(() => {
+        const loadFilteredEmployeesAndDesignations = async () => {
+            try {
+                const selectedDepartment = departments.find((d) => d.name === formState.department);
+                const selectedDesignation = designations.find((d) => d.name === formState.designation);
+
+                const [desigRes, employeeRes] = await Promise.all([
+                    commonApi.getDesignations(1, selectedDepartment?.id),
+                    commonApi.getEmployeesWithoutSalary({
+                        designation_id: selectedDesignation?.id,
+                        department_id: selectedDepartment?.id,
+                        search: searchTerm
+                    }),
+                ]);
+
+                setDesignations((desigRes?.data?.records || []).map((d: any) => ({ id: Number(d.id), name: String(d.name || "") })));
+                setEmployees((employeeRes?.data?.records || []).map((e: any) => ({
+                    id: String(e.id),
+                    code: String(e.code || ""),
+                    name: String(e.employee_name || ""),
+                    department: String(e.department_name || formState.department || ""),
+                    designation: String(e.designation_name || formState.designation || ""),
+                    joiningDate: "",
+                })));
+            } catch {
+                // Keep existing dropdown data if filter-specific call fails.
+            }
+        };
+
+        if (formState.department || formState.designation) {
+            void loadFilteredEmployeesAndDesignations();
+        }
+    }, [formState.department, formState.designation, departments]);
 
     // --- Sync Route to View State ---
     useEffect(() => {
@@ -239,7 +479,7 @@ export default function AssignEmployeeSalary() {
                 let prefillData = {};
 
                 if (prefillEmpId) {
-                    const emp = mockEmployees.find(e => e.id === prefillEmpId);
+                    const emp = employees.find(e => e.id === prefillEmpId);
                     if (emp) {
                         prefillData = {
                             employeeId: emp.id,
@@ -252,47 +492,87 @@ export default function AssignEmployeeSalary() {
                 }
 
                 setFormState({
-                    structureMode: "structure",
+                    structureMode: "custom",
                     status: "active",
                     effectiveFrom: format(new Date(), "yyyy-MM-dd"),
                     annualCTC: 0,
                     monthlyCTC: 0,
                     ...prefillData
                 });
-                setEarningsRows([]);
+                setEarningsRows(getCustomStarterEarnings(availableComponents.earnings));
                 setDeductionsRows([]);
                 setIsEditMode(false);
                 setViewMode("form");
             }
         } else if (matchEdit && routeId) {
-            // Edit Assignment Mode
+            // Edit Assignment Mode: Only initialize if not already for this ID
             if (viewMode !== "form" || formState.id !== routeId) {
                 const assignment = assignments.find(a => a.id === routeId);
                 if (assignment) {
-                    setFormState({ ...assignment });
-                    setEarningsRows([...assignment.earnings]);
-                    setDeductionsRows([...assignment.deductions]);
+                    const emp = employees.find(e => e.id === assignment.employeeId);
+                    setFormState(prev => ({
+                        ...prev,
+                        ...assignment,
+                        id: routeId,
+                        employeeId: assignment.employeeId,
+                        // Fallback to employee master data if list API didn't provide these
+                        department: assignment.department || emp?.department || "",
+                        designation: assignment.designation || emp?.designation || ""
+                    }));
+
+                    if (lastFetchedIdRef.current !== routeId && availableComponents.earnings.length > 0 && calculationTypes.length > 0) {
+                        void fetchAssignmentDetails(routeId, assignment.employeeName, assignment.employeeCode, assignment.department, assignment.designation);
+                    }
+
                     setIsEditMode(true);
                     setViewMode("form");
+                } else if (lastFetchedIdRef.current !== routeId && availableComponents.earnings.length > 0 && calculationTypes.length > 0) {
+                    // Deep-link case: set a loading state or just fetch
+                    void fetchAssignmentDetails(routeId);
                 }
             }
         } else {
+            // Reset fetch ref when leaving edit mode
+            lastFetchedIdRef.current = null;
             // List Mode
             if (viewMode !== "list") {
                 setViewMode("list");
             }
         }
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [matchNew, matchEdit, params?.id, assignments, viewMode, isEditMode, formState.id]);
+    }, [matchNew, matchEdit, params?.id, assignments, viewMode, isEditMode, formState.id, availableComponents.earnings.length, calculationTypes.length]);
 
-    // --- Sync Assignments from Shared Store ---
     useEffect(() => {
-        // Reload assignments from shared store when in list view
+        void loadCommonDropdowns();
+    }, []);
+
+    useEffect(() => {
         if (viewMode === "list") {
-            const syncedAssignments = loadAssignmentsFromSharedStore();
-            setAssignments(syncedAssignments);
+            void loadAssignments();
         }
-    }, [viewMode]); // Re-run when viewMode changes to "list"
+    }, [viewMode, currentPage, itemsPerPage, debouncedSearchTerm]);
+
+    // Reset pagination to first page when search or filters change
+    useEffect(() => {
+        setCurrentPage(1);
+    }, [debouncedSearchTerm, deptFilter]);
+
+    const salaryNumberInputsRootRef = useRef<HTMLDivElement>(null);
+
+    /** Block mouse wheel from stepping `<input type="number">` values (requires non-passive listener). */
+    useEffect(() => {
+        if (viewMode !== "form") return;
+        const root = salaryNumberInputsRootRef.current;
+        if (!root) return;
+        const onWheel = (e: WheelEvent) => {
+            const t = e.target;
+            if (t instanceof HTMLInputElement && t.type === "number") {
+                e.preventDefault();
+            }
+        };
+        root.addEventListener("wheel", onWheel, { passive: false, capture: true });
+        return () => root.removeEventListener("wheel", onWheel, { capture: true });
+    }, [viewMode]);
 
     // --- Actions: List View ---
 
@@ -320,10 +600,13 @@ export default function AssignEmployeeSalary() {
             return a.employeeName.localeCompare(b.employeeName);
         });
 
-    const paginatedAssignments = filteredAssignments.slice((currentPage - 1) * itemsPerPage, currentPage * itemsPerPage);
-    const totalPages = Math.ceil(filteredAssignments.length / itemsPerPage);
+    const paginatedAssignments = filteredAssignments;
+    const totalPages = serverTotalPages;
 
     const handleCreateNew = (employeeId?: string) => {
+        // Refresh employees list when opening the creation form
+        void loadCommonDropdowns();
+        
         if (employeeId) {
             setLocation(`/hr-setup/assign-employee-salary/new?empId=${employeeId}`);
         } else {
@@ -331,7 +614,178 @@ export default function AssignEmployeeSalary() {
         }
     };
 
+    /**
+     * Fetches the detailed components (earnings/deductions) for a specific assignment ID.
+     * Prevents duplicate calls via lastFetchedIdRef.
+     */
+    const fetchAssignmentDetails = async (id: string, name?: string, code?: string, dept?: string, desig?: string) => {
+        if (lastFetchedIdRef.current === id) return;
+
+        try {
+            // Clear existing state before fetching to prevent ghost data
+            setEarningsRows([]);
+            setDeductionsRows([]);
+
+            const response = await employeeSalaryApi.getById(Number(id));
+            const data = response?.data;
+            if (!data) {
+                toast({ variant: "destructive", title: "Error", description: "Salary assignment not found" });
+                return;
+            }
+
+            // Cross-reference with Salary Structure if present to recover component IDs/names
+            let structureLines: any[] = [];
+            if (hasSalaryStructureId(data.salary_structure_id)) {
+                try {
+                    const structureRes = await salaryStructureApi.getOne(Number(data.salary_structure_id));
+                    const lines = structureRes?.data?.lines;
+                    structureLines = Array.isArray(lines) && lines.length > 0 ? lines : [];
+                    if (structureLines.length === 0 && Array.isArray(structureRes?.data?.earnings)) {
+                        structureLines = structureRes.data.earnings;
+                    }
+                } catch {
+                    // Non-blocking: will fall back to basic ID/name mapping
+                }
+            }
+
+            lastFetchedIdRef.current = id;
+
+            const earningNameById = new Map(availableComponents.earnings.map((c) => [Number(c.code), c.name]));
+            const deductionNameById = new Map(availableComponents.deductions.map((c) => [Number(c.code), c.name]));
+            const calcModeById = new Map<number, CalcMode>();
+            for (const ct of calculationTypes) {
+                const mode = mapNameToMode(ct.name);
+                if (mode) calcModeById.set(ct.id, mode);
+            }
+
+            const specialComponent = availableComponents.earnings.find((c) => normalizeText(c.name).includes("special"));
+            const specialPoolId = specialComponent?.code;
+
+            const mappedEarnings: ComputedRow[] = (data.earnings || []).map((e: any, index: number) => {
+                // Resolution Strategy: 
+                // 1. Check for salary_component_id from API (best)
+                // 2. Try to match with structure rules (robust fallback for structure-based assignments)
+                // 3. Fall back to e.id and generic "Earning"
+
+                let salaryComponentId = Number(e.salary_component_id || 0);
+                let matchedByStructure = false;
+
+                // If ID is missing, try to find it in the structure rules by calculation id and value
+                if (structureLines.length > 0) {
+                    const matchedLine = structureLines.find(line =>
+                        (salaryComponentId > 0 && String(line.salary_component_id) === String(salaryComponentId)) ||
+                        (Number(line.calculation_type_id) === Number(e.calculation_type_id) &&
+                            Math.abs(Number(line.value_amount) - Number(e.value_amount)) < 1.0)
+                    );
+                    if (matchedLine) {
+                        salaryComponentId = Number(matchedLine.salary_component_id);
+                        matchedByStructure = true;
+                    } else if (structureLines[index] && !salaryComponentId) {
+                        // Position-based fallback if calculation/value match is ambiguous
+                        salaryComponentId = Number(structureLines[index].salary_component_id);
+                        matchedByStructure = true;
+                    }
+                }
+
+                const componentId = salaryComponentId || Number(e.id || 0);
+
+                // Prioritize calculation_type_id for mode resolution
+                const calcMode = calcModeById.get(Number(e.calculation_type_id)) || mapNameToMode(e.calculation_type) || "FLAT";
+
+                let compName = earningNameById.get(componentId) || e.component_name || "Earning";
+
+                // Final specialized check: if it acts like a special component, name it correctly
+                if (isSpecialComponent({ name: compName, componentCode: String(componentId), calcMode }, specialPoolId)) {
+                    compName = specialComponent?.name || "Special Allowance";
+                }
+
+                return {
+                    componentCode: String(componentId),
+                    name: compName,
+                    category: "earning",
+                    calcMode: isSpecialComponent({ name: compName, componentCode: String(componentId), calcMode }, specialPoolId) ? "REMAINING" : calcMode,
+                    value: Number(e.value_amount || 0),
+                    isBase: true,
+                    monthlyAmount: (calcMode === "FLAT") ? Number(e.value_amount || 0) : Number(e.monthly_amount || 0),
+                    annualAmount: (calcMode === "FLAT") ? Number(e.value_amount || 0) * 12 : Number(e.annual_amount || 0),
+                    // Hidden flag used for structural filtering
+                    isWhitelisted: !!(matchedByStructure || isSpecialComponent({ name: compName, componentCode: String(componentId), calcMode }, specialPoolId))
+                } as any; // Cast for custom prop
+            });
+
+            // Structural Filtering: 
+            // We now keep all records returned by the backend. 
+            // This ensures custom-added components remain visible.
+            const filteredEarnings = mappedEarnings;
+
+            // Ensure Exactly One Special Allowance (Remaining) exists and deduplicate
+            const firstSpecialIdx = filteredEarnings.findIndex(r => r.calcMode === 'REMAINING');
+            let finalEarnings = filteredEarnings;
+
+            if (firstSpecialIdx === -1) {
+                finalEarnings.push({
+                    componentCode: specialPoolId || "FIXED",
+                    name: specialComponent?.name || "Special Allowance",
+                    category: "earning",
+                    calcMode: "REMAINING",
+                    value: 0,
+                    isBase: false,
+                    monthlyAmount: 0,
+                    annualAmount: 0,
+                });
+            } else {
+                // Remove any duplicate Special/Remaining rows if they exist
+                finalEarnings = filteredEarnings.filter((r, idx) => r.calcMode !== 'REMAINING' || idx === firstSpecialIdx);
+            }
+
+            const mappedDeductions: ComputedRow[] = (data.deductions || []).map((d: any) => ({
+                componentCode: String(d.salary_component_id || d.id || ""),
+                name:
+                    deductionNameById.get(Number(d.salary_component_id || d.id)) ||
+                    d.component_name ||
+                    "Deduction",
+                category: "deduction",
+                calcMode:
+                    mapNameToMode(getLineCalculationTypeLabel(d)) ||
+                    calcModeById.get(Number(d.calculation_type_id)) ||
+                    "FLAT",
+                value: Number(d.value_amount || 0),
+                isBase: false,
+                monthlyAmount: Number(d.monthly_amount || (Number(d.annual_amount || 0) / 12)),
+                annualAmount: Number(d.annual_amount || 0),
+            }));
+
+            const emp = employees.find(e => e.id === String(data.employee_id));
+            const annualCTC = Number(data.annual_ctc || 0);
+            const calculatedEarnings = calculateSalary(annualCTC, mappedEarnings);
+
+            setFormState({
+                id: String(data.id),
+                employeeId: String(data.employee_id),
+                employeeName: name || data.employee_name || "",
+                employeeCode: code || data.employee_code || "",
+                department: data.department_name || dept || emp?.department || "",
+                designation: data.designation_name || desig || emp?.designation || "",
+                structureMode: hasSalaryStructureId(data.salary_structure_id) ? "structure" : "custom",
+                structureId: hasSalaryStructureId(data.salary_structure_id) ? String(data.salary_structure_id) : undefined,
+                annualCTC: annualCTC,
+                monthlyCTC: annualCTC / 12,
+                effectiveFrom: String(data.effective_from || ""),
+                status: Number(data.status) === 0 ? "inactive" : "active",
+            });
+
+            // Set state fresh, no appending
+            setEarningsRows(calculateSalary(annualCTC, finalEarnings));
+            setDeductionsRows(mappedDeductions);
+            setIsEditMode(true);
+            setViewMode("form");
+        } catch (error: any) {
+            toast({ variant: "destructive", title: "Error", description: error.message || "Failed to load assignment details" });
+        }
+    };
+
     const handleEdit = (assignment: Assignment) => {
+        // Only navigate; URL change kicks off data fetching via useEffect
         setLocation(`/hr-setup/assign-employee-salary/${assignment.id}`);
     };
 
@@ -341,147 +795,311 @@ export default function AssignEmployeeSalary() {
 
     // --- Derived State & Logic ---
 
-    // Filter employees based on selections
-    const filteredEmployees = useMemo(() => {
-        return mockEmployees.filter(emp => {
-            const matchDept = deptFilter === "All Departments" || emp.department === deptFilter; // For list view filter
-            return matchDept;
-        });
-    }, [deptFilter]);
-
     // Filter employees for the FORM dropdown based on selected Dept/Designation in the form
     const formFilteredEmployees = useMemo(() => {
-        return mockEmployees.filter(emp => {
+        return employees.map(emp => {
             const matchDept = !formState.department || emp.department === formState.department;
             const matchDesig = !formState.designation || emp.designation === formState.designation;
 
-            // Filter out employees who already have an active assignment (unless we are editing that specific assignment)
-            const isAlreadyAssigned = assignments.some(a => a.employeeId === emp.id && a.id !== formState.id);
+            // Mark employees who already have an assignment
+            // In Edit Mode, we ignore the current employee being edited
+            const isAlreadyAssigned = assignedEmployeeIds.has(emp.id) && emp.id !== formState.employeeId;
 
-            return matchDept && matchDesig && !isAlreadyAssigned;
+            return {
+                ...emp,
+                matchFilter: matchDept && matchDesig,
+                isAssigned: isAlreadyAssigned
+            };
         });
-    }, [formState.department, formState.designation, assignments, formState.id]);
+    }, [formState.department, formState.designation, assignedEmployeeIds, formState.employeeId, employees]);
 
 
     // Validation for Dates
     const isEffectiveDateValid = useMemo(() => {
         if (!formState.effectiveFrom || !formState.employeeId) return true; // Can't validate yet
 
-        const emp = mockEmployees.find(e => e.id === formState.employeeId);
+        const emp = employees.find(e => e.id === formState.employeeId);
         if (!emp || !emp.joiningDate) return true; // Should have joining date
 
         return new Date(formState.effectiveFrom) >= new Date(emp.joiningDate);
     }, [formState.effectiveFrom, formState.employeeId]);
 
+    const effectiveFromParsed = useMemo(() => {
+        if (!formState.effectiveFrom) return undefined;
+        const d = parseISO(formState.effectiveFrom);
+        return isValidDate(d) ? d : undefined;
+    }, [formState.effectiveFrom]);
+
+    /** Aligns with HR Attendance date picker: optional min date from employee joining date. */
+    const effectiveDateMinDate = useMemo(() => {
+        const emp = employees.find((e) => e.id === formState.employeeId);
+        if (!emp?.joiningDate) return undefined;
+        const d = parseISO(emp.joiningDate);
+        return isValidDate(d) ? d : undefined;
+    }, [formState.employeeId, employees]);
 
     // --- Calculation Engine ---
 
-    const calculateSalary = (ctc: number, currentEarnings: ComputedRow[]) => {
-        const monthlyCTC = Math.round(ctc / 12);
+    const calculateSalary = (ctc: number, currentEarnings: ComputedRow[]): ComputedRow[] => {
+        let calculated = [...currentEarnings];
+
+        // If CTC is cleared, everything should be 0
+        if (ctc <= 0) {
+            return calculated.map(row => ({
+                ...row,
+                monthlyAmount: 0,
+                annualAmount: 0
+                // We keep 'value' so it reappears if they type CTC back, 
+                // but the calculated amounts are 0.
+            }));
+        }
+
+        const hasBasicEarning = calculated.some((r: any) => isBasicComponent(r));
+        if (!hasBasicEarning) {
+            calculated = calculated.map((row) => {
+                if (!isBasicComponent(row) && row.calcMode === "PCT_BASIC") {
+                    return { ...row, calcMode: "PCT_CTC" };
+                }
+                return row;
+            });
+        }
 
         // 1. Calculate Basis (Basic) first as others depend on it
-        let calculated = currentEarnings.map(row => ({ ...row }));
-
-        // Find Basic
-        const basicRow = calculated.find(r => r.componentCode === "BASIC");
-        let basicAmount = 0;
+        const basicRow = calculated.find((r: any) => isBasicComponent(r));
+        let basicAnnual = 0;
 
         if (basicRow) {
+            let rawAnnual = 0;
             if (basicRow.calcMode === "PCT_CTC") {
-                basicAmount = (ctc * basicRow.value) / 100 / 12;
+                rawAnnual = (ctc * basicRow.value) / 100;
             } else if (basicRow.calcMode === "FLAT") {
-                basicAmount = basicRow.monthlyAmount; // User entered or flat value
+                rawAnnual = basicRow.value * 12;
             }
-            // Update Basic Row
-            if (basicRow.calcMode !== "FLAT") {
-                basicRow.monthlyAmount = basicAmount;
-            } else {
-                basicAmount = basicRow.monthlyAmount;
-            }
+            
+            const monthly = roundToTwo(rawAnnual / 12);
+            basicRow.monthlyAmount = monthly;
+            basicRow.annualAmount = monthly * 12;
+            basicAnnual = basicRow.annualAmount;
         }
 
-        // 2. Calculate others
+        // 2. Calculate others based on Annual CTC or Basic Annual
         calculated = calculated.map(row => {
-            if (row.componentCode === "BASIC") return row; // Alrady handled
+            if (isBasicComponent(row)) return row; // Already handled
             if (row.calcMode === "REMAINING") return row; // Handle last
 
-            let amount = 0;
+            let rawAnnual = 0;
             if (row.calcMode === "FLAT") {
-                amount = row.monthlyAmount; // Keep manual input
+                rawAnnual = row.value * 12;
             } else if (row.calcMode === "PCT_CTC") {
-                amount = (ctc * row.value) / 100 / 12;
+                rawAnnual = (ctc * row.value) / 100;
             } else if (row.calcMode === "PCT_BASIC") {
-                amount = (basicAmount * row.value) / 100;
+                rawAnnual = (basicAnnual * row.value) / 100;
             }
 
-            return { ...row, monthlyAmount: amount };
+            const monthly = roundToTwo(rawAnnual / 12);
+            return { 
+                ...row, 
+                monthlyAmount: monthly,
+                annualAmount: monthly * 12
+            };
         });
 
-        // 3. Resolve REMAINING (Special Allowance)
+        // 3. Resolve REMAINING (Special Allowance) at Annual level
         const remainingRowIndex = calculated.findIndex(r => r.calcMode === "REMAINING");
         if (remainingRowIndex !== -1) {
-            const sumOthers = calculated.reduce((sum, r, idx) => {
-                return idx === remainingRowIndex ? sum : sum + r.monthlyAmount;
+            const sumOthersAnnual = calculated.reduce((sum, r, idx) => {
+                return idx === remainingRowIndex ? sum : sum + r.annualAmount;
             }, 0);
 
-            // Allow negative for validation display, ensure it's calculated
-            const remaining = monthlyCTC - sumOthers;
-            calculated[remainingRowIndex].monthlyAmount = remaining;
+            const remainingAnnual = ctc - sumOthersAnnual;
+            let remainingMonthly = roundToTwo(remainingAnnual / 12);
+            
+            // "By default save 0.00 as previous was": 
+            // If the remainder is tiny (less than 1 unit annual difference), suppress it to zero.
+            if (Math.abs(remainingAnnual) < 1.0) {
+                remainingMonthly = 0;
+            }
+
+            calculated[remainingRowIndex].monthlyAmount = remainingMonthly;
+            calculated[remainingRowIndex].annualAmount = remainingMonthly * 12;
         }
 
-        // 4. Update Annual Amounts for all
-        return calculated.map(row => ({
-            ...row,
-            annualAmount: row.monthlyAmount * 12
-        }));
+        return calculated;
     };
+
 
     // Recalculate when CTC changes
     useEffect(() => {
-        if (formState.annualCTC) {
-            const monthly = Math.round(formState.annualCTC / 12);
-            setFormState(prev => ({ ...prev, monthlyCTC: monthly }));
+        const ctc = formState.annualCTC || 0;
+        const monthly = ctc / 12;
+        setFormState(prev => prev.monthlyCTC === monthly ? prev : ({ ...prev, monthlyCTC: monthly }));
 
-            const updated = calculateSalary(formState.annualCTC, earningsRows);
-            // Only update if numbers changed to avoid loops (deep compare simplified)
-            if (JSON.stringify(updated) !== JSON.stringify(earningsRows)) {
-                setEarningsRows(updated);
-            }
+        const updated = calculateSalary(ctc, earningsRows);
+        // Only update if numbers changed (deeper precision check)
+        const hasChanged = updated.some((row, idx) => {
+            const prev = earningsRows[idx];
+            return !prev ||
+                Math.abs(row.monthlyAmount - prev.monthlyAmount) > 0.001 ||
+                Math.abs(row.annualAmount - prev.annualAmount) > 0.001;
+        });
+
+        if (hasChanged && formState.structureMode !== undefined) {
+            setEarningsRows(updated);
         }
-    }, [formState.annualCTC, formState.structureMode]); // Dependency on structureMode to trigger initial calc if needed
+    }, [formState.annualCTC]); // Only depend on CTC to avoid structural switch loops
+
+    /** %-based deduction rows follow CTC and computed Basic (earnings). */
+    useEffect(() => {
+        const ctc = formState.annualCTC || 0;
+        const earningsResolved = calculateSalary(ctc, earningsRows);
+        const basicAnnual = earningsResolved.find((r: any) => isBasicComponent(r))?.annualAmount ?? 0;
+
+        setDeductionsRows((prev: ComputedRow[]) => {
+            if (!prev.some((d) => d.calcMode === "PCT_CTC" || d.calcMode === "PCT_BASIC")) return prev;
+            return prev.map((row) => {
+                if (row.calcMode === "PCT_CTC") {
+                    const rawAnnual = (ctc * row.value) / 100;
+                    const monthly = roundToTwo(rawAnnual / 12);
+                    return { ...row, monthlyAmount: monthly, annualAmount: monthly * 12 };
+                }
+                if (row.calcMode === "PCT_BASIC") {
+                    const rawAnnual = (basicAnnual * row.value) / 100;
+                    const monthly = roundToTwo(rawAnnual / 12);
+                    return { ...row, monthlyAmount: monthly, annualAmount: monthly * 12 };
+                }
+                return row;
+            });
+        });
+    }, [formState.annualCTC, earningsRows]);
 
 
     /**
      * Handles switching Structure selection.
      * Loads structure rules into earnings rows.
      */
-    const handleStructureChange = (structureId: string) => {
+    const handleStructureChange = async (structureId: string) => {
         if (structureId === "custom") {
             setFormState(prev => ({ ...prev, structureMode: "custom", structureId: undefined }));
-            // Custom mode starts with Basic and Special Allowance (Remaining)
-            setEarningsRows([
-                { componentCode: "BASIC", name: "Basic", category: "earning", calcMode: "FLAT", value: 0, isBase: false, monthlyAmount: 0, annualAmount: 0 },
-                { componentCode: "FIXED", name: "Special Allowance", category: "earning", calcMode: "REMAINING", value: 0, isBase: false, monthlyAmount: 0, annualAmount: 0 }
-            ]);
+            setEarningsRows(getCustomStarterEarnings(availableComponents.earnings));
+            setDeductionsRows([]);
             return;
         }
 
         const structure = availableStructures.find(s => s.id === structureId);
         if (structure) {
+            // Reset state first to prevent structural mixing
+            setEarningsRows([]);
+            setDeductionsRows([]);
             setFormState(prev => ({ ...prev, structureMode: "structure", structureId: structure.id }));
 
-            // Map structure rules to computed rows
-            const newRows: ComputedRow[] = structure.rules.map(rule => ({
-                ...rule,
-                monthlyAmount: 0,
-                annualAmount: 0
-            }));
+            try {
+                const response = await salaryStructureApi.getOne(Number(structureId));
+                const data = response?.data;
+                const rawLines = Array.isArray(data?.lines) ? data.lines : [];
+                const rawEarnings = Array.isArray(data?.earnings) ? data.earnings : [];
+                const earningLines = rawLines.length > 0 ? rawLines : rawEarnings;
 
-            // Recalculate immediately if we have CTC
-            if (formState.annualCTC) {
-                setEarningsRows(calculateSalary(formState.annualCTC, newRows));
-            } else {
-                setEarningsRows(newRows);
+                const calcModeById = new Map<number, CalcMode>();
+                for (const ct of calculationTypes) {
+                    const mode = mapNameToMode(ct.name);
+                    if (mode) calcModeById.set(ct.id, mode);
+                }
+
+                const specialComponent = availableComponents.earnings.find((c) => normalizeText(c.name).includes("special"));
+                const specialPoolId = specialComponent?.code;
+
+                // Map structure rules (unified lines or split earnings[]) to computed rows
+                const newRows: ComputedRow[] = earningLines.map((line: any) => {
+                    const poolComponent = availableComponents.earnings.find(c => String(c.code) === String(line.salary_component_id));
+                    const name = line.component_name || poolComponent?.name || "Earning";
+                    // Prefer the line's calculation_type label from the structure API — it matches what was saved on the structure.
+                    const modeFromLabel = mapNameToMode(getLineCalculationTypeLabel(line));
+                    const mode =
+                        modeFromLabel ||
+                        calcModeById.get(Number(line.calculation_type_id)) ||
+                        "FLAT";
+                    const isSpecial = isSpecialComponent({ name, componentCode: String(line.salary_component_id), calcMode: mode }, specialPoolId);
+                    const finalName = isSpecial ? (specialComponent?.name || "Special Allowance") : name;
+
+                    return {
+                        componentCode: String(line.salary_component_id),
+                        name: finalName,
+                        category: "earning" as const,
+                        calcMode: isSpecial ? "REMAINING" : mode,
+                        value: Number(line.value_amount || 0),
+                        isBase: true,
+                        monthlyAmount: (isSpecial || mode !== "FLAT") ? 0 : Number(line.value_amount || 0),
+                        annualAmount: (isSpecial || mode !== "FLAT") ? 0 : Number(line.value_amount || 0) * 12,
+                    };
+                });
+
+                // Add special allowance if not defined in structure
+                const firstSpecialIdx = newRows.findIndex(r => r.calcMode === "REMAINING");
+                let finalEarningRows = newRows;
+
+                if (firstSpecialIdx === -1) {
+                    finalEarningRows.push({
+                        componentCode: specialPoolId || "FIXED",
+                        name: specialComponent?.name || "Special Allowance",
+                        category: "earning",
+                        calcMode: "REMAINING",
+                        value: 0,
+                        isBase: false,
+                        monthlyAmount: 0,
+                        annualAmount: 0,
+                    });
+                } else {
+                    finalEarningRows = newRows.filter((r, idx) => r.calcMode !== "REMAINING" || idx === firstSpecialIdx);
+                }
+
+                const annualCTC = formState.annualCTC || 0;
+                const earningsResolved = annualCTC ? calculateSalary(annualCTC, finalEarningRows) : finalEarningRows;
+                const basicAnnual = earningsResolved.find((r) => isBasicComponent(r))?.annualAmount ?? 0;
+
+                const rawDeductions = Array.isArray(data?.deductions) ? data.deductions : [];
+                const deductionNameById = new Map(availableComponents.deductions.map((c) => [Number(c.code), c.name]));
+                const mappedDeductions: ComputedRow[] = rawDeductions.map((d: any) => {
+                    const sid = Number(d.salary_component_id || d.id || 0);
+                    const poolComponent = availableComponents.deductions.find((c) => String(c.code) === String(sid));
+                    const name =
+                        d.component_name ||
+                        poolComponent?.name ||
+                        deductionNameById.get(sid) ||
+                        "Deduction";
+                    const calcModeFromLabel = mapNameToMode(getLineCalculationTypeLabel(d));
+                    const calcMode =
+                        calcModeFromLabel ||
+                        calcModeById.get(Number(d.calculation_type_id)) ||
+                        "FLAT";
+                    const val = Number(d.value_amount || 0);
+                    let annual = 0;
+                    let monthly = 0;
+                    if (calcMode === "FLAT") {
+                        monthly = val;
+                        annual = val * 12;
+                    } else if (calcMode === "PCT_CTC") {
+                        annual = (annualCTC * val) / 100;
+                        monthly = annual / 12;
+                    } else if (calcMode === "PCT_BASIC") {
+                        annual = (basicAnnual * val) / 100;
+                        monthly = annual / 12;
+                    }
+                    return {
+                        componentCode: String(sid || d.id || ""),
+                        name,
+                        category: "deduction" as const,
+                        calcMode,
+                        value: val,
+                        isBase: true,
+                        monthlyAmount: monthly,
+                        annualAmount: annual,
+                    };
+                });
+
+                setEarningsRows(earningsResolved);
+                setDeductionsRows(mappedDeductions);
+            } catch (error: any) {
+                toast({ variant: "destructive", title: "Error", description: error.message || "Failed to load salary structure rules" });
             }
         }
     };
@@ -490,8 +1108,45 @@ export default function AssignEmployeeSalary() {
      * Handle Manual Row Edits (Custom Mode or Extra Rows)
      */
     const updateEarningRow = (index: number, field: keyof ComputedRow, val: any) => {
+        if (field === "calcMode") {
+            setSalaryNumericDrafts((prev) => {
+                const next = { ...prev };
+                delete next[`pct-${index}`];
+                delete next[`earn-${index}`];
+                return next;
+            });
+        }
         const newRows = [...earningsRows];
-        const row = { ...newRows[index], [field]: val };
+        const prevMode = earningsRows[index]?.calcMode;
+        let nextFieldVal = val;
+        if (field === "calcMode" && val === "PCT_BASIC") {
+            const cur = earningsRows[index];
+            if (
+                isBasicComponent(cur) ||
+                !earningsRows.some((r) => isBasicComponent(r))
+            ) {
+                nextFieldVal = "PCT_CTC";
+            }
+        }
+        let row: ComputedRow = { ...newRows[index], [field]: nextFieldVal };
+        // Fixed amount uses `value` as monthly; % modes use `value` as percent — clear amounts when switching so fixed figures don't carry into the % box or monthly column.
+        if (field === "calcMode") {
+            const newMode = nextFieldVal as CalcMode;
+            const wasFlat = prevMode === "FLAT";
+            const nowPct = newMode === "PCT_CTC" || newMode === "PCT_BASIC";
+            const wasPct = prevMode === "PCT_CTC" || prevMode === "PCT_BASIC";
+            const nowFlat = newMode === "FLAT";
+            if (wasFlat && nowPct) {
+                row = { ...row, value: 0, monthlyAmount: 0, annualAmount: 0 };
+            } else if (wasPct && nowFlat) {
+                row = { ...row, value: 0, monthlyAmount: 0, annualAmount: 0 };
+            }
+        }
+        // `calculateSalary` derives FLAT rows from `value` (monthly); keep in sync when editing monthly amount.
+        if (field === "monthlyAmount" && row.calcMode === "FLAT") {
+            const m = roundToTwo(Number(val) || 0);
+            row = { ...row, monthlyAmount: m, value: m };
+        }
         newRows[index] = row;
 
         // Trigger recalc cycle
@@ -501,6 +1156,63 @@ export default function AssignEmployeeSalary() {
         } else {
             setEarningsRows(newRows);
         }
+    };
+
+    const recalcDeductionRow = (row: ComputedRow, ctc: number, basicAnnual: number): ComputedRow => {
+        let rawAnnual = 0;
+        if (row.calcMode === "FLAT") {
+            rawAnnual = row.value * 12;
+        } else if (row.calcMode === "PCT_CTC") {
+            rawAnnual = (ctc * row.value) / 100;
+        } else if (row.calcMode === "PCT_BASIC") {
+            rawAnnual = (basicAnnual * row.value) / 100;
+        }
+        const monthly = roundToTwo(rawAnnual / 12);
+        return { ...row, monthlyAmount: monthly, annualAmount: monthly * 12 };
+    };
+
+    const updateDeductionRow = (index: number, field: keyof ComputedRow, val: any) => {
+        if (field === "calcMode") {
+            setSalaryNumericDrafts((prev) => {
+                const next = { ...prev };
+                delete next[`ded-pct-${index}`];
+                delete next[`ded-${index}`];
+                return next;
+            });
+        }
+        const newRows = [...deductionsRows];
+        const prevMode = deductionsRows[index]?.calcMode;
+        let nextVal = val;
+        if (field === "calcMode" && val === "PCT_BASIC" && !earningsRows.some((r) => isBasicComponent(r))) {
+            nextVal = "PCT_CTC";
+        }
+        let row: ComputedRow = { ...newRows[index], [field]: nextVal };
+
+        if (field === "calcMode") {
+            const newMode = nextVal as CalcMode;
+            const wasFlat = prevMode === "FLAT";
+            const nowPct = newMode === "PCT_CTC" || newMode === "PCT_BASIC";
+            const wasPct = prevMode === "PCT_CTC" || prevMode === "PCT_BASIC";
+            const nowFlat = newMode === "FLAT";
+            if (wasFlat && nowPct) {
+                row = { ...row, value: 0, monthlyAmount: 0, annualAmount: 0 };
+            } else if (wasPct && nowFlat) {
+                row = { ...row, value: 0, monthlyAmount: 0, annualAmount: 0 };
+            }
+        }
+        if (field === "monthlyAmount" && row.calcMode === "FLAT") {
+            const m = roundToTwo(Number(val) || 0);
+            row = { ...row, monthlyAmount: m, value: m };
+        }
+        if (field === "value" && (row.calcMode === "PCT_CTC" || row.calcMode === "PCT_BASIC")) {
+            row = { ...row, value: Number(val) || 0 };
+        }
+        const ctc = formState.annualCTC || 0;
+        const basicAnnual = ctc
+            ? calculateSalary(ctc, earningsRows).find((r) => isBasicComponent(r))?.annualAmount ?? 0
+            : 0;
+        newRows[index] = recalcDeductionRow(row, ctc, basicAnnual);
+        setDeductionsRows(newRows);
     };
 
     const addEarning = (component: SalaryComponent) => {
@@ -519,6 +1231,7 @@ export default function AssignEmployeeSalary() {
         };
 
         const updated = [...earningsRows, newRow];
+        setSalaryNumericDrafts({});
         if (formState.annualCTC) {
             setEarningsRows(calculateSalary(formState.annualCTC, updated));
         } else {
@@ -540,11 +1253,13 @@ export default function AssignEmployeeSalary() {
             monthlyAmount: 0,
             annualAmount: 0
         };
+        setSalaryNumericDrafts({});
         setDeductionsRows([...deductionsRows, newRow]);
         setOpenAddDeduction(false);
     };
 
     const removeRow = (index: number, type: 'earning' | 'deduction') => {
+        setSalaryNumericDrafts({});
         if (type === 'earning') {
             const updated = earningsRows.filter((_, i) => i !== index);
             if (formState.annualCTC) {
@@ -557,8 +1272,24 @@ export default function AssignEmployeeSalary() {
         }
     };
 
+    /** "% of Basic" is only valid if a Basic earning row exists (same list user adds/removes via + Add Earning). */
+    const hasBasicEarningInList = useMemo(
+        () => earningsRows.some((r) => isBasicComponent(r)),
+        [earningsRows]
+    );
 
-
+    useEffect(() => {
+        if (hasBasicEarningInList) return;
+        setDeductionsRows((prev) => {
+            if (!prev.some((d) => d.calcMode === "PCT_BASIC")) return prev;
+            const ctc = formState.annualCTC || 0;
+            return prev.map((row) => {
+                if (row.calcMode !== "PCT_BASIC") return row;
+                const coerced: ComputedRow = { ...row, calcMode: "PCT_CTC" };
+                return recalcDeductionRow(coerced, ctc, 0);
+            });
+        });
+    }, [hasBasicEarningInList, formState.annualCTC]);
 
     // --- Validation & Save ---
 
@@ -579,14 +1310,13 @@ export default function AssignEmployeeSalary() {
 
     const monthlyCTC = formState.monthlyCTC || 0;
 
-    // Mismatch check (tolerance of 5 rupees due to rounding)
+    // Mismatch check (very small tolerance for floating point math)
     // If no remaining row, check total earnings vs CTC.
     const totalEarnings = earningsRows.reduce((sum, r) => sum + r.monthlyAmount, 0);
-    const ctcMismatch = !remainingRow && Math.abs(totalEarnings - monthlyCTC) > 5;
+    const ctcMismatch = !remainingRow && Math.abs(totalEarnings - monthlyCTC) > 0.01;
 
     const isValid = useMemo(() => {
         if (!formState.employeeId || !formState.annualCTC || !formState.effectiveFrom) return false;
-        if (formState.structureMode === 'structure' && !formState.structureId) return false;
 
         if (hasNegativeRemaining) return false;
         if (ctcMismatch) return false;
@@ -596,17 +1326,18 @@ export default function AssignEmployeeSalary() {
         return true;
     }, [formState, ctcMismatch, hasNegativeRemaining, isEffectiveDateValid, netPayMonthly]);
 
-    const handleSave = () => {
+    const handleSave = async () => {
         if (!isValid) return;
         // Check for remaining calculation before save to ensure it's correct format
 
-        // Get structure name if using a predefined structure
+        const useCustom = isCustomStructureAssignment(formState.structureMode, formState.structureId);
+
         let structureName: string | undefined;
-        if (formState.structureMode === "structure" && formState.structureId) {
+        if (useCustom) {
+            structureName = "Custom Structure";
+        } else {
             const structure = availableStructures.find(s => s.id === formState.structureId);
             structureName = structure?.name;
-        } else if (formState.structureMode === "custom") {
-            structureName = "Custom Structure";
         }
 
         const assignment: Assignment = {
@@ -616,8 +1347,8 @@ export default function AssignEmployeeSalary() {
             employeeCode: formState.employeeCode!,
             department: formState.department!,
             designation: formState.designation!,
-            structureMode: formState.structureMode || "structure",
-            structureId: formState.structureId,
+            structureMode: useCustom ? "custom" : "structure",
+            structureId: useCustom ? undefined : formState.structureId,
             structureName: structureName,
             annualCTC: formState.annualCTC!,
             monthlyCTC: monthlyCTC,
@@ -627,29 +1358,149 @@ export default function AssignEmployeeSalary() {
             deductions: deductionsRows
         };
 
-        // Save to shared data store
-        upsertSalaryAssignment(assignment);
-
-        if (isEditMode) {
-            setAssignments(prev => prev.map(a => a.id === assignment.id ? assignment : a));
-            toast({ title: "Success", description: "Assignment updated successfully" });
-        } else {
-            setAssignments(prev => [...prev, assignment]);
-            toast({ title: "Success", description: "Assignment created successfully" });
+        const calcTypeIdByMode = new Map<CalcMode, number>();
+        for (const ct of calculationTypes) {
+            const mode = mapNameToMode(ct.name);
+            if (mode && !calcTypeIdByMode.has(mode)) calcTypeIdByMode.set(mode, ct.id);
         }
-        setLocation("/hr-setup/assign-employee-salary");
+        const fixedCalcTypeId = calcTypeIdByMode.get("FLAT");
+
+        const resolveComponentId = (row: ComputedRow, category: "earning" | "deduction") => {
+            const direct = Number(row.componentCode);
+            if (Number.isFinite(direct) && direct > 0) return direct;
+            const pool = category === "earning" ? availableComponents.earnings : availableComponents.deductions;
+
+            // 1. Precise Match (Name or Code)
+            const byName = pool.find((c) => normalizeText(c.name) === normalizeText(row.name));
+            const byCode = pool.find((c) => normalizeText(c.code) === normalizeText(row.componentCode));
+
+            // 2. Semantic Match for 'Basic' (Robust fallback for "BASIC" strings)
+            const byBasic = category === "earning" && isBasicComponent(row)
+                ? pool.find((c) => isBasicComponent(c))
+                : undefined;
+
+            // 3. Specialized Match for 'Special Allowance'
+            const bySpecial = normalizeText(row.name).includes("special")
+                ? pool.find((c) => normalizeText(c.name).includes("special"))
+                : undefined;
+
+            const fallbackForRemaining = category === "earning" && row.calcMode === "REMAINING"
+                ? pool[0]
+                : undefined;
+
+            const resolved = Number((byName || byCode || byBasic || bySpecial || fallbackForRemaining)?.code || 0);
+            return Number.isFinite(resolved) && resolved > 0 ? resolved : undefined;
+        };
+
+        const invalidFields: string[] = [];
+        // Resolve the Basic component ID once for base_component_id mapping
+        const basicRow = assignment.earnings.find(r => isBasicComponent(r));
+        const basicComponentId = basicRow ? resolveComponentId(basicRow, "earning") : null;
+
+        const earningsPayload = assignment.earnings.map((row) => {
+            const salary_component_id = resolveComponentId(row, "earning");
+            const calculation_type_id = row.calcMode === "REMAINING"
+                ? (calcTypeIdByMode.get("REMAINING") || fixedCalcTypeId)
+                : calcTypeIdByMode.get(row.calcMode);
+
+            if (!salary_component_id && row.calcMode !== "REMAINING") invalidFields.push(`earning component "${row.name}"`);
+            if (!calculation_type_id) invalidFields.push(`calculation type "${row.calcMode}"`);
+
+            return {
+                salary_component_id,
+                calculation_type_id,
+                value_amount: Number(row.value || 0),
+                base_component_id: row.calcMode === "PCT_BASIC" ? basicComponentId : null,
+                annual_amount: Number(row.annualAmount || 0),
+            };
+        });
+        const deductionsPayload = assignment.deductions.map((row) => {
+            const salary_component_id = resolveComponentId(row, "deduction");
+            const calculation_type_id = calcTypeIdByMode.get(row.calcMode) || fixedCalcTypeId;
+            if (!salary_component_id) invalidFields.push(`deduction component "${row.name}"`);
+            if (!calculation_type_id) invalidFields.push(`calculation type "${row.calcMode}"`);
+            return {
+                salary_component_id,
+                calculation_type_id,
+                value_amount: Number(row.value || 0),
+                base_component_id: null,
+                annual_amount: Number(row.annualAmount || 0),
+            };
+        });
+
+        if (invalidFields.length > 0) {
+            toast({
+                variant: "destructive",
+                title: "Invalid salary payload",
+                description: `Please review: ${Array.from(new Set(invalidFields)).join(", ")}`,
+            });
+            return;
+        }
+
+        let salary_structure_id: number | null;
+        if (useCustom) {
+            salary_structure_id = null;
+        } else {
+            salary_structure_id = Number(formState.structureId);
+        }
+
+        const payload = {
+            employee_id: Number(assignment.employeeId),
+            salary_structure_id,
+            effective_from: assignment.effectiveFrom,
+            status: assignment.status === "active" ? 1 : 0,
+            annual_ctc: Number(assignment.annualCTC || 0),
+            earnings: earningsPayload,
+            deductions: deductionsPayload,
+        };
+
+        setIsSubmitting(true);
+        try {
+            if (isEditMode && formState.id) {
+                await employeeSalaryApi.update(Number(formState.id), payload);
+                toast({ variant: "success", title: "Success", description: "Assignment updated successfully" });
+            } else {
+                await employeeSalaryApi.create(payload);
+                toast({ variant: "success", title: "Success", description: "Assignment created successfully" });
+                // Update local assigned IDs set
+                setAssignedEmployeeIds(prev => new Set([...Array.from(prev), String(payload.employee_id)]));
+            }
+
+            upsertSalaryAssignment(assignment);
+            setCurrentPage(1);
+            await loadAssignments();
+            setLocation("/hr-setup/assign-employee-salary");
+        } catch (error: any) {
+            toast({ variant: "destructive", title: "Error", description: error.message || "Failed to save assignment" });
+        } finally {
+            setIsSubmitting(false);
+        }
     };
 
-    const handleDelete = () => {
+    const handleDelete = async () => {
         if (!formState.id) return;
-        
-        // Delete from shared data store
-        removeSalaryAssignment(formState.id);
-        
-        setAssignments(prev => prev.filter(a => a.id !== formState.id));
-        toast({ title: "Success", description: "Assignment deleted successfully" });
-        setOpenDeleteDialog(false);
-        setLocation("/hr-setup/assign-employee-salary");
+        setIsSubmitting(true);
+        try {
+            await employeeSalaryApi.delete(Number(formState.id));
+            const empIdToDelete = formState.employeeId;
+            removeSalaryAssignment(formState.id);
+            setAssignments(prev => prev.filter(a => a.id !== formState.id));
+            // Update local assigned IDs set
+            if (empIdToDelete) {
+                setAssignedEmployeeIds(prev => {
+                    const next = new Set(prev);
+                    next.delete(String(empIdToDelete));
+                    return next;
+                });
+            }
+            toast({ variant: "success", title: "Success", description: "Assignment deleted successfully" });
+            setOpenDeleteDialog(false);
+            setLocation("/hr-setup/assign-employee-salary");
+        } catch (error: any) {
+            toast({ variant: "destructive", title: "Error", description: error.message || "Failed to delete assignment" });
+        } finally {
+            setIsSubmitting(false);
+        }
     };
 
     // --- Main Render ---
@@ -674,16 +1525,16 @@ export default function AssignEmployeeSalary() {
                             label: "Department",
                             value: deptFilter,
                             onChange: setDeptFilter,
-                            options: mockDepartments.map(dept => ({ label: dept, value: dept })),
+                            options: [{ label: "All Departments", value: "All Departments" }, ...departments.map((d) => ({ label: d.name, value: d.name }))],
                             searchable: true
                         }
                     ]}
                     actions={[
-                        {
+                        ...(canCreate(permissionModule) ? [{
                             label: "Assign Salary",
                             icon: <Plus className="mr-2 h-4 w-4" />,
                             onClick: () => handleCreateNew()
-                        }
+                        }] : [])
                     ]}
                 />
 
@@ -704,7 +1555,16 @@ export default function AssignEmployeeSalary() {
                                     </TableRow>
                                 </TableHeader>
                                 <TableBody>
-                                    {paginatedAssignments.length === 0 ? (
+                                    {isListLoading ? (
+                                        <TableRow>
+                                            <TableCell colSpan={8} className="h-32 text-center">
+                                                <div className="flex flex-col items-center justify-center gap-3">
+                                                    <Loader2 className="h-8 w-8 animate-spin text-primary" />
+                                                    <p className="text-sm text-muted-foreground">Loading...</p>
+                                                </div>
+                                            </TableCell>
+                                        </TableRow>
+                                    ) : paginatedAssignments.length === 0 ? (
                                         <TableRow>
                                             <TableCell colSpan={8} className="h-32 text-center text-muted-foreground italic">No assignments found.</TableCell>
                                         </TableRow>
@@ -718,45 +1578,52 @@ export default function AssignEmployeeSalary() {
                                             <TableCell>
                                                 {a.structureMode === 'custom' ?
                                                     <Badge variant="outline" className="text-[10px]">Custom</Badge> :
-                                                    <Badge variant="secondary" className="text-[10px]">{availableStructures.find(s => s.id === a.structureId)?.name || 'Unknown'}</Badge>
+                                                    <Badge variant="secondary" className="text-[10px]">{a.structureName || availableStructures.find(s => s.id === a.structureId)?.name || 'Unknown'}</Badge>
                                                 }
                                             </TableCell>
-                                            <TableCell className="text-right font-medium">USh{a.monthlyCTC.toLocaleString()}</TableCell>
-                                            <TableCell className="text-right text-muted-foreground">USh{a.annualCTC.toLocaleString()}</TableCell>
-                                            <TableCell>{a.effectiveFrom}</TableCell>
+                                            <TableCell className="text-right font-medium">{CURRENCY_SYMBOL}{a.monthlyCTC.toFixed(2)}</TableCell>
+                                            <TableCell className="text-right text-muted-foreground">{CURRENCY_SYMBOL}{a.annualCTC.toFixed(2)}</TableCell>
                                             <TableCell>
-                                                <Badge className={cn("text-[10px]", a.status === 'active' ? "bg-green-100 text-green-700 hover:bg-green-100" : "bg-red-100 text-red-700 hover:bg-red-100")}>
-                                                    {a.status}
+                                                {a.effectiveFrom ? (
+                                                    isValidDate(parseISO(a.effectiveFrom)) 
+                                                        ? format(parseISO(a.effectiveFrom), "dd-MM-yyyy") 
+                                                        : a.effectiveFrom
+                                                ) : "-"}
+                                            </TableCell>
+                                            <TableCell>
+                                                <Badge
+                                                    className={cn(
+                                                        "text-[10px]",
+                                                        a.status === "active"
+                                                            ? "bg-green-100 text-green-700 hover:bg-green-100"
+                                                            : "bg-muted text-muted-foreground hover:bg-muted border border-border"
+                                                    )}
+                                                >
+                                                    {a.status === "active" ? "Active" : "Inactive"}
                                                 </Badge>
                                             </TableCell>
                                             <TableCell className="text-center">
-                                                {a.status === 'active' ? (
-                                                    <TableActionButtons
-                                                        onEdit={() => handleEdit(a)}
-                                                    />
-                                                ) : (
-                                                    <Button variant="ghost" size="sm" className="h-8 px-3 hover:bg-primary/10" onClick={() => {
-                                                        handleCreateNew(a.employeeId);
-                                                    }}>
-                                                        <span className="text-xs text-primary font-bold">Assign</span>
-                                                    </Button>
-                                                )}
+                                                <TableActionButtons
+                                                    onEdit={canEdit(permissionModule) ? () => handleEdit(a) : undefined}
+                                                />
                                             </TableCell>
                                         </TableRow>
                                     ))}
                                 </TableBody>
                             </Table>
                         </div>
-                <DataTablePagination
-                    currentPage={currentPage}
-                    totalPages={totalPages}
-                    totalItems={filteredAssignments.length}
-                    itemsPerPage={itemsPerPage}
-                    onPageChange={setCurrentPage}
-                    onItemsPerPageChange={setItemsPerPage}
-                />
-            </CardContent>
-        </Card>
+                        {!isListLoading && (
+                            <DataTablePagination
+                                currentPage={currentPage}
+                                totalPages={totalPages}
+                                totalItems={totalItems}
+                                itemsPerPage={itemsPerPage}
+                                onPageChange={setCurrentPage}
+                                onItemsPerPageChange={setItemsPerPage}
+                            />
+                        )}
+                    </CardContent>
+                </Card>
             </div>
         );
     }
@@ -807,10 +1674,10 @@ export default function AssignEmployeeSalary() {
                                     <CommandList className="max-h-[200px] overflow-y-auto">
                                         <CommandEmpty>No department found.</CommandEmpty>
                                         <CommandGroup>
-                                            {mockDepartments.filter(d => d !== "All Departments").map((dept) => (
+                                            {departments.map((dept) => (
                                                 <CommandItem
-                                                    key={dept}
-                                                    value={dept}
+                                                    key={dept.id}
+                                                    value={dept.name}
                                                     onSelect={(currentValue) => {
                                                         setFormState(prev => ({
                                                             ...prev,
@@ -823,8 +1690,8 @@ export default function AssignEmployeeSalary() {
                                                     }}
                                                     className="cursor-pointer"
                                                 >
-                                                    <Check className={cn("mr-2 h-4 w-4", formState.department === dept ? "opacity-100" : "opacity-0")} />
-                                                    {dept}
+                                                    <Check className={cn("mr-2 h-4 w-4", formState.department === dept.name ? "opacity-100" : "opacity-0")} />
+                                                    {dept.name}
                                                 </CommandItem>
                                             ))}
                                         </CommandGroup>
@@ -858,10 +1725,10 @@ export default function AssignEmployeeSalary() {
                                     <CommandList className="max-h-[200px] overflow-y-auto">
                                         <CommandEmpty>No designation found.</CommandEmpty>
                                         <CommandGroup>
-                                            {mockDesignations.map((desig) => (
+                                            {designations.map((desig) => (
                                                 <CommandItem
-                                                    key={desig}
-                                                    value={desig}
+                                                    key={desig.id}
+                                                    value={desig.name}
                                                     onSelect={(currentValue) => {
                                                         setFormState(prev => ({
                                                             ...prev,
@@ -874,8 +1741,8 @@ export default function AssignEmployeeSalary() {
                                                     }}
                                                     className="cursor-pointer"
                                                 >
-                                                    <Check className={cn("mr-2 h-4 w-4", formState.designation === desig ? "opacity-100" : "opacity-0")} />
-                                                    {desig}
+                                                    <Check className={cn("mr-2 h-4 w-4", formState.designation === desig.name ? "opacity-100" : "opacity-0")} />
+                                                    {desig.name}
                                                 </CommandItem>
                                             ))}
                                         </CommandGroup>
@@ -904,35 +1771,39 @@ export default function AssignEmployeeSalary() {
                                 </Button>
                             </PopoverTrigger>
                             <PopoverContent className="w-[var(--radix-popover-trigger-width)] p-0" align="start">
-                                <Command>
+                                <Command filter={commandLabelFilter}>
                                     <CommandInputBorderless placeholder="Search employee..." className="h-9" />
                                     <CommandList className="max-h-[200px] overflow-y-auto">
                                         <CommandEmpty>No employee found.</CommandEmpty>
                                         <CommandGroup>
-                                            {formFilteredEmployees.map((emp) => (
-                                                <CommandItem
-                                                    key={emp.code}
-                                                    value={emp.name}
-                                                    onSelect={() => {
-                                                        setFormState(prev => ({
-                                                            ...prev,
-                                                            employeeId: emp.id,
-                                                            employeeCode: emp.code,
-                                                            employeeName: emp.name,
-                                                            department: emp.department,
-                                                            designation: emp.designation
-                                                        }));
-                                                        setOpenEmpCombo(false);
-                                                    }}
-                                                    className="cursor-pointer"
-                                                >
-                                                    <Check className={cn("mr-2 h-4 w-4", formState.employeeId === emp.id ? "opacity-100" : "opacity-0")} />
-                                                    <div className="flex flex-col">
-                                                        <span>{emp.name}</span>
-                                                        <span className="text-xs text-muted-foreground">{emp.code} • {emp.department}</span>
-                                                    </div>
-                                                </CommandItem>
-                                            ))}
+                                            {formFilteredEmployees
+                                                .filter(emp => emp.matchFilter)
+                                                .map((emp) => (
+                                                    <CommandItem
+                                                        key={emp.code}
+                                                        value={toCommandItemValue(emp.name, emp.id)}
+                                                        disabled={emp.isAssigned}
+                                                        onSelect={() => {
+                                                            if (emp.isAssigned) return;
+                                                            setFormState(prev => ({
+                                                                ...prev,
+                                                                employeeId: emp.id,
+                                                                employeeCode: emp.code,
+                                                                employeeName: emp.name,
+                                                                department: emp.department,
+                                                                designation: emp.designation
+                                                            }));
+                                                            setOpenEmpCombo(false);
+                                                        }}
+                                                        className={cn("cursor-pointer", emp.isAssigned && "opacity-50 pointer-events-none grayscale")}
+                                                    >
+                                                        <Check className={cn("mr-2 h-4 w-4", formState.employeeId === emp.id ? "opacity-100" : "opacity-0")} />
+                                                        <div className="flex flex-col">
+                                                            <span>{emp.name}</span>
+                                                            <span className="text-xs text-muted-foreground">{emp.code} • {emp.department}</span>
+                                                        </div>
+                                                    </CommandItem>
+                                                ))}
                                         </CommandGroup>
                                     </CommandList>
                                 </Command>
@@ -1009,12 +1880,23 @@ export default function AssignEmployeeSalary() {
                         </Popover>
                     </div>
 
-                    <div className="space-y-2">
-                        <Label>Effective From <span className="text-red-500">*</span></Label>
-                        <Input
-                            type="date"
-                            value={formState.effectiveFrom || ""}
-                            onChange={(e) => setFormState({ ...formState, effectiveFrom: e.target.value })}
+                    <div className="space-y-1.5 min-w-0">
+                        <Label className="mb-1.5 block text-[10px] font-bold text-muted-foreground uppercase tracking-wider whitespace-nowrap">
+                            Effective From <span className="text-red-500">*</span>
+                        </Label>
+                        <DatePicker
+                            date={effectiveFromParsed}
+                            setDate={(d) => {
+                                if (d) {
+                                    setFormState((prev) => ({
+                                        ...prev,
+                                        effectiveFrom: format(d, "yyyy-MM-dd"),
+                                    }));
+                                }
+                            }}
+                            placeholder="Select date"
+                            showClear={false}
+                            minDate={effectiveDateMinDate}
                             className={cn(!isEffectiveDateValid && "border-red-500")}
                         />
                         {!isEffectiveDateValid && (
@@ -1038,25 +1920,38 @@ export default function AssignEmployeeSalary() {
             </Card>
 
             {/* Salary Calculation Section */}
-            <div className="space-y-4">
+            <div ref={salaryNumberInputsRootRef} className="space-y-4">
                 {/* CTC INPUT */}
                 <div className="bg-card border rounded-lg p-6 flex flex-col items-center justify-center space-y-2">
                     <Label className="text-lg font-medium">Annual CTC <span className="text-red-500">*</span></Label>
                     <div className="flex items-center gap-2">
                         <div className="relative">
-                            <span className="absolute left-3 top-2.5 text-muted-foreground font-medium">USh</span>
+                            <span className="absolute left-3 top-2.5 text-muted-foreground font-medium">{CURRENCY_SYMBOL}</span>
                             <Input
-                                type="number"
-                                className="pl-14 text-lg font-bold w-[200px]"
-                                value={formState.annualCTC || ""}
-                                onChange={(e) => setFormState({ ...formState, annualCTC: parseFloat(e.target.value) || 0 })}
+                                type="text"
+                                inputMode="numeric"
+                                autoComplete="off"
+                                maxLength={MAX_ANNUAL_CTC_DIGITS}
+                                aria-label="Annual CTC amount"
+                                className={cn(
+                                    "pl-14 text-lg font-bold min-w-[12rem] max-w-[22rem] w-full",
+                                    salaryAmountInputBorderClass,
+                                    noNumberSpinnerClass
+                                )}
+                                value={formState.annualCTC ? String(formState.annualCTC) : ""}
+                                onChange={(e) =>
+                                    setFormState({
+                                        ...formState,
+                                        annualCTC: sanitizeAnnualCtcInput(e.target.value),
+                                    })
+                                }
                             />
                         </div>
                         <span className="text-sm text-muted-foreground">per year</span>
                     </div>
                     {formState.monthlyCTC ? (
                         <p className="text-sm text-muted-foreground bg-muted px-2 py-1 rounded">
-                            Monthly CTC: USh{formState.monthlyCTC.toLocaleString()}
+                            Monthly CTC: {CURRENCY_SYMBOL}{formState.monthlyCTC.toFixed(2)}
                         </p>
                     ) : null}
                 </div>
@@ -1116,15 +2011,41 @@ export default function AssignEmployeeSalary() {
                                                 <div className="flex w-full gap-2">
                                                     {row.calcMode !== 'FLAT' && (
                                                         <Input
-                                                            type="number"
-                                                            className="w-[80px] h-9"
-                                                            value={row.value || ""}
-                                                            onChange={(e) => updateEarningRow(index, 'value', parseFloat(e.target.value))}
+                                                            type="text"
+                                                            inputMode="decimal"
+                                                            autoComplete="off"
+                                                            className={cn("w-[88px] h-9", noNumberSpinnerClass)}
+                                                            value={
+                                                                salaryNumericDrafts[`pct-${index}`] !== undefined
+                                                                    ? salaryNumericDrafts[`pct-${index}`]
+                                                                    : row.value === 0
+                                                                        ? ""
+                                                                        : formatTwoDecimalForInput(row.value)
+                                                            }
+                                                            onChange={(e) => {
+                                                                const r = sanitizePercentTwoDecimalsInput(e.target.value);
+                                                                setSalaryNumericDrafts((prev) => ({
+                                                                    ...prev,
+                                                                    [`pct-${index}`]: r.display,
+                                                                }));
+                                                                updateEarningRow(index, "value", r.value);
+                                                            }}
+                                                            onBlur={() => {
+                                                                setSalaryNumericDrafts((prev) => {
+                                                                    const next = { ...prev };
+                                                                    delete next[`pct-${index}`];
+                                                                    return next;
+                                                                });
+                                                            }}
                                                         />
                                                     )}
                                                     <Select
-                                                        value={row.calcMode}
-                                                        onValueChange={(v) => updateEarningRow(index, 'calcMode', v)}
+                                                        value={
+                                                            ["FLAT", "PCT_CTC", "PCT_BASIC"].includes(row.calcMode)
+                                                                ? row.calcMode
+                                                                : "FLAT"
+                                                        }
+                                                        onValueChange={(v) => updateEarningRow(index, "calcMode", v)}
                                                     >
                                                         <SelectTrigger className="h-9">
                                                             <SelectValue />
@@ -1132,7 +2053,9 @@ export default function AssignEmployeeSalary() {
                                                         <SelectContent side="bottom">
                                                             <SelectItem value="FLAT">Fixed Amount</SelectItem>
                                                             <SelectItem value="PCT_CTC">% of CTC</SelectItem>
-                                                            <SelectItem value="PCT_BASIC">% of Basic</SelectItem>
+                                                            {!isBasicComponent(row) && hasBasicEarningInList ? (
+                                                                <SelectItem value="PCT_BASIC">% of Basic</SelectItem>
+                                                            ) : null}
                                                         </SelectContent>
                                                     </Select>
                                                 </div>
@@ -1143,18 +2066,38 @@ export default function AssignEmployeeSalary() {
                                         <div className="col-span-2 text-right">
                                             {row.calcMode === 'REMAINING' ? (
                                                 <div className={cn("bg-muted px-3 py-2 rounded text-sm font-medium", row.monthlyAmount < 0 && "text-red-600")}>
-                                                    {Math.round(row.monthlyAmount).toLocaleString()}
+                                                    {row.monthlyAmount.toFixed(2)}
                                                 </div>
                                             ) : (row.calcMode === 'FLAT' && (formState.structureMode === 'custom' || !row.isBase)) ? (
                                                 <Input
-                                                    type="number"
-                                                    className="h-9 text-right"
-                                                    value={row.monthlyAmount || ""}
-                                                    onChange={(e) => updateEarningRow(index, 'monthlyAmount', parseFloat(e.target.value))}
+                                                    type="text"
+                                                    inputMode="decimal"
+                                                    autoComplete="off"
+                                                    className={cn("h-9 w-full min-w-[6rem] text-right", salaryAmountInputBorderClass, noNumberSpinnerClass)}
+                                                    value={
+                                                        salaryNumericDrafts[`earn-${index}`] !== undefined
+                                                            ? salaryNumericDrafts[`earn-${index}`]
+                                                            : formatTwoDecimalForInput(row.monthlyAmount)
+                                                    }
+                                                    onChange={(e) => {
+                                                        const r = sanitizeFixedAmountTwoDecimalsInput(e.target.value);
+                                                        setSalaryNumericDrafts((prev) => ({
+                                                            ...prev,
+                                                            [`earn-${index}`]: r.display,
+                                                        }));
+                                                        updateEarningRow(index, "monthlyAmount", r.value);
+                                                    }}
+                                                    onBlur={() => {
+                                                        setSalaryNumericDrafts((prev) => {
+                                                            const next = { ...prev };
+                                                            delete next[`earn-${index}`];
+                                                            return next;
+                                                        });
+                                                    }}
                                                 />
                                             ) : (
                                                 <div className="bg-muted px-3 py-2 rounded text-sm font-medium">
-                                                    {Math.round(row.monthlyAmount).toLocaleString()}
+                                                    {row.monthlyAmount.toFixed(2)}
                                                 </div>
                                             )}
                                         </div>
@@ -1163,27 +2106,32 @@ export default function AssignEmployeeSalary() {
                                         <div className="col-span-2 text-right">
                                             {row.calcMode === 'REMAINING' ? (
                                                 <div className={cn("text-sm text-muted-foreground font-medium", row.annualAmount < 0 && "text-red-600")}>
-                                                    {Math.round(row.annualAmount).toLocaleString()}
+                                                    {row.annualAmount.toFixed(2)}
                                                 </div>
                                             ) : (
                                                 <div className="text-sm text-muted-foreground">
-                                                    {Math.round(row.annualAmount).toLocaleString()}
+                                                    {row.annualAmount.toFixed(2)}
                                                 </div>
                                             )}
                                         </div>
 
-                                        {/* Remove Button */}
+                                        {/* Remove Button — API-loaded rows use isBase:true, which hid delete in edit; match deductions in edit mode. */}
                                         <div className="col-span-1 flex justify-center">
-                                            {(!row.isBase && row.componentCode !== 'BASIC' && row.componentCode !== 'FIXED') && (
-                                                <Button
-                                                    variant="ghost"
-                                                    size="icon"
-                                                    className="h-6 w-6 text-red-500"
-                                                    onClick={() => removeRow(index, 'earning')}
-                                                >
-                                                    <Trash2 className="h-3 w-3" />
-                                                </Button>
-                                            )}
+                                            {(isEditMode
+                                                ? row.calcMode !== "REMAINING"
+                                                : !row.isBase &&
+                                                row.componentCode !== "BASIC" &&
+                                                row.componentCode !== "FIXED" &&
+                                                row.calcMode !== "REMAINING") && (
+                                                    <Button
+                                                        variant="ghost"
+                                                        size="icon"
+                                                        className="h-6 w-6 text-red-500"
+                                                        onClick={() => removeRow(index, "earning")}
+                                                    >
+                                                        <Trash2 className="h-3 w-3" />
+                                                    </Button>
+                                                )}
                                         </div>
                                     </div>
                                 ))}
@@ -1196,7 +2144,7 @@ export default function AssignEmployeeSalary() {
                                         </Button>
                                     </PopoverTrigger>
                                     <PopoverContent className="w-[350px] p-0" align="start">
-                                        <Command>
+                                        <Command filter={commandLabelFilter}>
                                             <CommandInputBorderless placeholder="Search earning component..." className="h-9" />
                                             <CommandList className="max-h-[250px] overflow-y-auto">
                                                 <CommandEmpty>No earning component found.</CommandEmpty>
@@ -1209,7 +2157,7 @@ export default function AssignEmployeeSalary() {
                                                         .map(c => (
                                                             <CommandItem
                                                                 key={c.code}
-                                                                value={c.name}
+                                                                value={toCommandItemValue(c.name, c.code)}
                                                                 onSelect={() => {
                                                                     addEarning(c);
                                                                     setOpenAddEarning(false);
@@ -1235,22 +2183,99 @@ export default function AssignEmployeeSalary() {
                                 {deductionsRows.map((row, index) => (
                                     <div key={index} className="grid grid-cols-12 gap-4 items-center group">
                                         <div className="col-span-4 font-medium">{row.name}</div>
-                                        <div className="col-span-3 text-sm text-muted-foreground py-2">Fixed amount</div>
-                                        <div className="col-span-2 text-right">
-                                            <Input
-                                                type="number"
-                                                className="h-9 text-right"
-                                                value={row.monthlyAmount || ""}
-                                                onChange={(e) => {
-                                                    const val = parseFloat(e.target.value) || 0;
-                                                    const newRows = [...deductionsRows];
-                                                    newRows[index] = { ...row, monthlyAmount: val, annualAmount: val * 12 };
-                                                    setDeductionsRows(newRows);
-                                                }}
-                                            />
+                                        <div className="col-span-3 flex gap-2">
+                                            {formState.structureMode === "structure" && row.isBase ? (
+                                                <div className="text-sm text-muted-foreground py-2">
+                                                    {row.calcMode === "FLAT"
+                                                        ? "Fixed amount"
+                                                        : `${row.value}% of ${row.calcMode === "PCT_BASIC" ? "Basic" : "CTC"}`}
+                                                </div>
+                                            ) : (
+                                                <div className="flex w-full gap-2">
+                                                    {row.calcMode !== "FLAT" && (
+                                                        <Input
+                                                            type="text"
+                                                            inputMode="decimal"
+                                                            autoComplete="off"
+                                                            className={cn("w-[88px] h-9", noNumberSpinnerClass)}
+                                                            value={
+                                                                salaryNumericDrafts[`ded-pct-${index}`] !== undefined
+                                                                    ? salaryNumericDrafts[`ded-pct-${index}`]
+                                                                    : row.value === 0
+                                                                        ? ""
+                                                                        : formatTwoDecimalForInput(row.value)
+                                                            }
+                                                            onChange={(e) => {
+                                                                const r = sanitizePercentTwoDecimalsInput(e.target.value);
+                                                                setSalaryNumericDrafts((prev) => ({
+                                                                    ...prev,
+                                                                    [`ded-pct-${index}`]: r.display,
+                                                                }));
+                                                                updateDeductionRow(index, "value", r.value);
+                                                            }}
+                                                            onBlur={() => {
+                                                                setSalaryNumericDrafts((prev) => {
+                                                                    const next = { ...prev };
+                                                                    delete next[`ded-pct-${index}`];
+                                                                    return next;
+                                                                });
+                                                            }}
+                                                        />
+                                                    )}
+                                                    <Select
+                                                        value={["FLAT", "PCT_CTC", "PCT_BASIC"].includes(row.calcMode) ? row.calcMode : "FLAT"}
+                                                        onValueChange={(v) => updateDeductionRow(index, "calcMode", v)}
+                                                    >
+                                                        <SelectTrigger className="h-9">
+                                                            <SelectValue />
+                                                        </SelectTrigger>
+                                                        <SelectContent side="bottom">
+                                                            <SelectItem value="FLAT">Fixed Amount</SelectItem>
+                                                            <SelectItem value="PCT_CTC">% of CTC</SelectItem>
+                                                            {hasBasicEarningInList ? (
+                                                                <SelectItem value="PCT_BASIC">% of Basic</SelectItem>
+                                                            ) : null}
+                                                        </SelectContent>
+                                                    </Select>
+                                                </div>
+                                            )}
                                         </div>
                                         <div className="col-span-2 text-right">
-                                            <div className="text-sm text-muted-foreground">{Math.round(row.annualAmount).toLocaleString()}</div>
+                                            {row.calcMode === "FLAT" && (formState.structureMode === "custom" || !row.isBase) ? (
+                                                <Input
+                                                    type="text"
+                                                    inputMode="decimal"
+                                                    autoComplete="off"
+                                                    className={cn("h-9 w-full min-w-[6rem] text-right", salaryAmountInputBorderClass, noNumberSpinnerClass)}
+                                                    value={
+                                                        salaryNumericDrafts[`ded-${index}`] !== undefined
+                                                            ? salaryNumericDrafts[`ded-${index}`]
+                                                            : formatTwoDecimalForInput(row.monthlyAmount)
+                                                    }
+                                                    onChange={(e) => {
+                                                        const r = sanitizeFixedAmountTwoDecimalsInput(e.target.value);
+                                                        setSalaryNumericDrafts((prev) => ({
+                                                            ...prev,
+                                                            [`ded-${index}`]: r.display,
+                                                        }));
+                                                        updateDeductionRow(index, "monthlyAmount", r.value);
+                                                    }}
+                                                    onBlur={() => {
+                                                        setSalaryNumericDrafts((prev) => {
+                                                            const next = { ...prev };
+                                                            delete next[`ded-${index}`];
+                                                            return next;
+                                                        });
+                                                    }}
+                                                />
+                                            ) : (
+                                                <div className="bg-muted px-3 py-2 rounded text-sm font-medium">
+                                                    {row.monthlyAmount.toFixed(2)}
+                                                </div>
+                                            )}
+                                        </div>
+                                        <div className="col-span-2 text-right">
+                                            <div className="text-sm text-muted-foreground">{row.annualAmount.toFixed(2)}</div>
                                         </div>
                                         <div className="col-span-1 flex justify-center">
                                             {!row.isBase && (
@@ -1258,7 +2283,7 @@ export default function AssignEmployeeSalary() {
                                                     variant="ghost"
                                                     size="icon"
                                                     className="h-6 w-6 text-red-500"
-                                                    onClick={() => removeRow(index, 'deduction')}
+                                                    onClick={() => removeRow(index, "deduction")}
                                                 >
                                                     <Trash2 className="h-3 w-3" />
                                                 </Button>
@@ -1275,7 +2300,7 @@ export default function AssignEmployeeSalary() {
                                         </Button>
                                     </PopoverTrigger>
                                     <PopoverContent className="w-[350px] p-0" align="start">
-                                        <Command>
+                                        <Command filter={commandLabelFilter}>
                                             <CommandInputBorderless placeholder="Search deduction component..." className="h-9" />
                                             <CommandList className="max-h-[250px] overflow-y-auto">
                                                 <CommandEmpty>No deduction component found.</CommandEmpty>
@@ -1285,7 +2310,7 @@ export default function AssignEmployeeSalary() {
                                                         .map(c => (
                                                             <CommandItem
                                                                 key={c.code}
-                                                                value={c.name}
+                                                                value={toCommandItemValue(c.name, c.code)}
                                                                 onSelect={() => {
                                                                     addDeduction(c);
                                                                     setOpenAddDeduction(false);
@@ -1321,10 +2346,10 @@ export default function AssignEmployeeSalary() {
                                     </div>
                                     <div className="ml-auto flex gap-8 text-right self-center">
                                         <div className="text-red-500 font-medium">
-                                            {Math.round(remainingRow?.monthlyAmount || 0).toLocaleString()}
+                                            {(remainingRow?.monthlyAmount || 0).toFixed(2)}
                                         </div>
                                         <div className="text-red-500 font-medium">
-                                            {Math.round(remainingRow?.annualAmount || 0).toLocaleString()}
+                                            {(remainingRow?.annualAmount || 0).toFixed(2)}
                                         </div>
                                     </div>
                                 </div>
@@ -1333,11 +2358,11 @@ export default function AssignEmployeeSalary() {
                             <div className="bg-blue-50/50 border-t p-6 rounded-b-lg">
                                 <div className="flex justify-between items-center mb-2">
                                     <span className="text-muted-foreground font-medium">Gross Monthly Salary</span>
-                                    <span className="font-bold">USh{Math.round(monthlyCTC).toLocaleString()}</span>
+                                    <span className="font-bold">{CURRENCY_SYMBOL}{monthlyCTC.toFixed(2)}</span>
                                 </div>
                                 <div className="flex justify-between items-center mb-4">
                                     <span className="text-muted-foreground font-medium">Total Deductions</span>
-                                    <span className="font-bold text-red-600">- USh{Math.round(totalDeductionsMonthly).toLocaleString()}</span>
+                                    <span className="font-bold text-red-600">- {CURRENCY_SYMBOL}{totalDeductionsMonthly.toFixed(2)}</span>
                                 </div>
                                 <div className="h-px bg-border mb-4"></div>
                                 <div className="flex justify-between items-center">
@@ -1347,10 +2372,10 @@ export default function AssignEmployeeSalary() {
                                     </div>
                                     <div className="text-right">
                                         <div className={cn("text-2xl font-bold", netPayMonthly < 0 ? "text-red-600" : "text-green-700")}>
-                                            USh{Math.round(netPayMonthly).toLocaleString()}
+                                            {CURRENCY_SYMBOL}{netPayMonthly.toFixed(2)}
                                         </div>
                                         <div className="text-sm text-muted-foreground">
-                                            Annual: USh{Math.round(netPayAnnual).toLocaleString()}
+                                            Annual: {CURRENCY_SYMBOL}{netPayAnnual.toFixed(2)}
                                         </div>
                                     </div>
                                 </div>
@@ -1361,17 +2386,25 @@ export default function AssignEmployeeSalary() {
 
                 <div className="flex justify-between items-center pb-10">
                     <div>
-                        {isEditMode && (
+                        {isEditMode && canDelete(permissionModule) && (
                             <Button variant="destructive" onClick={() => setOpenDeleteDialog(true)}>
                                 Delete Assignment
                             </Button>
                         )}
                     </div>
                     <div className="flex gap-4">
-                        <Button variant="outline" onClick={handleBackToList}>Cancel</Button>
-                        <Button onClick={handleSave} disabled={!isValid}>
-                            {isEditMode ? "Update Assignment" : "Save Assignment"}
-                        </Button>
+                        <Button type="button" variant="outline" onClick={handleBackToList}>Cancel</Button>
+                        {((isEditMode && canEdit(permissionModule)) || (!isEditMode && canCreate(permissionModule))) && (
+                            <Button
+                                type="button"
+                                onClick={handleSave}
+                                disabled={!isValid || isSubmitting}
+                                loading={isSubmitting}
+                                className="disabled:bg-muted disabled:text-muted-foreground disabled:border-border disabled:opacity-100 disabled:shadow-none"
+                            >
+                                {isEditMode ? "Update Assignment" : "Save Assignment"}
+                            </Button>
+                        )}
                     </div>
                 </div>
 
@@ -1386,7 +2419,7 @@ export default function AssignEmployeeSalary() {
                         </AlertDialogHeader>
                         <AlertDialogFooter>
                             <AlertDialogCancel>Cancel</AlertDialogCancel>
-                            <AlertDialogAction onClick={handleDelete} className="bg-red-600 hover:bg-red-700">Delete</AlertDialogAction>
+                            <AlertDialogAction onClick={handleDelete} loading={isSubmitting} className="bg-red-600 hover:bg-red-700">Delete</AlertDialogAction>
                         </AlertDialogFooter>
                     </AlertDialogContent>
                 </AlertDialog>

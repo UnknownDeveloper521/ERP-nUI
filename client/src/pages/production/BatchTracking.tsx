@@ -11,7 +11,8 @@
 // - Bulk batch creation with auto-division of materials
 // ============================================================================
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo, useRef } from "react";
+import { useDebounce } from "@/hooks/useDebounce";
 import { format, parse, isValid } from "date-fns";
 import { useLocation, useRoute } from "wouter";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -58,20 +59,26 @@ import {
   CommandGroup,
   CommandItem,
 } from "@/components/ui/command";
-import { Plus, Search, ChevronLeft, ChevronRight, ChevronsUpDown, Check, Calendar as CalendarIcon, ChevronDown, X } from "lucide-react";
+import { Plus, Search, ChevronLeft, ChevronRight, ChevronsUpDown, Check, Calendar as CalendarIcon, ChevronDown, X, Loader2 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { cn } from "@/lib/utils";
 import { SearchableSelect as SharedSearchableSelect } from "@/components/shared/SearchableSelect";
 import { DataTablePagination } from "@/components/shared/DataTablePagination";
 import { TableActionButtons } from "@/components/shared/TableActionButtons";
+import { productionApi, commonApi, type BatchCreateRequest } from "@/lib/api";
+import { useCommonStore } from "@/store/commonStore";
 import { 
   type BatchRecord, 
   type BatchItem,
-  mockBatchRecords, 
-  addBatchRecord, 
-  updateBatchRecord,
   OPERATION_QC_REQUIRED
 } from "@/lib/batchSharedData";
+import { useHasPermission } from "@/hooks/usePermissions";
+import Unauthorized from "@/pages/Unauthorized";
+import {
+  getAssignedIds,
+  getFirstAssignedMatch,
+  prioritizeByAssigned,
+} from "@/utils/assignedDropdown";
 
 // ============================================================================
 // HELPER FUNCTIONS
@@ -88,8 +95,6 @@ const formatDate = (date: Date | string): string => {
 const getCurrentDateForInput = (): string => {
   return new Date().toISOString().split('T')[0];
 };
-
-const SHIFT_OPTIONS = ["Morning", "Night"];
 
 // ============================================================================
 // TYPE DEFINITIONS
@@ -109,6 +114,105 @@ interface MRRequest {
   totalItems: number;
   status: "Request to Warehouse" | "Issued by Warehouse" | "Received by Production";
   items: MRRequestItem[];
+  /** From GET /common/getmrforbatch (same response as `items` lines when API uses inputs/outputs) */
+  inputs?: any[];
+  outputs?: any[];
+}
+
+/** Map one record from GET /common/getmrforbatch to MRRequest (shared by initial load and dropdown refresh). */
+function mapGetMrForBatchRecord(r: any): MRRequest {
+  const inputs = r.inputs ?? [];
+  const outputs = r.outputs ?? [];
+  const itemsFromList = (r.items || []) as any[];
+  const lineItems: MRRequestItem[] =
+    itemsFromList.length > 0
+      ? itemsFromList.map((item: any) => ({
+          id: item.item_id,
+          itemCode: item.item_code,
+          itemName: item.item_name,
+          uom: item.uom,
+          availableQty: item.available_qty || 0,
+          requiredQty: item.required_qty
+        }))
+      : inputs.map((item: any) => ({
+          id: item.item_id,
+          itemCode: item.item_code,
+          itemName: item.item_name,
+          uom: item.uom_name || item.uom,
+          availableQty: item.total_qty ?? 0,
+          requiredQty: item.total_qty ?? 0
+        }));
+  return {
+    id: Number(r.mr_id ?? r.id),
+    mrNumber: r.mr_code,
+    date: r.request_date,
+    requiredByDate: r.required_by_date || r.request_date,
+    operation: r.operation_name,
+    workCenter: r.work_center_name,
+    warehouse: r.warehouse_name,
+    requestedBy: r.requested_by_name || "System",
+    totalItems: lineItems.length || inputs.length,
+    status: r.status_name as any,
+    items: lineItems,
+    inputs,
+    outputs
+  };
+}
+
+/** Map getMRForBatch `inputs` → batch form input lines (no extra API) */
+function mapMrForBatchInputsToInputItems(inputs: any[] | undefined): BatchItem[] {
+  if (!inputs?.length) return [];
+  return inputs.map((row: any, index: number) => ({
+    id: row.id ?? row.item_id ?? index + 1,
+    item_id: row.item_id,
+    item: row.item_name,
+    itemCode: row.item_code,
+    itemName: row.item_name,
+    uom: row.uom_name || row.uom || "",
+    availableQty: row.total_qty ?? row.total_mr_qty ?? 0,
+    qtySupplied: 0,
+    qtyProduced: 0
+  }));
+}
+
+/** Map getMRForBatch `outputs` → batch form output lines (no extra API) */
+function mapMrForBatchOutputsToOutputItems(outputs: any[] | undefined): BatchItem[] {
+  if (!outputs?.length) return [];
+  return outputs.map((row: any, index: number) => ({
+    id: row.id ?? index + 1,
+    item_id: row.item_id,
+    item: row.item_name,
+    itemCode: row.item_code,
+    itemName: row.item_name,
+    uom: row.uom_name || row.uom || "",
+    qtyProduced: row.produced_qty != null && row.produced_qty !== "" ? row.produced_qty : 0,
+    qtySupplied: 0
+  }));
+}
+
+/**
+ * getBatchById may omit `status_name` or nest status. Prefer detail fields, then list row (same id).
+ */
+function resolveBatchStatusNameAndId(
+  batchData: any,
+  listRow: { status?: string; status_id?: number } | undefined
+): { statusName: string | undefined; statusId: number | undefined } {
+  const name =
+    batchData?.status_name ??
+    batchData?.batch_status_name ??
+    (typeof batchData?.status === "string" ? batchData.status : undefined) ??
+    batchData?.status?.name ??
+    batchData?.StatusName ??
+    listRow?.status;
+  let sid: number | undefined;
+  if (batchData?.status_id != null && !Number.isNaN(Number(batchData.status_id))) {
+    sid = Number(batchData.status_id);
+  } else if (batchData?.status?.id != null) {
+    sid = Number(batchData.status.id);
+  } else if (listRow?.status_id != null) {
+    sid = Number(listRow.status_id);
+  }
+  return { statusName: name, statusId: sid };
 }
 
 interface MRRequestItem {
@@ -543,19 +647,19 @@ const WORK_CENTERS = [
 const WAREHOUSES = ["Jinja WH"];
 
 // Mock operation output mapping (what each operation produces)
-const OPERATION_OUTPUT_MAPPINGS: Record<string, { itemCode: string; itemName: string; uom: string }[]> = {
+const OPERATION_OUTPUT_MAPPINGS: Record<string, { item_id: number; itemCode: string; itemName: string; uom: string }[]> = {
   "Lead Generation & Purification": [
-    { itemCode: "sfg-1", itemName: "Purified Lead", uom: "KG" },
+    { item_id: 71, itemCode: "sfg-1", itemName: "Purified Lead", uom: "KG" },
   ],
   "Case Creation": [
-    { itemCode: "sfg-2", itemName: "Battery Cases", uom: "NOS" },
-    { itemCode: "sfg-3", itemName: "Battery Lids", uom: "NOS" },
+    { item_id: 72, itemCode: "sfg-2", itemName: "Battery Cases", uom: "NOS" },
+    { item_id: 73, itemCode: "sfg-3", itemName: "Battery Lids", uom: "NOS" },
   ],
   "Grid Creation & Oxidization": [
-    { itemCode: "sfg-4", itemName: "Separators", uom: "PCS" },
+    { item_id: 74, itemCode: "sfg-4", itemName: "Separators", uom: "PCS" },
   ],
   "Assembly line & Packaging": [
-    { itemCode: "fg-1", itemName: "GSV 7", uom: "NOS" },
+    { item_id: 75, itemCode: "fg-1", itemName: "GSV 7", uom: "NOS" },
   ],
 };
 
@@ -564,6 +668,13 @@ const OPERATION_OUTPUT_MAPPINGS: Record<string, { itemCode: string; itemName: st
 // ============================================================================
 
 export default function BatchTracking() {
+  const { isMenuVisible, canCreate, canEdit, canView } = useHasPermission();
+  const permissionModule = "PRODUCTION/BATCH_TRACKING";
+
+  if (!isMenuVisible(permissionModule)) {
+    return <Unauthorized />;
+  }
+
   const { toast } = useToast();
   const [location, setLocation] = useLocation();
 
@@ -580,6 +691,7 @@ export default function BatchTracking() {
   // ============================================================================
 
   const [searchTerm, setSearchTerm] = useState("");
+  const debouncedSearchTerm = useDebounce(searchTerm, 500);
   // Pagination state - controls page number and rows per page
   const [currentPage, setCurrentPage] = useState(1);
   const [itemsPerPage, setItemsPerPage] = useState(10);
@@ -595,61 +707,163 @@ export default function BatchTracking() {
   const [batchFormMode, setBatchFormMode] = useState<'create' | 'edit' | 'view'>('create');
   const [isBatchFormModalOpen, setIsBatchFormModalOpen] = useState(false);
   const [isBatchSubmitConfirmOpen, setIsBatchSubmitConfirmOpen] = useState(false);
+  const [isBatchSubmitInProgress, setIsBatchSubmitInProgress] = useState(false);
   const [isBulkBatchModalOpen, setIsBulkBatchModalOpen] = useState(false);
 
-  // Sample MR Requests data (needed for MR selection)
-  const [mrRequests] = useState<MRRequest[]>([
-    {
-      id: 1,
-      mrNumber: "MR-2024-001",
-      date: "2024-01-15",
-      requiredByDate: "2024-01-20",
-      operation: "Lead Generation & Purification",
-      workCenter: "Lead Furnace Center",
-      warehouse: "Jinja WH",
-      requestedBy: "John Doe",
-      totalItems: 1,
-      status: "Request to Warehouse",
-      items: [
-        { id: 1, itemCode: "rm-1", itemName: "Scrap Battery", uom: "KG", availableQty: 1500, requiredQty: 2000 },
-      ]
-    },
-    {
-      id: 2,
-      mrNumber: "MR-2024-002",
-      date: "2024-01-16",
-      requiredByDate: "2024-01-22",
-      operation: "Assembly line & Packaging",
-      workCenter: "Assembly Line",
-      warehouse: "Jinja WH",
-      requestedBy: "Jane Smith",
-      totalItems: 3,
-      status: "Issued by Warehouse",
-      items: [
-        { id: 1, itemCode: "sfg-2", itemName: "Battery Cases", uom: "NOS", availableQty: 100, requiredQty: 150 },
-        { id: 2, itemCode: "sfg-3", itemName: "Battery Lids", uom: "NOS", availableQty: 100, requiredQty: 150 },
-        { id: 3, itemCode: "rm-3", itemName: "Acid Type A", uom: "LTR", availableQty: 200, requiredQty: 150 },
-      ]
-    },
-    {
-      id: 4,
-      mrNumber: "MR-2024-004",
-      date: "2024-01-21",
-      requiredByDate: "2024-01-26",
-      operation: "Case Creation",
-      workCenter: "Plastic Casing Center",
-      warehouse: "Jinja WH",
-      requestedBy: "Sarah Williams",
-      totalItems: 1,
-      status: "Issued by Warehouse",
-      items: [
-        { id: 1, itemCode: "rm-2", itemName: "Plastic Pallets", uom: "KG", availableQty: 500, requiredQty: 200 },
-      ]
-    },
-  ]);
+  // MR Requests data (needed for MR selection)
+  const [mrRequests, setMrRequests] = useState<MRRequest[]>([]);
 
   // Sample Batch Tracking data
-  const [batchTrackings, setBatchTrackings] = useState<BatchTracking[]>(mockBatchRecords);
+  const [batchTrackings, setBatchTrackings] = useState<BatchTracking[]>([]);
+  const [isListLoading, setIsListLoading] = useState(false);
+  const [isDetailLoading, setIsDetailLoading] = useState(false);
+  const [isFormOpening, setIsFormOpening] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
+  const [openingBatchId, setOpeningBatchId] = useState<number | null>(null);
+  const appliedOperationFilterDefault = useRef(false);
+  const listInitRef = useRef(true);
+  const initialPendingAssignedOperationId = (() => {
+    const ids = getAssignedIds("operation");
+    if (!ids.length) return undefined;
+    const id = Number(ids[0]);
+    return Number.isFinite(id) ? id : undefined;
+  })();
+  const pendingAssignedOperationIdRef = useRef<number | undefined>(initialPendingAssignedOperationId);
+  const [totalRecords, setTotalRecords] = useState(0);
+  const [shifts, setShifts] = useState<any[]>([]);
+  const [operations, setOperations] = useState<any[]>([]);
+  const batchStatuses = useCommonStore(state => state.batchStatuses);
+
+  const assignedOperationIds = getAssignedIds("operation");
+  const assignedOperationKey = assignedOperationIds.join(",");
+  const orderedOperations = useMemo(
+    () => prioritizeByAssigned(operations, assignedOperationIds, (o) => o.id || o.operation_id),
+    [operations, assignedOperationKey]
+  );
+
+  const fetchBatchList = async () => {
+    setIsListLoading(true);
+    try {
+      let shiftId = undefined;
+      if (shiftFilter !== "All") {
+        const s = shifts.find(sh => (sh.shift_name || sh.name || sh.value_name) === shiftFilter);
+        shiftId = s?.id || s?.shift_id;
+      }
+
+      let opId: number | undefined = undefined;
+      if (operationFilter !== "All") {
+        const o = operations.find(op => (op.operation_name || op.name) === operationFilter);
+        opId = o?.id || o?.operation_id;
+      } else if (pendingAssignedOperationIdRef.current != null) {
+        opId = pendingAssignedOperationIdRef.current;
+      }
+
+      let statusId = undefined;
+      if (statusFilter !== "All") {
+        const s = batchStatuses.find(st => (st.status_name || st.name || st.value_name) === statusFilter);
+        statusId = s?.id || s?.status_id;
+      }
+
+      const res = await productionApi.getBatchList({
+        page: currentPage,
+        limit: itemsPerPage,
+        search: debouncedSearchTerm || undefined,
+        batch_date: dateFilter ? format(dateFilter, "yyyy-MM-dd") : undefined,
+        shift_id: shiftId,
+        operation_id: opId,
+        status_id: statusId
+      });
+
+      if (res.isSuccessful && res.data) {
+        // Map back to old BatchRecord structure for UI compatibility
+        const mappedData = res.data.records.map((record: any) => ({
+          id: record.batch_id,
+          batchNo: record.batch_code,
+          date: record.batch_date,
+          mrNo: record.mr_code,
+          operation: record.operation_name,
+          workCenter: record.work_center_name,
+          shift: record.shift_name,
+          status: record.status_name as any,
+          status_id: record.status_id,
+        }));
+        setBatchTrackings(mappedData as any);
+        setTotalRecords(res.data.pagination.totalRecords);
+      }
+    } catch (error) {
+      console.error("Failed to fetch batches", error);
+      toast({
+        variant: "destructive",
+        title: "Error",
+        description: "Failed to load batches"
+      });
+    } finally {
+      setIsListLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (listInitRef.current) return;
+    fetchBatchList();
+  }, [currentPage, itemsPerPage, debouncedSearchTerm, statusFilter, operationFilter, shiftFilter, dateFilter]);
+
+  useEffect(() => {
+    const loadDropdownData = async () => {
+      try {
+        const shiftRes = await productionApi.getShiftForProduction();
+        if (shiftRes.isSuccessful && shiftRes.data?.records) {
+          setShifts(shiftRes.data.records);
+        }
+
+        const opRes = await commonApi.getOperations();
+        let operationRecords: any[] = [];
+        if (opRes.isSuccessful && opRes.data?.records) {
+          operationRecords = opRes.data.records;
+          setOperations(operationRecords);
+        }
+        if (
+          !appliedOperationFilterDefault.current &&
+          assignedOperationIds.length > 0 &&
+          operationRecords.length > 0
+        ) {
+          const ordered = prioritizeByAssigned(
+            operationRecords,
+            assignedOperationIds,
+            (o) => o.id || o.operation_id
+          );
+          const firstAssigned = getFirstAssignedMatch(
+            assignedOperationIds,
+            ordered.map((o) => o.id || o.operation_id)
+          );
+          if (firstAssigned) {
+            const op = operationRecords.find(
+              (o) => String(o.id || o.operation_id) === firstAssigned
+            );
+            if (op) {
+              setOperationFilter(op.operation_name || op.name);
+              appliedOperationFilterDefault.current = true;
+              pendingAssignedOperationIdRef.current = undefined;
+            }
+          }
+        }
+
+        const mrRes = await commonApi.getMRForBatch();
+        if (mrRes.isSuccessful && mrRes.data?.records) {
+          setMrRequests(mrRes.data.records.map(mapGetMrForBatchRecord));
+        }
+      } catch (err) {
+        console.error("Failed to load dropdown data", err);
+      }
+    };
+
+    const init = async () => {
+      listInitRef.current = true;
+      await fetchBatchList();
+      await loadDropdownData();
+      listInitRef.current = false;
+    };
+    void init();
+  }, []);
 
   // Batch form data
   const [batchFormData, setBatchFormData] = useState({
@@ -658,7 +872,8 @@ export default function BatchTracking() {
     createdBy: "Current User",
     mrNo: "",
     operation: "",
-    shift: "" as "Morning" | "Night" | "",
+    workCenter: "",
+    shift: "" as string,
     startTime: null as string | null,
     endTime: null as string | null,
     savedBatchId: null as number | null,
@@ -668,26 +883,41 @@ export default function BatchTracking() {
     outputItems: [] as BatchItem[]
   });
 
+  /** Create Batch (single): value submitted as mr_id; full record only for inputs/outputs binding. */
+  const [selectedMRId, setSelectedMRId] = useState<number | null>(null);
+  const [selectedMRDetails, setSelectedMRDetails] = useState<MRRequest | null>(null);
 
+  /** Bulk batch: only mr_id is sent; no inputs/outputs in UI. */
+  const [bulkSelectedMRId, setBulkSelectedMRId] = useState<number | null>(null);
 
   // Bulk batch form data
   const [bulkBatchFormData, setBulkBatchFormData] = useState({
-    mrNo: "",
-    shift: "" as "Morning" | "Night" | "",
+    shift: "",
     numberOfBatches: 0 as number | string,
-    date: getCurrentDateForInput(),
-    items: [] as { itemCode: string; itemName: string; uom: string; totalMRQty: number; availableQty: number; qtyPerBatch: number }[]
+    date: getCurrentDateForInput()
   });
-
-  const [bulkBatchPreviews, setBulkBatchPreviews] = useState<{
-    batchNo: string;
-    inputItems: BatchItem[];
-    outputItems: BatchItem[];
-  }[]>([]);
-
-  const [activeBulkBatchTab, setActiveBulkBatchTab] = useState("batch-1");
-  const [bulkBatchValidationError, setBulkBatchValidationError] = useState("");
   const [isReadOnly, setIsReadOnly] = useState(false);
+
+  const resetCreateBatchForm = () => {
+    setSelectedMRId(null);
+    setSelectedMRDetails(null);
+    setBatchFormData({
+      batchNo: "",
+      date: getCurrentDateForInput(),
+      createdBy: "",
+      mrNo: "",
+      operation: "",
+      workCenter: "",
+      shift: "",
+      startTime: null,
+      endTime: null,
+      savedBatchId: null,
+      status: "Batch Created",
+      createdType: "SINGLE",
+      inputItems: [],
+      outputItems: [],
+    });
+  };
 
   // ============================================================================
   // EFFECTS
@@ -695,12 +925,15 @@ export default function BatchTracking() {
 
   useEffect(() => {
     if (matchNew) {
+      setSelectedMRId(null);
+      setSelectedMRDetails(null);
       setBatchFormData({
         batchNo: `BATCH-${new Date().getFullYear()}-${String(batchTrackings.length + 1).padStart(3, '0')}`,
         date: getCurrentDateForInput(),
         createdBy: "Current User",
         mrNo: "",
         operation: "",
+        workCenter: "",
         shift: "",
         startTime: null,
         endTime: null,
@@ -728,6 +961,13 @@ export default function BatchTracking() {
           })();
 
         const selectedMR = mrRequests.find(mr => mr.mrNumber === existingBatch.mrNo);
+        if (selectedMR) {
+          setSelectedMRId(selectedMR.id);
+          setSelectedMRDetails(selectedMR);
+        } else {
+          setSelectedMRId(null);
+          setSelectedMRDetails(null);
+        }
         const inputItems = existingBatch.inputItems?.map(item => {
           const mrItem = selectedMR?.items.find(mi => mi.itemName === item.item);
           return {
@@ -742,6 +982,7 @@ export default function BatchTracking() {
           createdBy: "Current User",
           mrNo: existingBatch.mrNo,
           operation: existingBatch.operation,
+          workCenter: existingBatch.workCenter || "",
           shift: existingBatch.shift,
           startTime: existingBatch.startTime || null,
           endTime: existingBatch.endTime || null,
@@ -776,44 +1017,76 @@ export default function BatchTracking() {
     setBatchFormData({ ...batchFormData, outputItems: updatedItems });
   };
 
-  const handleBatchMRSelection = (mrNo: string) => {
-    const selectedMR = mrRequests.find(mr => mr.mrNumber === mrNo);
-    if (selectedMR) {
-      const inputItems = selectedMR.items.map((item, index) => ({
-        id: index + 1,
-        item: item.itemName,
-        itemCode: item.itemCode,
-        itemName: item.itemName,
-        uom: item.uom,
-        availableQty: item.requiredQty,
-        qtySupplied: 0,
-        qtyProduced: 0
+  const handleBatchMRSelection = (value: string) => {
+    if (!value) {
+      setSelectedMRId(null);
+      setSelectedMRDetails(null);
+      setBatchFormData((prev) => ({
+        ...prev,
+        mrNo: "",
+        operation: "",
+        workCenter: "",
+        inputItems: [],
+        outputItems: []
       }));
-
-      const outputMapping = OPERATION_OUTPUT_MAPPINGS[selectedMR.operation] || [];
-      const outputItems = outputMapping.map((item, index) => ({
-        id: index + 1,
-        item: item.itemName,
-        itemCode: item.itemCode,
-        itemName: item.itemName,
-        uom: item.uom,
-        qtyProduced: 0,
-        qtySupplied: 0
-      }));
-
-      setBatchFormData({
-        ...batchFormData,
-        mrNo,
-        operation: selectedMR.operation,
-        inputItems,
-        outputItems
-      });
+      return;
     }
+    const id = Number(value);
+    if (!Number.isFinite(id) || id <= 0) {
+      return;
+    }
+    const selectedMR = mrRequests.find((mr) => Number(mr.id) === id);
+    if (!selectedMR) {
+      return;
+    }
+    setSelectedMRId(id);
+    setSelectedMRDetails(selectedMR);
+    const inputItems =
+      selectedMR.inputs && selectedMR.inputs.length > 0
+        ? mapMrForBatchInputsToInputItems(selectedMR.inputs)
+        : selectedMR.items.map((item, index) => ({
+            id: index + 1,
+            item_id: item.id,
+            item: item.itemName,
+            itemCode: item.itemCode,
+            itemName: item.itemName,
+            uom: item.uom,
+            availableQty: item.requiredQty,
+            qtySupplied: 0,
+            qtyProduced: 0
+          }));
+
+    const outputItems =
+      selectedMR.outputs && selectedMR.outputs.length > 0
+        ? mapMrForBatchOutputsToOutputItems(selectedMR.outputs)
+        : (() => {
+            const outputMapping = OPERATION_OUTPUT_MAPPINGS[selectedMR.operation] || [];
+            return outputMapping.map((item, index) => ({
+              id: index + 1,
+              item_id: item.item_id || index + 70,
+              item: item.itemName,
+              itemCode: item.itemCode,
+              itemName: item.itemName,
+              uom: item.uom,
+              qtyProduced: 0,
+              qtySupplied: 0
+            }));
+          })();
+
+    setBatchFormData((prev) => ({
+      ...prev,
+      mrNo: selectedMR.mrNumber,
+      operation: selectedMR.operation,
+      workCenter: selectedMR.workCenter || "",
+      inputItems,
+      outputItems
+    }));
   };
 
-  const handleBatchSave = () => {
-    if (!batchFormData.mrNo) {
-      toast({ variant: "destructive", title: "Validation Error", description: "MR No is required" });
+  const handleBatchSave = async () => {
+    if (isSaving) return;
+    if (selectedMRId == null || !Number.isFinite(selectedMRId) || selectedMRId <= 0) {
+      toast({ variant: "destructive", title: "Validation Error", description: "Select a material request" });
       return;
     }
     if (!batchFormData.shift) {
@@ -825,70 +1098,101 @@ export default function BatchTracking() {
       toast({ variant: "destructive", title: "Validation Error", description: "At least one input quantity must be greater than 0" });
       return;
     }
-
-    const startTime = batchFormData.startTime || new Date().toISOString();
-    const hasOutputQty = batchFormData.outputItems.some(item => parseFloat(item.qtyProduced.toString()) > 0);
-    const qcRequired = OPERATION_QC_REQUIRED[batchFormData.operation] !== false;
-    
-    let newStatus: "Batch Created" | "Sent for QC" | "Verified QC" | "Batch Closed" = "Batch Created";
-    if (hasOutputQty) {
-      newStatus = qcRequired ? "Sent for QC" : "Verified QC";
+    if (hasQtySuppliedValidationErrors()) {
+      toast({ variant: "destructive", title: "Validation Error", description: "Qty Supplied must exactly match MR quantity" });
+      return;
     }
 
-    if (batchFormData.savedBatchId) {
-      updateBatchRecord(batchFormData.savedBatchId, {
-        status: newStatus,
-        startTime,
-        mrNo: batchFormData.mrNo,
-        shift: batchFormData.shift as "Morning" | "Night",
-        operation: batchFormData.operation,
-        workCenter: mrRequests.find(mr => mr.mrNumber === batchFormData.mrNo)?.workCenter || "",
-        warehouse: mrRequests.find(mr => mr.mrNumber === batchFormData.mrNo)?.warehouse || "",
-        totalInputItems: batchFormData.inputItems.length,
-        totalOutputItems: batchFormData.outputItems.filter(item => (parseFloat(item.qtyProduced.toString()) || 0) > 0).length,
-        inputItems: batchFormData.inputItems,
-        outputItems: batchFormData.outputItems,
-        qcStatus: qcRequired && newStatus === "Sent for QC" ? "Sent for QC" : undefined,
-        qcRequired
+    const shiftRecord = shifts.find((sh) => (sh.shift_name || sh.name || sh.value_name) === batchFormData.shift);
+    const rawShift = shiftRecord?.id ?? shiftRecord?.shift_id;
+    if (rawShift == null || !Number.isFinite(Number(rawShift))) {
+      toast({ variant: "destructive", title: "Validation Error", description: "Could not resolve shift. Refresh and try again." });
+      return;
+    }
+    const shift_id = Number(rawShift);
+
+    // Prepare payload for API
+    const payload: BatchCreateRequest = {
+      batch_date: batchFormData.date,
+      shift_id,
+      mr_id: selectedMRId,
+      mr_code: batchFormData.mrNo,
+      inputs: batchFormData.inputItems
+        .filter(item => parseFloat(item.qtySupplied.toString()) > 0)
+        .map(item => ({
+          item_id: Number(item.item_id || item.id),
+          supplied_qty: parseFloat(item.qtySupplied.toString())
+        })),
+      outputs: batchFormData.outputItems.map(item => ({
+        item_id: Number(item.item_id || item.id),
+        produced_qty: parseFloat(item.qtyProduced.toString()) || 0
+      }))
+    };
+
+    try {
+      setIsSaving(true);
+      const res = await productionApi.createBatch(payload);
+      
+      if (res.isSuccessful) {
+        const d = res.data as { id?: number; batch_id?: number } | undefined;
+        const newBatchId = d?.id ?? d?.batch_id;
+        if (newBatchId != null) {
+          setBatchFormData((prev) => ({ ...prev, savedBatchId: newBatchId }));
+        }
+        toast({
+          variant: "success",
+          title: "Success",
+          description: res.message || "Batch created successfully",
+        });
+        setIsBatchFormModalOpen(false);
+        fetchBatchList(); // Refresh the listing page
+      } else {
+        toast({
+          variant: "destructive",
+          title: "Error",
+          description: res.message || "Failed to create batch",
+        });
+      }
+    } catch (error: any) {
+      console.error("Create batch error:", error);
+      toast({
+        variant: "destructive",
+        title: "Error",
+        description: error.message || "An unexpected error occurred during batch creation",
       });
-      setBatchTrackings([...mockBatchRecords]);
-      setBatchFormData({ ...batchFormData, startTime, status: newStatus });
-    } else {
-      const newBatch: BatchTracking = {
-        id: mockBatchRecords.length + 1,
-        batchNo: batchFormData.batchNo,
-        date: batchFormData.date,
-        mrNo: batchFormData.mrNo,
-        shift: batchFormData.shift as "Morning" | "Night",
-        operation: batchFormData.operation,
-        workCenter: mrRequests.find(mr => mr.mrNumber === batchFormData.mrNo)?.workCenter || "",
-        warehouse: mrRequests.find(mr => mr.mrNumber === batchFormData.mrNo)?.warehouse || "",
-        totalInputItems: batchFormData.inputItems.length,
-        totalOutputItems: batchFormData.outputItems.filter(item => parseFloat(item.qtyProduced.toString()) > 0).length,
-        status: newStatus,
-        createdType: "SINGLE",
-        startTime,
-        inputItems: batchFormData.inputItems,
-        outputItems: batchFormData.outputItems,
-        qcStatus: (qcRequired && newStatus === "Sent for QC" ? "Sent for QC" : undefined) as any,
-        qcRequired
-      };
-      addBatchRecord(newBatch);
-      setBatchTrackings([...mockBatchRecords]);
-      setBatchFormData({ ...batchFormData, startTime, savedBatchId: newBatch.id, status: newStatus, createdType: "SINGLE" });
+    } finally {
+      setIsSaving(false);
     }
-
-    toast({
-      variant: "success",
-      title: "Saved",
-      description: qcRequired ? `Batch saved as ${newStatus}` : `Batch saved and QC skipped`,
-    });
-    setIsBatchFormModalOpen(false);
   };
 
-  const handleBatchSubmit = () => {
-    if (!batchFormData.mrNo) {
-      toast({ variant: "destructive", title: "Validation Error", description: "MR No is required" });
+  const handleBatchSubmit = async () => {
+    if (isBatchSubmitInProgress || isSaving) return;
+    const isEditMode = batchFormMode === "edit";
+
+    if (isEditMode) {
+      const hasOutputQtyForEdit = batchFormData.outputItems.some(
+        (item) => parseFloat(item.qtyProduced.toString()) > 0
+      );
+      if (!hasOutputQtyForEdit) {
+        toast({
+          variant: "destructive",
+          title: "Validation Error",
+          description: "At least one output quantity must be greater than 0 to submit",
+        });
+        return;
+      }
+      try {
+        setIsBatchSubmitInProgress(true);
+        const endTime = new Date().toISOString();
+        await completeBatchSubmission(endTime);
+      } finally {
+        setIsBatchSubmitInProgress(false);
+      }
+      return;
+    }
+
+    if (selectedMRId == null || !Number.isFinite(selectedMRId) || selectedMRId <= 0) {
+      toast({ variant: "destructive", title: "Validation Error", description: "Select a material request" });
       return;
     }
     if (!batchFormData.shift) {
@@ -898,6 +1202,10 @@ export default function BatchTracking() {
     const hasInputQty = batchFormData.inputItems.some(item => parseFloat(item.qtySupplied.toString()) > 0);
     if (!hasInputQty) {
       toast({ variant: "destructive", title: "Validation Error", description: "At least one input quantity must be greater than 0" });
+      return;
+    }
+    if (hasQtySuppliedValidationErrors()) {
+      toast({ variant: "destructive", title: "Validation Error", description: "Qty Supplied must exactly match MR quantity" });
       return;
     }
     const hasOutputQty = batchFormData.outputItems.some(item => parseFloat(item.qtyProduced.toString()) > 0);
@@ -906,359 +1214,380 @@ export default function BatchTracking() {
       return;
     }
 
-    const endTime = new Date().toISOString();
-    completeBatchSubmission(endTime);
+    try {
+      setIsBatchSubmitInProgress(true);
+      const endTime = new Date().toISOString();
+      await completeBatchSubmission(endTime);
+    } finally {
+      setIsBatchSubmitInProgress(false);
+    }
   };
 
-  const completeBatchSubmission = (endTime: string) => {
+  const completeBatchSubmission = async (endTime: string) => {
     const qcRequired = OPERATION_QC_REQUIRED[batchFormData.operation] !== false;
-    const finalStatus = qcRequired ? "Sent for QC" : "Verified QC";
-
-    if (batchFormData.savedBatchId) {
-      updateBatchRecord(batchFormData.savedBatchId, {
-        status: finalStatus,
-        endTime: endTime,
-        totalInputItems: batchFormData.inputItems.length,
-        totalOutputItems: batchFormData.outputItems.filter(item => parseFloat(item.qtyProduced.toString()) > 0).length,
-        inputItems: batchFormData.inputItems,
-        outputItems: batchFormData.outputItems,
-        qcStatus: qcRequired ? "Sent for QC" : undefined,
-        qcRequired
-      });
-      setBatchTrackings([...mockBatchRecords]);
-      toast({
-        variant: "success",
-        title: "Success",
-        description: `Batch ${batchFormData.batchNo} submitted successfully ${qcRequired ? "" : "(QC Skipped)"}`,
-      });
-      setIsViewBatchModalOpen(false); // Close the modal
-    } else {
-      const newBatch: BatchTracking = {
-        id: mockBatchRecords.length + 1,
-        batchNo: batchFormData.batchNo,
-        date: batchFormData.date,
-        mrNo: batchFormData.mrNo,
-        shift: batchFormData.shift as "Morning" | "Night",
-        operation: batchFormData.operation,
-        workCenter: mrRequests.find(mr => mr.mrNumber === batchFormData.mrNo)?.workCenter || "",
-        warehouse: mrRequests.find(mr => mr.mrNumber === batchFormData.mrNo)?.warehouse || "",
-        totalInputItems: batchFormData.inputItems.length,
-        totalOutputItems: batchFormData.outputItems.filter(item => parseFloat(item.qtyProduced.toString()) > 0).length,
-        status: finalStatus,
-        createdType: "SINGLE",
-        startTime: batchFormData.startTime || new Date().toISOString(),
-        endTime: endTime,
-        inputItems: batchFormData.inputItems,
-        outputItems: batchFormData.outputItems,
-        qcStatus: (qcRequired ? "Sent for QC" : undefined) as any,
-        qcRequired
-      };
-      addBatchRecord(newBatch);
-      setBatchTrackings([...mockBatchRecords]);
-      toast({
-        variant: "success",
-        title: "Success",
-        description: `Batch ${batchFormData.batchNo} submitted successfully ${qcRequired ? "" : "(QC Skipped)"}`,
-      });
-      setIsViewBatchModalOpen(false); // Close the modal
+    
+    // Only validate MR selection if we are CREATING a new batch.
+    // In EDIT mode, the MR is already fixed on the record.
+    if (batchFormData.savedBatchId == null && (selectedMRId == null || !Number.isFinite(selectedMRId) || selectedMRId <= 0)) {
+      toast({ variant: "destructive", title: "Validation Error", description: "Select a material request" });
+      return;
     }
-  };
-
-  const handleView = (id: number) => {
-    const batch = batchTrackings.find(b => b.id === id);
-    if (batch) {
-      setViewingBatch(batch);
-      const outputItems = (batch.outputItems && batch.outputItems.length > 0)
-        ? batch.outputItems
-        : (() => {
-          const outputMapping = OPERATION_OUTPUT_MAPPINGS[batch.operation] || [];
-          return outputMapping.map((item, index) => ({
-            id: index + 1,
-            item: item.itemName,
-            uom: item.uom,
-            qtyProduced: 0,
-            qtySupplied: 0
-          }));
-        })();
-
-      const selectedMR = mrRequests.find(mr => mr.mrNumber === batch.mrNo);
-      const inputItems = batch.inputItems?.map(item => {
-        const mrItem = selectedMR?.items.find(mi => mi.itemName === item.item);
-        return {
-          ...item,
-          availableQty: mrItem?.requiredQty || item.availableQty || 0
-        };
-      }) || [];
-
-      setBatchFormData({
-        batchNo: batch.batchNo,
-        date: batch.date,
-        createdBy: "Current User",
-        mrNo: batch.mrNo,
-        operation: batch.operation,
-        shift: batch.shift,
-        startTime: batch.startTime || null,
-        endTime: batch.endTime || null,
-        savedBatchId: batch.id,
-        status: batch.status,
-        createdType: batch.createdType || "SINGLE",
-        inputItems: inputItems,
-        outputItems: outputItems
-      });
-      setIsReadOnly(true);
-      setBatchFormMode('view');
-      setIsViewBatchModalOpen(true);
+    const shiftRecord = shifts.find((sh) => (sh.shift_name || sh.name || sh.value_name) === batchFormData.shift);
+    const rawShift = shiftRecord?.id ?? shiftRecord?.shift_id;
+    if (rawShift == null || !Number.isFinite(Number(rawShift))) {
+      toast({ variant: "destructive", title: "Validation Error", description: "Could not resolve shift. Refresh and try again." });
+      return;
     }
-  };
+    const shift_id = Number(rawShift);
+    const mr_id = selectedMRId;
 
-  const handleEdit = (id: number) => {
-    const batch = batchTrackings.find(b => b.id === id);
-    if (batch) {
-      // Only allow editing if status is "Batch Created"
-      if (batch.status === "Batch Created") {
-        // Open in modal instead of navigating to edit page
-        const outputItems = (batch.outputItems && batch.outputItems.length > 0)
-          ? batch.outputItems
-          : (() => {
-            const outputMapping = OPERATION_OUTPUT_MAPPINGS[batch.operation] || [];
-            return outputMapping.map((item, index) => ({
-              id: index + 1,
-              item: item.itemName,
-              uom: item.uom,
-              qtyProduced: 0,
-              qtySupplied: 0
-            }));
-          })();
+    const outputPayload = batchFormData.outputItems.map((item) => ({
+      item_id: Number(item.item_id || item.id),
+      produced_qty: parseFloat(String(item.qtyProduced)) || 0
+    }));
 
-        const selectedMR = mrRequests.find(mr => mr.mrNumber === batch.mrNo);
-        const inputItems = batch.inputItems?.map(item => {
-          const mrItem = selectedMR?.items.find(mi => mi.itemName === item.item);
-          return {
-            ...item,
-            availableQty: mrItem?.requiredQty || item.availableQty || 0
-          };
-        }) || [];
+    const createFullPayload: BatchCreateRequest = {
+      batch_date: batchFormData.date,
+      shift_id,
+      mr_id: mr_id!,
+      mr_code: batchFormData.mrNo,
+      inputs: batchFormData.inputItems
+        .filter((item) => parseFloat(String(item.qtySupplied)) > 0)
+        .map((item) => ({
+          item_id: Number(item.item_id || item.id),
+          supplied_qty: parseFloat(String(item.qtySupplied))
+        })),
+      outputs: outputPayload
+    };
 
-        setBatchFormData({
-          batchNo: batch.batchNo,
-          date: batch.date,
-          createdBy: "Current User",
-          mrNo: batch.mrNo,
-          operation: batch.operation,
-          shift: batch.shift,
-          startTime: batch.startTime || null,
-          endTime: batch.endTime || null,
-          savedBatchId: batch.id,
-          status: batch.status,
-          createdType: batch.createdType || "SINGLE",
-          inputItems: inputItems,
-          outputItems: outputItems
+    try {
+      setIsSaving(true);
+      // For direct Submit in Create Batch flow, backend createBatch already performs
+      // "created and sent for QC", so do NOT call updateBatch immediately after create.
+      if (batchFormData.savedBatchId == null) {
+        const createRes = await productionApi.createBatch(createFullPayload);
+        if (!createRes.isSuccessful) {
+          throw new Error(createRes.message || "Failed to create and submit batch");
+        }
+
+        const d = createRes.data as { id?: number; batch_id?: number } | undefined;
+        const newId = d?.id ?? d?.batch_id;
+        if (newId != null) {
+          setBatchFormData((prev) => ({ ...prev, savedBatchId: newId }));
+        }
+
+        toast({
+          variant: "success",
+          title: "Success",
+          description:
+            createRes.message ||
+            `Batch ${batchFormData.batchNo} submitted successfully${qcRequired ? "" : " (QC Skipped)"}`,
         });
-        setIsReadOnly(false);
-        setBatchFormMode('edit');
-        setIsViewBatchModalOpen(true); // Open the modal
+        setIsBatchFormModalOpen(false);
+        setIsViewBatchModalOpen(false);
+        fetchBatchList();
+        return;
+      }
+
+      // Existing saved batch flow: update outputs / submit via update API once.
+      const res = await productionApi.updateBatch(batchFormData.savedBatchId, { outputs: outputPayload });
+
+      if (res.isSuccessful) {
+        toast({
+          variant: "success",
+          title: "Success",
+          description: res.message || `Batch ${batchFormData.batchNo} submitted successfully${qcRequired ? "" : " (QC Skipped)"}`,
+        });
+        setIsBatchFormModalOpen(false);
+        setIsViewBatchModalOpen(false);
+        fetchBatchList();
       } else {
-        toast({ 
-          variant: "destructive", 
-          title: "Cannot Edit", 
-          description: `Batch with status "${batch.status}" cannot be edited. Only batches with status "Batch Created" can be edited.` 
+        toast({
+          variant: "destructive",
+          title: "Error",
+          description: res.message || "Failed to submit batch",
         });
       }
+    } catch (error: any) {
+      console.error("Submit batch error:", error);
+      toast({
+        variant: "destructive",
+        title: "Error",
+        description: error.message || "An unexpected error occurred during batch submission",
+      });
+    } finally {
+      setIsSaving(false);
     }
+  };
+
+  const fetchMRRequestsForDropdown = async (shiftId?: number | string): Promise<MRRequest[]> => {
+    try {
+      const mrRes = await commonApi.getMRForBatch({ shift_id: shiftId });
+      if (mrRes.isSuccessful && mrRes.data?.records) {
+        const list = mrRes.data.records.map(mapGetMrForBatchRecord);
+        setMrRequests(list);
+        return list;
+      }
+      setMrRequests([]);
+      return [];
+    } catch (error) {
+      console.error("Failed to load MR requests for dropdown", error);
+      toast({
+        variant: "destructive",
+        title: "Error",
+        description: "Failed to load MR requests"
+      });
+      setMrRequests([]);
+      return [];
+    }
+  };
+
+  const handleOpenBatchForm = async () => {
+    if (openingBatchId !== null || isSaving || isFormOpening) return;
+    setIsFormOpening(true);
+    setIsBatchFormModalOpen(true);
+    try {
+      resetCreateBatchForm();
+      await fetchMRRequestsForDropdown();
+    } finally {
+      setIsFormOpening(false);
+    }
+  };
+
+  const handleOpenBulkBatchForm = async () => {
+    if (openingBatchId !== null || isSaving || isFormOpening) return;
+    setIsFormOpening(true);
+    setIsBulkBatchModalOpen(true);
+    try {
+      await fetchMRRequestsForDropdown();
+    } finally {
+      setIsFormOpening(false);
+    }
+  };
+
+  const fetchBatchDetailsAndOpenModal = async (id: number, mode: 'view' | 'edit') => {
+    setIsDetailLoading(true);
+    setIsViewBatchModalOpen(true);
+    setViewingBatch(null);
+    try {
+      const mrList = await fetchMRRequestsForDropdown();
+      const res = await productionApi.getBatchById(id);
+      if (res.isSuccessful && res.data) {
+        const raw: any = res.data;
+        const batchData = raw?.batch_id != null || raw?.batch_code != null ? raw : raw?.data ?? raw;
+        const listRow = batchTrackings.find((b) => b.id === id) as
+          | { status?: string; status_id?: number }
+          | undefined;
+        const { statusName, statusId } = resolveBatchStatusNameAndId(batchData, listRow);
+        
+        // Map inputs
+        const inputItems = batchData.inputs?.map((item: any) => ({
+          id: item.item_id,
+          item_id: item.item_id,
+          item: item.item_name,
+          itemName: item.item_name,
+          uom: item.uom_name || item.uom,
+          qtySupplied: item.supplied_qty || 0,
+          qtyProduced: 0,
+          availableQty: item.total_mr_qty || 0
+        })) || [];
+
+        // Map outputs
+        const outputItems = batchData.outputs?.map((item: any) => ({
+          id: item.item_id,
+          item_id: item.item_id,
+          item: item.item_name,
+          itemName: item.item_name,
+          uom: item.uom_name || item.uom,
+          qtyProduced: item.produced_qty || 0,
+          qtySupplied: 0,
+          verifiedQty: item.verified_qty
+        })) || [];
+
+        setViewingBatch({
+          id: batchData.batch_id,
+          batchNo: batchData.batch_code,
+          date: batchData.batch_date,
+          mrNo: batchData.mr_code,
+          operation: batchData.operation_name,
+          workCenter: batchData.work_center_name,
+          warehouse: "", // API doesn't return warehouse currently
+          shift: batchData.shift_name,
+          status: statusName as any,
+          inputItems,
+          outputItems
+        });
+
+        const detailMR = mrList.find((mr) => mr.mrNumber === batchData.mr_code);
+        if (detailMR) {
+          setSelectedMRId(detailMR.id);
+          setSelectedMRDetails(detailMR);
+        } else {
+          setSelectedMRId(null);
+          setSelectedMRDetails(null);
+        }
+
+        setBatchFormData({
+          batchNo: batchData.batch_code,
+          date: batchData.batch_date,
+          createdBy: "Current User",
+          mrNo: batchData.mr_code,
+          operation: batchData.operation_name,
+          workCenter: batchData.work_center_name || "",
+          shift: batchData.shift_name,
+          startTime: null,
+          endTime: null,
+          savedBatchId: batchData.batch_id,
+          status: statusName as any,
+          createdType: "SINGLE",
+          inputItems,
+          outputItems
+        });
+
+        if (mode === 'view') {
+          setIsReadOnly(true);
+          setBatchFormMode('view');
+        } else if (mode === 'edit') {
+          const createdLabel = "Batch Created";
+          // Detail API may omit status_name; list row (same id) is authoritative for label
+          const canEdit =
+            statusName === createdLabel ||
+            listRow?.status === createdLabel ||
+            statusId === 1;
+          if (canEdit) {
+            setIsReadOnly(false);
+            setBatchFormMode('edit');
+          } else {
+            setIsViewBatchModalOpen(false);
+            toast({
+              variant: "destructive",
+              title: "Cannot Edit",
+              description: `Batch with status "${statusName ?? listRow?.status ?? "unknown"}" cannot be edited. Only batches with status "${createdLabel}" can be edited.`
+            });
+          }
+        }
+      } else {
+        setIsViewBatchModalOpen(false);
+        toast({
+          variant: "destructive",
+          title: "Error",
+          description: "Failed to load batch details."
+        });
+      }
+    } catch (error) {
+      console.error("Failed to load batch details", error);
+      setIsViewBatchModalOpen(false);
+      toast({
+        variant: "destructive",
+        title: "Error",
+        description: "Failed to load batch details."
+      });
+    } finally {
+      setIsDetailLoading(false);
+      setOpeningBatchId(null);
+    }
+  };
+
+  const handleView = async (id: number) => {
+    if (openingBatchId !== null || isSaving) return;
+    setOpeningBatchId(id);
+    await fetchBatchDetailsAndOpenModal(id, 'view');
+  };
+
+  const handleEdit = async (id: number) => {
+    if (openingBatchId !== null || isSaving) return;
+    setOpeningBatchId(id);
+    await fetchBatchDetailsAndOpenModal(id, 'edit');
   };
 
   const handleBack = () => {
     setLocation("/production/batch-tracking");
   };
 
+  const getQtySuppliedValidationMessage = (item: BatchItem): string => {
+    const selectedMR = selectedMRDetails ?? mrRequests.find((mr) => mr.mrNumber === batchFormData.mrNo);
+    const mrItem = selectedMR?.items.find((i) => i.itemName === item.item);
+    const totalMRQty = Number(mrItem?.requiredQty ?? item.availableQty ?? 0);
+    const suppliedQty = Number(item.qtySupplied || 0);
+
+    if (suppliedQty < totalMRQty) {
+      return "Qty cannot be less than MR quantity";
+    }
+    if (suppliedQty > totalMRQty) {
+      return "Qty cannot be greater than MR quantity";
+    }
+    return "";
+  };
+
+  const hasQtySuppliedValidationErrors = (): boolean => {
+    return batchFormData.inputItems.some((item) => getQtySuppliedValidationMessage(item) !== "");
+  };
+
   const isSaveEnabled = () => {
-    return batchFormData.mrNo && batchFormData.shift && 
-           batchFormData.inputItems.some(item => parseFloat(item.qtySupplied.toString()) > 0);
+    return (
+      selectedMRId != null &&
+      Number.isFinite(selectedMRId) &&
+      selectedMRId > 0 &&
+      Boolean(batchFormData.shift) &&
+      batchFormData.inputItems.some((item) => parseFloat(item.qtySupplied.toString()) > 0)
+    );
   };
 
   const isSubmitEnabled = () => {
-    return batchFormData.mrNo && batchFormData.shift && 
-           batchFormData.inputItems.some(item => parseFloat(item.qtySupplied.toString()) > 0) &&
-           batchFormData.outputItems.some(item => parseFloat(item.qtyProduced.toString()) > 0);
+    if (batchFormMode === "edit") {
+      return batchFormData.outputItems.some((item) => parseFloat(item.qtyProduced.toString()) > 0);
+    }
+
+    return (
+      selectedMRId != null &&
+      Number.isFinite(selectedMRId) &&
+      selectedMRId > 0 &&
+      Boolean(batchFormData.shift) &&
+      batchFormData.inputItems.some((item) => parseFloat(item.qtySupplied.toString()) > 0) &&
+      batchFormData.outputItems.some((item) => parseFloat(item.qtyProduced.toString()) > 0) &&
+      !hasQtySuppliedValidationErrors()
+    );
   };
 
   const canSubmitBulkBatches =
-    Boolean(bulkBatchFormData.mrNo) &&
+    bulkSelectedMRId != null &&
+    Number.isFinite(bulkSelectedMRId) &&
+    bulkSelectedMRId > 0 &&
     Boolean(bulkBatchFormData.shift) &&
-    parseFloat(String(bulkBatchFormData.numberOfBatches || 0)) >= 1 &&
-    !bulkBatchValidationError;
+    parseFloat(String(bulkBatchFormData.numberOfBatches || 0)) >= 1;
 
   // ============================================================================
   // BULK BATCH HANDLERS
   // ============================================================================
 
-  const handleBulkBatchMRSelection = (mrNo: string) => {
-    const selectedMR = mrRequests.find(mr => mr.mrNumber === mrNo);
-    if (!selectedMR) {
-      setBulkBatchFormData({ ...bulkBatchFormData, mrNo, items: [] });
-      setBulkBatchPreviews([]);
-      setBulkBatchValidationError("");
+  const handleBulkBatchMRSelection = (value: string) => {
+    if (!value) {
+      setBulkSelectedMRId(null);
       return;
     }
-
-    if (!selectedMR.items || !Array.isArray(selectedMR.items)) {
-      setBulkBatchFormData({ ...bulkBatchFormData, mrNo, items: [] });
-      setBulkBatchPreviews([]);
-      setBulkBatchValidationError("No items found for selected MR");
+    const id = Number(value);
+    if (!Number.isFinite(id) || id <= 0) {
+      setBulkSelectedMRId(null);
       return;
     }
-
-    const itemsWithAvailableQty = selectedMR.items.map(mrItem => {
-      const usedQty = batchTrackings
-        .filter(batch => batch.mrNo === mrNo)
-        .reduce((sum, batch) => {
-          const inputItem = batch.inputItems?.find(item => item.item === mrItem.itemName);
-          return sum + (inputItem?.qtySupplied || 0);
-        }, 0);
-
-      const availableQty = (mrItem.requiredQty || 0) - usedQty;
-
-      return {
-        itemCode: mrItem.itemCode || '',
-        itemName: mrItem.itemName || '',
-        uom: mrItem.uom || '',
-        totalMRQty: mrItem.requiredQty || 0,
-        availableQty: Math.max(0, availableQty),
-        qtyPerBatch: 0
-      };
-    });
-
-    const updatedFormData = {
-      ...bulkBatchFormData,
-      mrNo,
-      items: itemsWithAvailableQty
-    };
-
-    setBulkBatchFormData(updatedFormData);
-
-    if (parseFloat(updatedFormData.numberOfBatches.toString()) >= 1 && itemsWithAvailableQty.length > 0) {
-      generateBulkBatchPreviews(parseFloat(updatedFormData.numberOfBatches.toString()), itemsWithAvailableQty, selectedMR);
-    }
-  };
-
-  const generateBulkBatchPreviews = (numberOfBatches: number, items: typeof bulkBatchFormData.items, selectedMR: MRRequest) => {
-    if (!selectedMR || !selectedMR.operation) {
-      setBulkBatchValidationError("Invalid MR selected");
-      setBulkBatchPreviews([]);
+    if (!mrRequests.some((mr) => Number(mr.id) === id)) {
+      setBulkSelectedMRId(null);
       return;
     }
-
-    if (!items || items.length === 0) {
-      const currentYear = new Date().getFullYear();
-      const previews = [];
-
-      for (let i = 0; i < numberOfBatches; i++) {
-        const batchNo = `BATCH-${currentYear}-${String(batchTrackings.length + i + 1).padStart(3, '0')}`;
-        const outputMapping = OPERATION_OUTPUT_MAPPINGS[selectedMR.operation];
-        const outputItems = (outputMapping && Array.isArray(outputMapping)) ? outputMapping.map((item, idx) => ({
-          id: idx + 1,
-          item: item.itemName,
-          itemCode: item.itemCode,
-          itemName: item.itemName,
-          uom: item.uom,
-          qtyProduced: 0,
-          qtySupplied: 0
-        })) : [];
-
-        previews.push({
-          batchNo,
-          inputItems: [],
-          outputItems
-        });
-      }
-
-      setBulkBatchPreviews(previews);
-      setActiveBulkBatchTab("batch-1");
-      setBulkBatchValidationError("");
-      return;
-    }
-
-    const nosOrPcsItems = items.filter(
-      item => (item.uom === "NOS" || item.uom === "PCS") && item.availableQty < numberOfBatches
-    );
-
-    if (nosOrPcsItems.length > 0) {
-      setBulkBatchValidationError(
-        `Batch count too high for item: ${nosOrPcsItems.map(i => i.itemName).join(", ")}. Available quantity is less than number of batches.`
-      );
-      setBulkBatchPreviews([]);
-      return;
-    }
-
-    setBulkBatchValidationError("");
-
-    const currentYear = new Date().getFullYear();
-    const previews = [];
-
-    for (let batchIndex = 0; batchIndex < numberOfBatches; batchIndex++) {
-      const batchNo = `BATCH-${currentYear}-${String(batchTrackings.length + batchIndex + 1).padStart(3, '0')}`;
-
-      const inputItems = items.map((item, idx) => {
-        const totalToDivide = item.totalMRQty || 0;
-        const base = Math.floor(totalToDivide / numberOfBatches);
-        const rem = totalToDivide % numberOfBatches;
-        const qtyForThisBatch = base + (batchIndex < rem ? 1 : 0);
-
-        return {
-          id: idx + 1,
-          item: item.itemName,
-          itemCode: item.itemCode,
-          itemName: item.itemName,
-          uom: item.uom,
-          qtySupplied: qtyForThisBatch,
-          qtyProduced: 0,
-          availableQty: item.availableQty
-        };
-      });
-
-      const outputMapping = OPERATION_OUTPUT_MAPPINGS[selectedMR.operation];
-      const outputItems = (outputMapping && Array.isArray(outputMapping)) ? outputMapping.map((item, idx) => ({
-        id: idx + 1,
-        item: item.itemName,
-        itemCode: item.itemCode,
-        itemName: item.itemName,
-        uom: item.uom,
-        qtyProduced: 0,
-        qtySupplied: 0
-      })) : [];
-
-      previews.push({
-        batchNo,
-        inputItems,
-        outputItems
-      });
-    }
-
-    setBulkBatchPreviews(previews);
-    setActiveBulkBatchTab("batch-1");
+    setBulkSelectedMRId(id);
   };
 
   const handleBulkBatchNumberChange = (value: string) => {
-    setBulkBatchFormData(prev => ({
+    setBulkBatchFormData((prev) => ({
       ...prev,
       numberOfBatches: value
     }));
-
-    const numValue = parseFloat(value) || 0;
-    if (numValue >= 1 && bulkBatchFormData.mrNo && bulkBatchFormData.items.length > 0) {
-      const selectedMR = mrRequests.find(mr => mr.mrNumber === bulkBatchFormData.mrNo);
-      if (selectedMR) {
-        generateBulkBatchPreviews(numValue, bulkBatchFormData.items, selectedMR);
-      }
-    } else if (numValue === 0) {
-      setBulkBatchPreviews([]);
-      setBulkBatchValidationError("");
-    }
   };
 
-  const handleSubmitBulkBatches = () => {
-    if (!bulkBatchFormData.mrNo) {
-      toast({ variant: "destructive", title: "Validation Error", description: "MR No is required" });
+  const handleSubmitBulkBatches = async () => {
+    if (isSaving) return;
+    if (bulkSelectedMRId == null || !Number.isFinite(bulkSelectedMRId) || bulkSelectedMRId <= 0) {
+      toast({ variant: "destructive", title: "Validation Error", description: "Select a material request" });
       return;
     }
     if (!bulkBatchFormData.shift) {
@@ -1269,133 +1598,75 @@ export default function BatchTracking() {
       toast({ variant: "destructive", title: "Validation Error", description: "Number of batches must be at least 1" });
       return;
     }
-    if (bulkBatchValidationError) {
-      toast({ variant: "destructive", title: "Validation Error", description: bulkBatchValidationError });
+
+    const shiftRecord = shifts.find((sh) => (sh.shift_name || sh.name || sh.value_name) === bulkBatchFormData.shift);
+    const shift_id = shiftRecord?.id ?? shiftRecord?.shift_id;
+    if (shift_id == null || !Number.isFinite(Number(shift_id))) {
+      toast({ variant: "destructive", title: "Validation Error", description: "Could not resolve shift. Refresh and try again." });
       return;
     }
 
-    const selectedMR = mrRequests.find(mr => mr.mrNumber === bulkBatchFormData.mrNo);
-    if (!selectedMR) return;
+    const noOfBatches = Math.floor(parseFloat(bulkBatchFormData.numberOfBatches.toString()));
+    const material_request_id = bulkSelectedMRId;
 
-    const bulkGroupId = `BULK-${new Date().getFullYear()}-${String(batchTrackings.length + 1).padStart(3, '0')}`;
-    const currentYear = new Date().getFullYear();
-    const numberOfBatches = parseFloat(bulkBatchFormData.numberOfBatches.toString());
-    const previewsToUse = [];
-
-    for (let batchIndex = 0; batchIndex < numberOfBatches; batchIndex++) {
-      const batchNo = `BATCH-${currentYear}-${String(batchTrackings.length + batchIndex + 1).padStart(3, '0')}`;
-
-      const inputItems = bulkBatchFormData.items.map((item, idx) => {
-        const totalToDivide = item.totalMRQty || 0;
-        const base = Math.floor(totalToDivide / numberOfBatches);
-        const rem = totalToDivide % numberOfBatches;
-        const qtyForThisBatch = base + (batchIndex < rem ? 1 : 0);
-
-        return {
-          id: idx + 1,
-          item: item.itemName,
-          itemCode: item.itemCode,
-          itemName: item.itemName,
-          uom: item.uom,
-          qtySupplied: qtyForThisBatch,
-          qtyProduced: 0,
-          availableQty: item.availableQty
-        };
+    try {
+      setIsSaving(true);
+      const res = await productionApi.createBulkBatch({
+        material_request_id,
+        shift_id: Number(shift_id),
+        batch_date: bulkBatchFormData.date,
+        no_of_batches: noOfBatches
       });
 
-      const outputMapping = OPERATION_OUTPUT_MAPPINGS[selectedMR.operation];
-      const outputItems = (outputMapping && Array.isArray(outputMapping)) ? outputMapping.map((item, idx) => ({
-        id: idx + 1,
-        item: item.itemName,
-        itemCode: item.itemCode,
-        itemName: item.itemName,
-        uom: item.uom,
-        qtyProduced: 0,
-        qtySupplied: 0
-      })) : [];
-
-      previewsToUse.push({
-        batchNo,
-        inputItems,
-        outputItems
+      if (res.isSuccessful) {
+        setIsBulkBatchModalOpen(false);
+        toast({
+          variant: "success",
+          title: "Success",
+          description: res.message || "Bulk batches created successfully",
+        });
+        setBulkSelectedMRId(null);
+        setBulkBatchFormData({
+          shift: "",
+          numberOfBatches: 0,
+          date: getCurrentDateForInput()
+        });
+        fetchBatchList();
+      } else {
+        toast({
+          variant: "destructive",
+          title: "Error",
+          description: res.message || "Failed to create bulk batches",
+        });
+      }
+    } catch (error: any) {
+      console.error("Create bulk batch error:", error);
+      toast({
+        variant: "destructive",
+        title: "Error",
+        description: error.message || "An unexpected error occurred",
       });
+    } finally {
+      setIsSaving(false);
     }
-
-    const newBatches: BatchTracking[] = previewsToUse.map((preview, index) => ({
-      id: batchTrackings.length + index + 1,
-      batchNo: preview.batchNo,
-      date: bulkBatchFormData.date,
-      mrNo: bulkBatchFormData.mrNo,
-      shift: bulkBatchFormData.shift as "Morning" | "Night",
-      operation: selectedMR.operation,
-      workCenter: selectedMR.workCenter,
-      warehouse: selectedMR.warehouse,
-      totalInputItems: preview.inputItems.length,
-      totalOutputItems: 0,
-      status: "Batch Created",
-      createdType: "BULK",
-      bulkBatchGroupId: bulkGroupId,
-      startTime: new Date().toISOString(),
-      inputItems: preview.inputItems,
-      outputItems: preview.outputItems,
-      qcRequired: OPERATION_QC_REQUIRED[selectedMR.operation] !== false
-    }));
-
-    newBatches.forEach(batch => addBatchRecord(batch));
-    
-    setBatchTrackings([...mockBatchRecords]);
-    setIsBulkBatchModalOpen(false);
-    toast({
-      variant: "success",
-      title: "Success",
-      description: `${bulkBatchFormData.numberOfBatches} batches created successfully`,
-    });
-
-    setBulkBatchFormData({
-      mrNo: "",
-      shift: "",
-      numberOfBatches: 0,
-      date: getCurrentDateForInput(),
-      items: []
-    });
-    setBulkBatchPreviews([]);
-    setBulkBatchValidationError("");
   };
+
+  const isRowActionBusy = openingBatchId !== null || isSaving || isDetailLoading;
 
   // ============================================================================
   // FILTERING & PAGINATION
   // ============================================================================
 
-  const filteredBatchTrackings = batchTrackings.filter(item => {
-    const matchesSearch = item.batchNo.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      item.mrNo.toLowerCase().includes(searchTerm.toLowerCase());
-    const matchesStatus = statusFilter === "All" || item.status === statusFilter;
-    const matchesOperation = operationFilter === "All" || item.operation === operationFilter;
-    const matchesWorkCenter = workCenterFilter === "All" || item.workCenter === workCenterFilter;
-    const matchesShift = shiftFilter === "All" || item.shift === shiftFilter;
-    
-    let matchesDate = true;
-    if (dateFilter) {
-      const selectedDate = format(dateFilter, "yyyy-MM-dd");
-      matchesDate = item.date === selectedDate;
-    }
-
-    return matchesSearch && matchesStatus && matchesOperation && matchesWorkCenter && matchesShift && matchesDate;
-  });
-
-  // Pagination calculations - slice data for current page
-  const totalPages = Math.ceil(filteredBatchTrackings.length / itemsPerPage);
-  const paginatedData = filteredBatchTrackings.slice(
-    (currentPage - 1) * itemsPerPage,
-    currentPage * itemsPerPage
-  );
+  // Using real data from backend
+  const paginatedData = batchTrackings;
+  const totalPages = Math.ceil(totalRecords / itemsPerPage);
 
   // Auto-adjust page when data changes
   useEffect(() => {
     if (currentPage > totalPages && totalPages > 0) {
       setCurrentPage(totalPages);
     }
-  }, [filteredBatchTrackings.length, currentPage, totalPages]);
+  }, [totalRecords, currentPage, totalPages]);
 
   // Reset to page 1 when filters change
   useEffect(() => {
@@ -1421,7 +1692,7 @@ export default function BatchTracking() {
           <div className="relative">
             <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
             <Input
-              placeholder="Search by Batch No or MR No..."
+              placeholder="Search by Batch Code or MR Code..."
               className="pl-9 h-10"
               value={searchTerm}
               onChange={(e) => {
@@ -1455,7 +1726,7 @@ export default function BatchTracking() {
           <SearchableSelect
             label="Shift"
             value={shiftFilter}
-            options={["All", "Morning", "Night"]}
+            options={["All", ...shifts.map(s => s.shift_name || s.name || s.value_name)]}
             onChange={(value) => {
               setShiftFilter(value);
               setCurrentPage(1);
@@ -1467,7 +1738,7 @@ export default function BatchTracking() {
           <SearchableSelect
             label="Operation"
             value={operationFilter}
-            options={["All", ...OPERATIONS]}
+            options={["All", ...orderedOperations.map(o => o.operation_name || o.name)]}
             onChange={(value) => {
               setOperationFilter(value);
               setCurrentPage(1);
@@ -1479,7 +1750,7 @@ export default function BatchTracking() {
           <SearchableSelect
             label="Status"
             value={statusFilter}
-            options={["All", "Batch Created", "Sent for QC", "Verified QC", "Batch Closed"]}
+            options={["All", ...batchStatuses.map(s => s.status_name || s.name || s.value_name)]}
             onChange={(value) => {
               setStatusFilter(value);
               setCurrentPage(1);
@@ -1488,14 +1759,18 @@ export default function BatchTracking() {
         </div>
 
         <div className="w-full lg:w-auto flex gap-2 mt-4 lg:mt-0">
-          <Button onClick={() => setIsBatchFormModalOpen(true)} className="flex-1 lg:flex-none h-10 whitespace-nowrap px-4">
-            <Plus className="mr-2 h-4 w-4" />
-            Create Batch
-          </Button>
-          <Button onClick={() => setIsBulkBatchModalOpen(true)} className="flex-1 lg:flex-none h-10 whitespace-nowrap px-4">
-            <Plus className="mr-2 h-4 w-4" />
-            Create Bulk Batches
-          </Button>
+          {canCreate(permissionModule) && (
+            <>
+              <Button onClick={handleOpenBatchForm} className="flex-1 lg:flex-none h-10 whitespace-nowrap px-4">
+                <Plus className="mr-2 h-4 w-4" />
+                Create Batch
+              </Button>
+              <Button onClick={handleOpenBulkBatchForm} className="flex-1 lg:flex-none h-10 whitespace-nowrap px-4">
+                <Plus className="mr-2 h-4 w-4" />
+                Create Bulk Batches
+              </Button>
+            </>
+          )}
         </div>
       </div>
 
@@ -1506,9 +1781,9 @@ export default function BatchTracking() {
             <Table>
               <TableHeader>
                 <TableRow className="bg-muted/50 hover:bg-muted/50">
-                  <TableHead className="font-semibold text-xs uppercase tracking-wider">Batch No</TableHead>
+                  <TableHead className="font-semibold text-xs uppercase tracking-wider">Batch Code</TableHead>
                   <TableHead className="font-semibold text-xs uppercase tracking-wider">Date</TableHead>
-                  <TableHead className="font-semibold text-xs uppercase tracking-wider">MR No</TableHead>
+                  <TableHead className="font-semibold text-xs uppercase tracking-wider">MR Code</TableHead>
                   <TableHead className="font-semibold text-xs uppercase tracking-wider">Operation</TableHead>
                   <TableHead className="font-semibold text-xs uppercase tracking-wider">Work Center</TableHead>
                   <TableHead className="font-semibold text-xs uppercase tracking-wider">Shift</TableHead>
@@ -1517,7 +1792,16 @@ export default function BatchTracking() {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {paginatedData.length === 0 ? (
+                {isListLoading ? (
+                  <TableRow>
+                    <TableCell colSpan={8} className="h-32 text-center">
+                      <div className="flex flex-col items-center justify-center gap-3">
+                        <Loader2 className="h-8 w-8 animate-spin text-primary" />
+                        <p className="text-sm text-muted-foreground">Loading...</p>
+                      </div>
+                    </TableCell>
+                  </TableRow>
+                ) : paginatedData.length === 0 ? (
                   <TableRow>
                     <TableCell colSpan={8} className="h-32 text-center text-muted-foreground">
                       No batches found
@@ -1547,10 +1831,12 @@ export default function BatchTracking() {
                         </Badge>
                       </TableCell>
                       <TableCell className="text-center py-4">
-                        <TableActionButtons
-                          onView={() => handleView(batch.id)}
-                          onEdit={batch.status === "Batch Created" ? () => handleEdit(batch.id) : undefined}
-                        />
+                        <div className={cn(isRowActionBusy && "pointer-events-none opacity-50")}>
+                          <TableActionButtons
+                            onView={canView(permissionModule) ? () => handleView(batch.id) : undefined}
+                            onEdit={(batch.status === "Batch Created" && canEdit(permissionModule)) ? () => handleEdit(batch.id) : undefined}
+                          />
+                        </div>
                       </TableCell>
                     </TableRow>
                   ))
@@ -1560,11 +1846,11 @@ export default function BatchTracking() {
           </div>
 
           {/* Pagination - Same position as Materials reference */}
-          {filteredBatchTrackings.length > 0 && (
+          {!isListLoading && totalRecords > 0 && (
             <DataTablePagination
               currentPage={currentPage}
               totalPages={totalPages}
-              totalItems={filteredBatchTrackings.length}
+              totalItems={totalRecords}
               itemsPerPage={itemsPerPage}
               onPageChange={setCurrentPage}
               onItemsPerPageChange={setItemsPerPage}
@@ -1580,12 +1866,15 @@ export default function BatchTracking() {
           setIsViewBatchModalOpen(false);
           setViewingBatch(null);
           setIsReadOnly(false);
+          setSelectedMRId(null);
+          setSelectedMRDetails(null);
           setBatchFormData({
             batchNo: "",
             date: "",
             createdBy: "",
             mrNo: "",
             operation: "",
+            workCenter: "",
             shift: "",
             startTime: null,
             endTime: null,
@@ -1596,214 +1885,300 @@ export default function BatchTracking() {
             outputItems: []
           });
         }
-      }}>
+      }}
+      >
         <DialogContent
-          className="max-w-6xl max-h-[90vh] overflow-y-auto"
+          className="flex h-auto max-h-[85vh] w-[95%] flex-col gap-0 overflow-hidden p-0 sm:max-w-5xl lg:max-w-6xl xl:max-w-7xl"
           onPointerDownOutside={(e) => e.preventDefault()}
         >
-          <DialogHeader>
-            <DialogTitle>
+          <DialogHeader className="shrink-0 space-y-1 border-b p-4 pb-3 sm:px-5 sm:pb-4">
+            <DialogTitle className="text-lg font-bold sm:text-xl">
               {batchFormMode === 'view' ? 'View Batch' : 'Edit Batch'}
             </DialogTitle>
           </DialogHeader>
 
-          <div className="space-y-6">
-            <Card>
-              <CardHeader>
-                <CardTitle>Batch Information</CardTitle>
-              </CardHeader>
-              <CardContent>
-                <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-                  <div>
-                    <Label>Batch No</Label>
-                    <Input value={batchFormData.batchNo} readOnly className="bg-muted" />
-                  </div>
-                  <div>
-                    <Label>Date</Label>
-                    <Input value={formatDate(batchFormData.date)} readOnly className="bg-muted" />
-                  </div>
-                  <div>
-                    <Label>MR No</Label>
-                    <Input value={batchFormData.mrNo} readOnly className="bg-muted" />
-                  </div>
-                  <div>
-                    <Label>Shift</Label>
-                    <Input value={batchFormData.shift} readOnly className="bg-muted" />
-                  </div>
-                </div>
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-4">
-                  <div>
-                    <Label>Operation</Label>
-                    <Input value={batchFormData.operation} readOnly className="bg-muted" />
-                  </div>
-                  <div>
-                    <Label>Work Center</Label>
-                    <Input value={mrRequests.find(mr => mr.mrNumber === batchFormData.mrNo)?.workCenter || ""} readOnly className="bg-muted" />
-                  </div>
-                </div>
-              </CardContent>
-            </Card>
-
-            {viewingBatch?.status === "Verified QC" && viewingBatch.qcStatus === "Verified" && (
-              <Card className="border-green-200 bg-green-50/50">
-                <CardHeader>
-                  <CardTitle className="text-green-700">QC Summary</CardTitle>
-                </CardHeader>
-                <CardContent>
-                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                    <div>
-                      <Label className="text-green-700">QC Status</Label>
-                      <Input value={viewingBatch.qcStatus} readOnly className="bg-white border-green-200" />
+          <div className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto px-4 py-3 sm:px-5 sm:py-4">
+            {isDetailLoading ? (
+              <div className="flex flex-col items-center justify-center gap-3 py-12">
+                <Loader2 className="h-8 w-8 animate-spin text-primary" />
+                <p className="text-sm text-muted-foreground">Loading...</p>
+              </div>
+            ) : (
+              <div className="space-y-5">
+                <Card>
+                  <CardHeader>
+                    <CardTitle>Batch Information</CardTitle>
+                  </CardHeader>
+                  <CardContent>
+                    <div className="grid grid-cols-1 gap-4 md:grid-cols-4">
+                      <div className="min-w-0 space-y-1.5">
+                        <Label>Batch Code</Label>
+                        <Input value={batchFormData.batchNo} readOnly className="h-9 bg-muted" />
+                      </div>
+                      <div className="min-w-0 space-y-1.5">
+                        <Label>Date</Label>
+                        <Input value={formatDate(batchFormData.date)} readOnly className="h-9 bg-muted" />
+                      </div>
+                      <div className="min-w-0 space-y-1.5">
+                        <Label>MR Code</Label>
+                        <Input value={batchFormData.mrNo} readOnly className="h-9 bg-muted" />
+                      </div>
+                      <div className="min-w-0 space-y-1.5">
+                        <Label>Shift</Label>
+                        <Input value={batchFormData.shift} readOnly className="h-9 bg-muted" />
+                      </div>
                     </div>
-                    <div>
-                      <Label className="text-green-700">Verified By</Label>
-                      <Input value={viewingBatch.qcVerifiedBy || ""} readOnly className="bg-white border-green-200" />
+                    <div className="mt-4 grid grid-cols-1 gap-4 md:grid-cols-2">
+                      <div className="min-w-0 space-y-1.5">
+                        <Label>Operation</Label>
+                        <Input value={batchFormData.operation} readOnly className="h-9 bg-muted" />
+                      </div>
+                      <div className="min-w-0 space-y-1.5">
+                        <Label>Work Center</Label>
+                        <Input
+                          value={
+                            batchFormData.workCenter ||
+                            selectedMRDetails?.workCenter ||
+                            ""
+                          }
+                          readOnly
+                          className="h-9 bg-muted"
+                        />
+                      </div>
                     </div>
-                    <div>
-                      <Label className="text-green-700">Verified On</Label>
-                      <Input value={viewingBatch.qcVerifiedOn ? formatDate(viewingBatch.qcVerifiedOn) : ""} readOnly className="bg-white border-green-200" />
-                    </div>
-                  </div>
-                </CardContent>
-              </Card>
-            )}
+                  </CardContent>
+                </Card>
 
-            <Card>
-              <CardHeader>
-                <CardTitle>Input Items (Supplied)</CardTitle>
-              </CardHeader>
-              <CardContent>
-                <div className="rounded-md border">
-                  <Table>
-                    <TableHeader>
-                      <TableRow className="bg-muted/50">
-                        <TableHead>Item</TableHead>
-                        <TableHead>UOM</TableHead>
-                        <TableHead>Total MR Qty</TableHead>
-                        <TableHead className="text-right">Qty Supplied</TableHead>
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {batchFormData.inputItems.length === 0 ? (
-                        <TableRow>
-                          <TableCell colSpan={4} className="text-center py-4 text-muted-foreground">
-                            No input items
-                          </TableCell>
-                        </TableRow>
-                      ) : (
-                        batchFormData.inputItems.map((item) => {
-                          const selectedMR = mrRequests.find(mr => mr.mrNumber === batchFormData.mrNo);
-                          const mrItem = selectedMR?.items.find(i => i.itemName === item.item);
-                          const totalMRQty = mrItem?.requiredQty || item.availableQty;
+                {viewingBatch?.status === "Verified QC" && viewingBatch.qcStatus === "Verified" && (
+                  <Card className="border-green-200 bg-green-50/50">
+                    <CardHeader>
+                      <CardTitle className="text-green-700">QC Summary</CardTitle>
+                    </CardHeader>
+                    <CardContent>
+                      <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
+                        <div className="min-w-0 space-y-1.5">
+                          <Label className="text-green-700">QC Status</Label>
+                          <Input value={viewingBatch.qcStatus} readOnly className="h-9 bg-white border-green-200" />
+                        </div>
+                        <div className="min-w-0 space-y-1.5">
+                          <Label className="text-green-700">Verified By</Label>
+                          <Input value={viewingBatch.qcVerifiedBy || ""} readOnly className="h-9 bg-white border-green-200" />
+                        </div>
+                        <div className="min-w-0 space-y-1.5">
+                          <Label className="text-green-700">Verified On</Label>
+                          <Input value={viewingBatch.qcVerifiedOn ? formatDate(viewingBatch.qcVerifiedOn) : ""} readOnly className="h-9 bg-white border-green-200" />
+                        </div>
+                      </div>
+                    </CardContent>
+                  </Card>
+                )}
 
-                          return (
-                            <TableRow key={item.id}>
-                              <TableCell>{item.item}</TableCell>
-                              <TableCell>{item.uom}</TableCell>
-                              <TableCell>{totalMRQty}</TableCell>
-                              <TableCell className="text-right">
-                                {batchFormData.createdType === "BULK" || isReadOnly ? (
-                                  <span className="font-medium">{item.qtySupplied}</span>
-                                ) : (
-                                  <Input
-                                    type="text"
-                                    inputMode="decimal"
-                                    value={item.qtySupplied}
-                                    onChange={(e) => {
-                                      const val = e.target.value;
-                                      if (val === "" || (/^\d*\.?\d*$/.test(val) && val.replace(".", "").length <= 6)) {
-                                        handleInputQtyChange(item.id, val);
-                                      }
-                                    }}
-                                    className="w-28 text-right"
-                                  />
-                                )}
-                              </TableCell>
-                            </TableRow>
-                          );
-                        })
-                      )}
-                    </TableBody>
-                  </Table>
-                </div>
-              </CardContent>
-            </Card>
-
-            <Card>
-              <CardHeader>
-                <CardTitle>Output Items (Produced)</CardTitle>
-              </CardHeader>
-              <CardContent>
-                <div className="rounded-md border">
-                  <Table>
-                    <TableHeader>
-                      <TableRow className="bg-muted/50">
-                        <TableHead>Item</TableHead>
-                        <TableHead>UOM</TableHead>
-                        <TableHead className="text-right">Qty Produced</TableHead>
-                        {viewingBatch?.status === "Verified QC" && (
-                          <TableHead className="text-right">Verified Qty</TableHead>
+                <div className="grid grid-cols-1 gap-5 lg:grid-cols-2">
+                  <Card className="min-w-0">
+                    <CardHeader>
+                      <CardTitle>Input Items (Supplied)</CardTitle>
+                    </CardHeader>
+                    <CardContent>
+                      <div
+                        className={cn(
+                          "overflow-hidden rounded-md border",
+                          batchFormData.inputItems.length > 6 &&
+                            "max-h-[min(45vh,360px)] overflow-y-auto custom-scrollbar"
                         )}
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {batchFormData.outputItems.length === 0 ? (
-                        <TableRow>
-                          <TableCell colSpan={viewingBatch?.status === "Verified QC" ? 4 : 3} className="text-center py-4 text-muted-foreground">
-                            No output items
-                          </TableCell>
-                        </TableRow>
-                      ) : (
-                        batchFormData.outputItems.map((item) => (
-                          <TableRow key={item.id}>
-                            <TableCell>{item.item}</TableCell>
-                            <TableCell>{item.uom}</TableCell>
-                            <TableCell className="text-right">
-                              {isReadOnly ? (
-                                <span className="font-medium">{item.qtyProduced}</span>
-                              ) : (
-                                <Input
-                                  type="text"
-                                  inputMode="decimal"
-                                  value={item.qtyProduced}
-                                  onChange={(e) => {
-                                    const val = e.target.value;
-                                    if (val === "" || (/^\d*\.?\d*$/.test(val) && val.replace(".", "").length <= 6)) {
-                                      handleOutputQtyChange(item.id, val);
-                                    }
-                                  }}
-                                  className="w-28 text-right"
-                                />
-                              )}
-                            </TableCell>
-                            {viewingBatch?.status === "Verified QC" && (
-                              <TableCell className="text-right">
-                                <span className="font-medium text-green-700">{item.verifiedQty || 0}</span>
-                              </TableCell>
+                      >
+                        <Table className="w-full table-fixed">
+                          <colgroup>
+                            <col className="w-[64%]" />
+                            <col className="w-[11%]" />
+                            <col className="w-[12.5%]" />
+                            <col className="w-[12.5%]" />
+                          </colgroup>
+                          <TableHeader>
+                            <TableRow className="bg-muted/50">
+                              <TableHead className="py-2 pl-3 text-[10px] font-bold uppercase tracking-wider">
+                                Item
+                              </TableHead>
+                              <TableHead className="py-2 pr-4 text-[10px] font-bold uppercase tracking-wider whitespace-nowrap">
+                                UOM
+                              </TableHead>
+                              <TableHead className="py-2 pl-2 pr-2 text-right text-[10px] font-bold uppercase tracking-wider leading-tight whitespace-nowrap">
+                                <span className="block">Total MR</span>
+                                <span className="block">Qty</span>
+                              </TableHead>
+                              <TableHead className="py-2 pr-3 text-right text-[10px] font-bold uppercase tracking-wider leading-tight whitespace-nowrap">
+                                <span className="block">Qty</span>
+                                <span className="block">Supplied</span>
+                              </TableHead>
+                            </TableRow>
+                          </TableHeader>
+                          <TableBody>
+                            {batchFormData.inputItems.length === 0 ? (
+                              <TableRow>
+                                <TableCell colSpan={4} className="py-4 text-center text-xs text-muted-foreground">
+                                  No input items
+                                </TableCell>
+                              </TableRow>
+                            ) : (
+                              batchFormData.inputItems.map((item) => {
+                                const selectedMR = selectedMRDetails ?? mrRequests.find((mr) => mr.mrNumber === batchFormData.mrNo);
+                                const mrItem = selectedMR?.items.find((i) => i.itemName === item.item);
+                                const totalMRQty = mrItem?.requiredQty || item.availableQty;
+
+                                return (
+                                  <TableRow key={item.id}>
+                                    <TableCell className="align-top pl-3">
+                                      <span className="whitespace-normal text-xs leading-snug wrap-break-word">
+                                        {item.item}
+                                      </span>
+                                    </TableCell>
+                                    <TableCell className="whitespace-nowrap pr-4 text-[11px]">
+                                      {item.uom}
+                                    </TableCell>
+                                    <TableCell className="whitespace-nowrap pl-2 pr-2 text-right text-xs tabular-nums">
+                                      {totalMRQty}
+                                    </TableCell>
+                                    <TableCell className="pr-3 text-right">
+                                      {batchFormData.createdType === "BULK" || isReadOnly ? (
+                                        <span className="text-xs font-medium">{item.qtySupplied}</span>
+                                      ) : (
+                                        <Input
+                                          type="text"
+                                          inputMode="decimal"
+                                          value={item.qtySupplied}
+                                          onChange={(e) => {
+                                            const val = e.target.value;
+                                            if (val === "" || (/^\d*\.?\d*$/.test(val) && val.replace(".", "").length <= 6)) {
+                                              handleInputQtyChange(item.id, val);
+                                            }
+                                          }}
+                                          className="h-8 w-24 px-2 text-right text-xs"
+                                        />
+                                      )}
+                                    </TableCell>
+                                  </TableRow>
+                                );
+                              })
                             )}
-                          </TableRow>
-                        ))
-                      )}
-                    </TableBody>
-                  </Table>
+                          </TableBody>
+                        </Table>
+                      </div>
+                    </CardContent>
+                  </Card>
+
+                  <Card className="min-w-0">
+                    <CardHeader>
+                      <CardTitle>Output Items (Produced)</CardTitle>
+                    </CardHeader>
+                    <CardContent>
+                      <div
+                        className={cn(
+                          "overflow-hidden rounded-md border",
+                          batchFormData.outputItems.length > 6 &&
+                            "max-h-[min(45vh,360px)] overflow-y-auto custom-scrollbar"
+                        )}
+                      >
+                        <Table className="w-full table-fixed">
+                          <colgroup>
+                            <col className={viewingBatch?.status === "Verified QC" ? "w-[58%]" : "w-[62%]"} />
+                            <col className="w-[8%]" />
+                            {viewingBatch?.status === "Verified QC" ? (
+                              <>
+                                <col className="w-[17%]" />
+                                <col className="w-[17%]" />
+                              </>
+                            ) : (
+                              <col className="w-[30%]" />
+                            )}
+                          </colgroup>
+                          <TableHeader>
+                            <TableRow className="bg-muted/50">
+                              <TableHead className="py-2 text-[10px] font-bold uppercase tracking-wider">
+                                Item
+                              </TableHead>
+                              <TableHead className="py-2 text-[10px] font-bold uppercase tracking-wider">
+                                UOM
+                              </TableHead>
+                              <TableHead className="py-2 text-right text-[10px] font-bold uppercase tracking-wider">
+                                Qty Produced
+                              </TableHead>
+                              {viewingBatch?.status === "Verified QC" && (
+                                <TableHead className="py-2 text-right text-[10px] font-bold uppercase tracking-wider">
+                                  Verified Qty
+                                </TableHead>
+                              )}
+                            </TableRow>
+                          </TableHeader>
+                          <TableBody>
+                            {batchFormData.outputItems.length === 0 ? (
+                              <TableRow>
+                                <TableCell
+                                  colSpan={viewingBatch?.status === "Verified QC" ? 4 : 3}
+                                  className="py-4 text-center text-xs text-muted-foreground"
+                                >
+                                  No output items
+                                </TableCell>
+                              </TableRow>
+                            ) : (
+                              batchFormData.outputItems.map((item) => (
+                                <TableRow key={item.id}>
+                                  <TableCell className="align-top">
+                                    <span className="whitespace-normal text-xs leading-snug wrap-break-word">
+                                      {item.item}
+                                    </span>
+                                  </TableCell>
+                                  <TableCell className="whitespace-nowrap text-xs">
+                                    {item.uom}
+                                  </TableCell>
+                                  <TableCell className="text-right text-xs">
+                                    {isReadOnly ? (
+                                      <span className="font-medium">{item.qtyProduced}</span>
+                                    ) : (
+                                      <Input
+                                        type="text"
+                                        inputMode="decimal"
+                                        value={item.qtyProduced}
+                                        onChange={(e) => {
+                                          const val = e.target.value;
+                                          if (val === "" || (/^\d*\.?\d*$/.test(val) && val.replace(".", "").length <= 6)) {
+                                            handleOutputQtyChange(item.id, val);
+                                          }
+                                        }}
+                                        className="h-8 w-24 px-2 text-right text-xs"
+                                      />
+                                    )}
+                                  </TableCell>
+                                  {viewingBatch?.status === "Verified QC" && (
+                                    <TableCell className="text-right text-xs">
+                                      <span className="font-medium text-green-700">{item.verifiedQty || 0}</span>
+                                    </TableCell>
+                                  )}
+                                </TableRow>
+                              ))
+                            )}
+                          </TableBody>
+                        </Table>
+                      </div>
+                    </CardContent>
+                  </Card>
                 </div>
-              </CardContent>
-            </Card>
+              </div>
+            )}
           </div>
 
-          <DialogFooter>
+          <DialogFooter className="shrink-0 gap-2 border-t bg-muted/20 p-4 sm:flex-row sm:justify-end sm:p-5">
             {isReadOnly ? (
-              <Button variant="outline" onClick={() => setIsViewBatchModalOpen(false)}>
+              <Button variant="outline" onClick={() => setIsViewBatchModalOpen(false)} disabled={isDetailLoading}>
                 Close
               </Button>
             ) : (
               <div className="flex justify-end gap-3 w-full">
-                <Button variant="outline" onClick={() => setIsViewBatchModalOpen(false)}>
+                <Button variant="outline" onClick={() => setIsViewBatchModalOpen(false)} disabled={isDetailLoading || isSaving || isBatchSubmitInProgress}>
                   Cancel
                 </Button>
                 <Button
                   onClick={handleBatchSubmit}
-                  disabled={!isSubmitEnabled()}
+                  loading={isBatchSubmitInProgress || isSaving}
+                  disabled={!isSubmitEnabled() || isDetailLoading || isBatchSubmitInProgress || isSaving}
                   className={
                     isSubmitEnabled()
                       ? "bg-blue-600 text-white hover:bg-blue-600/90 border-blue-600"
@@ -1822,21 +2197,7 @@ export default function BatchTracking() {
       <Dialog open={isBatchFormModalOpen} onOpenChange={(open) => {
         if (!open) {
           setIsBatchFormModalOpen(false);
-          setBatchFormData({
-            batchNo: `BATCH-${new Date().getFullYear()}-${String(batchTrackings.length + 1).padStart(3, '0')}`,
-            date: getCurrentDateForInput(),
-            createdBy: "Current User",
-            mrNo: "",
-            operation: "",
-            shift: "",
-            startTime: null,
-            endTime: null,
-            savedBatchId: null,
-            status: "Batch Created",
-            createdType: "SINGLE",
-            inputItems: [],
-            outputItems: [],
-          });
+        resetCreateBatchForm();
         }
       }}>
         <DialogContent
@@ -1847,6 +2208,12 @@ export default function BatchTracking() {
             <DialogTitle>Create Batch</DialogTitle>
           </DialogHeader>
 
+          {isFormOpening ? (
+            <div className="flex flex-col items-center justify-center py-20 gap-3">
+              <Loader2 className="h-8 w-8 animate-spin text-primary" />
+              <p className="text-sm text-muted-foreground">Loading...</p>
+            </div>
+          ) : (
           <div className="space-y-6">
             <Card>
               <CardHeader>
@@ -1866,19 +2233,30 @@ export default function BatchTracking() {
                   <SharedSearchableSelect
                     label="Shift"
                     value={batchFormData.shift}
-                    options={SHIFT_OPTIONS}
-                    onChange={(val) =>
-                      setBatchFormData({ ...batchFormData, shift: val as "Morning" | "Night" })
-                    }
+                    options={shifts.map(s => s.shift_name || s.name || s.value_name)}
+                    onChange={(val) => {
+                      const shiftRecord = shifts.find((sh) => (sh.shift_name || sh.name || sh.value_name) === val);
+                      const shift_id = shiftRecord?.id ?? shiftRecord?.shift_id;
+                      setBatchFormData({ ...batchFormData, shift: val, mrNo: "" });
+                      setSelectedMRId(null);
+                      setSelectedMRDetails(null);
+                      if (shift_id) {
+                        void fetchMRRequestsForDropdown(shift_id);
+                      } else {
+                        setMrRequests([]);
+                      }
+                    }}
                     required
                     className="h-9 min-h-9"
                   />
-                  <SearchableSelect
-                    label="MR No"
-                    value={batchFormData.mrNo}
-                    options={mrRequests.map((mr) => mr.mrNumber)}
+                  <SharedSearchableSelect
+                    label="MR Code"
+                    value={selectedMRId != null ? String(selectedMRId) : ""}
+                    options={mrRequests.map((mr) => ({ label: mr.mrNumber, value: String(mr.id) }))}
                     onChange={handleBatchMRSelection}
+                    disabled={!batchFormData.shift}
                     required
+                    className="h-9 min-h-9"
                   />
                 </div>
               </CardContent>
@@ -1909,7 +2287,7 @@ export default function BatchTracking() {
                           </TableRow>
                         ) : (
                           batchFormData.inputItems.map((item) => {
-                            const selectedMR = mrRequests.find(mr => mr.mrNumber === batchFormData.mrNo);
+                            const selectedMR = selectedMRDetails ?? mrRequests.find(mr => mr.mrNumber === batchFormData.mrNo);
                             const mrItem = selectedMR?.items.find(i => i.itemName === item.item);
                             const totalMRQty = mrItem?.requiredQty || item.availableQty;
 
@@ -1933,6 +2311,11 @@ export default function BatchTracking() {
                                     }}
                                     className="w-24 text-right"
                                   />
+                                  {getQtySuppliedValidationMessage(item) && (
+                                    <p className="mt-1 text-[11px] text-destructive text-left">
+                                      {getQtySuppliedValidationMessage(item)}
+                                    </p>
+                                  )}
                                 </TableCell>
                               </TableRow>
                             );
@@ -1994,15 +2377,17 @@ export default function BatchTracking() {
               </Card>
             </div>
           </div>
+          )}
 
           <DialogFooter className="gap-2">
-            <Button variant="outline" onClick={() => setIsBatchFormModalOpen(false)}>
+            <Button variant="outline" onClick={() => setIsBatchFormModalOpen(false)} disabled={isFormOpening || isSaving || isBatchSubmitInProgress}>
               Cancel
             </Button>
             <Button
               variant="outline"
               onClick={handleBatchSave}
-              disabled={!isSaveEnabled()}
+              loading={isSaving}
+              disabled={!isSaveEnabled() || isFormOpening || isSaving || isBatchSubmitInProgress}
               className={
                 isSaveEnabled()
                   ? ""
@@ -2013,9 +2398,10 @@ export default function BatchTracking() {
             </Button>
             <Button
               onClick={() => setIsBatchSubmitConfirmOpen(true)}
-              disabled={!isSubmitEnabled()}
+              loading={isBatchSubmitInProgress}
+              disabled={!isSubmitEnabled() || isFormOpening || isSaving || isBatchSubmitInProgress}
               className={
-                isSubmitEnabled()
+                isSubmitEnabled() && !isBatchSubmitInProgress
                   ? "bg-blue-600 text-white hover:bg-blue-600/90 border-blue-600"
                   : "bg-muted text-muted-foreground border-muted hover:bg-muted disabled:!opacity-100"
               }
@@ -2038,10 +2424,11 @@ export default function BatchTracking() {
           <AlertDialogFooter>
             <AlertDialogCancel>Cancel</AlertDialogCancel>
             <AlertDialogAction
-              onClick={() => {
+              disabled={isBatchSubmitInProgress}
+              onClick={async () => {
+                if (isBatchSubmitInProgress) return;
                 setIsBatchSubmitConfirmOpen(false);
-                handleBatchSubmit();
-                setIsBatchFormModalOpen(false);
+                await handleBatchSubmit();
               }}
             >
               Submit / Send for QC
@@ -2054,16 +2441,12 @@ export default function BatchTracking() {
       <Dialog open={isBulkBatchModalOpen} onOpenChange={(open) => {
         if (!open) {
           setIsBulkBatchModalOpen(false);
+          setBulkSelectedMRId(null);
           setBulkBatchFormData({
-            mrNo: "",
             shift: "",
             numberOfBatches: 0,
-            date: getCurrentDateForInput(),
-            items: []
+            date: getCurrentDateForInput()
           });
-          setBulkBatchPreviews([]);
-          setBulkBatchValidationError("");
-          setActiveBulkBatchTab("batch-1");
         }
       }}>
         <DialogContent
@@ -2074,6 +2457,12 @@ export default function BatchTracking() {
             <DialogTitle>Create Bulk Batches</DialogTitle>
           </DialogHeader>
 
+          {isFormOpening ? (
+            <div className="flex flex-col items-center justify-center py-20 gap-3">
+              <Loader2 className="h-8 w-8 animate-spin text-primary" />
+              <p className="text-sm text-muted-foreground">Loading...</p>
+            </div>
+          ) : (
           <div className="space-y-6">
             <Card>
               <CardHeader>
@@ -2081,24 +2470,34 @@ export default function BatchTracking() {
               </CardHeader>
               <CardContent>
                 <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-                  <SearchableSelect
-                    label="MR No"
-                    value={bulkBatchFormData.mrNo}
-                    options={mrRequests.map((mr) => mr.mrNumber)}
-                    onChange={handleBulkBatchMRSelection}
-                    required
-                  />
-
                   <SharedSearchableSelect
                     label="Shift"
                     value={bulkBatchFormData.shift}
-                    options={SHIFT_OPTIONS}
-                    onChange={(val) =>
-                      setBulkBatchFormData({
-                        ...bulkBatchFormData,
-                        shift: val as "Morning" | "Night",
-                      })
-                    }
+                    options={shifts.map((s) => s.shift_name || s.name || s.value_name)}
+                    onChange={(val) => {
+                      const shiftRecord = shifts.find((sh) => (sh.shift_name || sh.name || sh.value_name) === val);
+                      const shift_id = shiftRecord?.id ?? shiftRecord?.shift_id;
+                      setBulkBatchFormData((prev) => ({
+                        ...prev,
+                        shift: val,
+                        mrNo: ""
+                      }));
+                      setBulkSelectedMRId(null);
+                      if (shift_id) {
+                        void fetchMRRequestsForDropdown(shift_id);
+                      } else {
+                        setMrRequests([]);
+                      }
+                    }}
+                    required
+                    className="h-9 min-h-9"
+                  />
+                  <SharedSearchableSelect
+                    label="MR Code"
+                    value={bulkSelectedMRId != null ? String(bulkSelectedMRId) : ""}
+                    options={mrRequests.map((mr) => ({ label: mr.mrNumber, value: String(mr.id) }))}
+                    onChange={handleBulkBatchMRSelection}
+                    disabled={!bulkBatchFormData.shift}
                     required
                     className="h-9 min-h-9"
                   />
@@ -2131,67 +2530,17 @@ export default function BatchTracking() {
                 </div>
               </CardContent>
             </Card>
-
-            {bulkBatchFormData.mrNo && (
-              <Card>
-                <CardHeader>
-                  <CardTitle>Material Distribution</CardTitle>
-                </CardHeader>
-                <CardContent>
-                  {bulkBatchFormData.items.length === 0 ? (
-                    <div className="text-center py-8 text-muted-foreground">
-                      No items found for selected MR
-                    </div>
-                  ) : bulkBatchFormData.items.every(item => item.availableQty === 0) ? (
-                    <div className="text-center py-8 text-destructive">
-                      No available quantity. All material has been used in previous batches.
-                    </div>
-                  ) : (
-                    <div className="rounded-md border">
-                      <Table>
-                        <TableHeader>
-                          <TableRow className="bg-muted/50">
-                            <TableHead>Item Name</TableHead>
-                            <TableHead>UOM</TableHead>
-                            <TableHead className="text-right">Total MR Qty</TableHead>
-                          </TableRow>
-                        </TableHeader>
-                        <TableBody>
-                          {bulkBatchFormData.items.map((item, idx) => (
-                            <TableRow key={idx}>
-                              <TableCell>{item.itemName}</TableCell>
-                              <TableCell>{item.uom}</TableCell>
-                              <TableCell className="text-right font-medium">
-                                {item.totalMRQty || 0}
-                              </TableCell>
-                            </TableRow>
-                          ))}
-                        </TableBody>
-                      </Table>
-                    </div>
-                  )}
-                </CardContent>
-              </Card>
-            )}
-
-            {bulkBatchValidationError && (
-              <Card className="border-destructive">
-                <CardContent className="pt-6">
-                  <div className="text-center py-4 text-destructive font-medium">
-                    {bulkBatchValidationError}
-                  </div>
-                </CardContent>
-              </Card>
-            )}
           </div>
+          )}
 
           <DialogFooter className="gap-2">
-            <Button variant="outline" onClick={() => setIsBulkBatchModalOpen(false)}>
+            <Button variant="outline" onClick={() => setIsBulkBatchModalOpen(false)} disabled={isFormOpening || isSaving}>
               Cancel
             </Button>
             <Button
               onClick={handleSubmitBulkBatches}
-              disabled={!canSubmitBulkBatches}
+              loading={isSaving}
+              disabled={!canSubmitBulkBatches || isFormOpening || isSaving}
               className={
                 canSubmitBulkBatches
                   ? "bg-blue-600 text-white hover:bg-blue-600/90 border-blue-600"

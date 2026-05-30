@@ -1,6 +1,7 @@
-import React, { useState } from "react";
-import { format, addMonths, subMonths, isSameMonth, isValid, parse, getYear, getMonth, setMonth, setYear, startOfMonth, endOfMonth, isBefore, isAfter } from "date-fns";
-import { Calendar as CalendarIcon, Plus, Search, Edit, ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight, Trash2, ChevronsUpDown, Check } from "lucide-react";
+import React, { useEffect, useState } from "react";
+import { useDebounce } from "@/hooks/useDebounce";
+import { format, getYear, getMonth, startOfMonth, endOfMonth } from "date-fns";
+import { Calendar as CalendarIcon, Plus, Search, Edit, ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight, Trash2, ChevronsUpDown, Check, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -59,18 +60,41 @@ import {
 import { Calendar } from "@/components/ui/calendar";
 import { useToast } from "@/hooks/use-toast";
 import { cn } from "@/lib/utils";
+import { useHasPermission } from "@/hooks/usePermissions";
+import Unauthorized from "@/pages/Unauthorized";
 import { TableActionButtons } from "@/components/shared/TableActionButtons";
 import { Eye, Pencil } from "lucide-react";
-import { PayPeriod, mockPayPeriods } from "@/lib/payrollSharedData";
+import { PayPeriod } from "@/lib/payrollSharedData";
+import { commonApi, payPeriodApi } from "@/lib/api";
 
 // Shared types and mock data are imported from @/lib/payrollSharedData
 
+/** Green styling for successful create / update / delete; use `variant: "destructive"` for validation & errors. */
+const crudSuccessToast = {
+    className:
+        "border-green-600 bg-green-50 text-green-950 shadow-md dark:border-green-700 dark:bg-green-950 dark:text-green-50",
+};
+
+const savePrimaryDisabledClass =
+    "disabled:bg-muted disabled:text-muted-foreground disabled:border-border disabled:opacity-100 disabled:shadow-none disabled:hover:bg-muted";
+
 export default function PayPeriodPage() {
+    const { isMenuVisible, canCreate, canEdit, canDelete } = useHasPermission();
+    const permissionModule = "HR_Setup:Pay Period";
+
+    if (!isMenuVisible(permissionModule)) {
+        return <Unauthorized />;
+    }
+
     const { toast } = useToast();
+    type PayPeriodStatusOption = { id: number; name: string };
 
     // State
-    const [periods, setPeriods] = useState<PayPeriod[]>(mockPayPeriods);
+    const [periods, setPeriods] = useState<PayPeriod[]>([]);
+    const [payPeriodStatuses, setPayPeriodStatuses] = useState<PayPeriodStatusOption[]>([]);
+    const [totalItems, setTotalItems] = useState(0);
     const [searchQuery, setSearchQuery] = useState("");
+    const debouncedSearchQuery = useDebounce(searchQuery, 500);
     const [statusFilter, setStatusFilter] = useState("All");
     const [isCreateOpen, setIsCreateOpen] = useState(false);
     const [editingId, setEditingId] = useState<string | null>(null);
@@ -80,18 +104,100 @@ export default function PayPeriodPage() {
     const [currentPage, setCurrentPage] = useState(1);
     const [isDeleteOpen, setIsDeleteOpen] = useState(false);
     const [itemsPerPage, setItemsPerPage] = useState(10);
+    const [isListLoading, setIsListLoading] = useState(false);
+    const [isSubmitting, setIsSubmitting] = useState(false);
 
     // New Period Form State
     const [selectedMonth, setSelectedMonth] = useState<string>("");
     const [selectedYear, setSelectedYear] = useState<string>("");
     const [startDate, setStartDate] = useState<Date | undefined>(undefined);
     const [endDate, setEndDate] = useState<Date | undefined>(undefined);
-    const [selectedStatus, setSelectedStatus] = useState<PayPeriod["status"]>("Open");
+    const [selectedStatus, setSelectedStatus] = useState<PayPeriod["status"]>("Draft");
     const [notes, setNotes] = useState("");
     const [formErrors, setFormErrors] = useState<{ [key: string]: string }>({});
 
     // ⚠️ NEW: Track original period when editing (to detect status-only changes)
     const [originalPeriod, setOriginalPeriod] = useState<PayPeriod | null>(null);
+
+    const normalizeStatusName = (raw: string): PayPeriod["status"] => {
+        // Return status exactly as received from API
+        return (raw || "Open") as PayPeriod["status"];
+    };
+
+    const isReadOnlyStatus = (status?: PayPeriod["status"]) =>
+        status === "Paid";
+    const fetchPayPeriodStatuses = async () => {
+        try {
+            const res = await commonApi.getPayPeriodStatuses(1);
+            if (res?.isSuccessful) {
+                const records = Array.isArray(res?.data?.records) ? res.data.records : [];
+                setPayPeriodStatuses(records.map((s: any) => ({
+                    id: Number(s.id),
+                    name: String(s.name || ""),
+                })));
+            }
+        } catch (error: any) {
+            console.error("Error fetching pay period statuses:", error);
+        }
+    };
+
+    const fetchPayPeriods = async () => {
+        setIsListLoading(true);
+        try {
+            const selectedStatusId =
+                statusFilter === "All"
+                    ? undefined
+                    : payPeriodStatuses.find((s) => s.name === statusFilter)?.id;
+
+            const res = await payPeriodApi.getList({
+                page: currentPage,
+                limit: itemsPerPage,
+                search_text: debouncedSearchQuery || undefined,
+                status_id: selectedStatusId,
+            });
+
+            if (res?.isSuccessful) {
+                const records = Array.isArray(res?.data?.records) ? res.data.records : [];
+                const mapped: PayPeriod[] = records.map((row: any) => {
+                    const monthIndex = Math.max(0, Number(row.period_month) - 1);
+                    const year = Number(row.period_year);
+                    return {
+                        id: String(row.id),
+                        periodName: row.period || format(new Date(year, monthIndex, 1), "MMM-yyyy"),
+                        month: monthIndex,
+                        year,
+                        startDate: String(row.start_date),
+                        endDate: String(row.end_date),
+                        status: normalizeStatusName(String(row.status_name || "")),
+                        notes: row.additional_notes || "",
+                    };
+                });
+                setPeriods(mapped);
+                setTotalItems(Number(res?.data?.pagination?.totalCount || 0));
+            }
+        } catch (error: any) {
+            console.error("Error fetching pay periods:", error);
+            toast({
+                variant: "destructive",
+                title: "Error",
+                description: error.message || "Failed to fetch pay periods",
+            });
+        } finally {
+            setIsListLoading(false);
+        }
+    };
+
+    useEffect(() => {
+        fetchPayPeriodStatuses();
+    }, []);
+
+    useEffect(() => {
+        fetchPayPeriods();
+    }, [currentPage, itemsPerPage, debouncedSearchQuery, statusFilter, payPeriodStatuses.length]);
+
+    useEffect(() => {
+        setCurrentPage(1);
+    }, [debouncedSearchQuery, statusFilter]);
 
     // Derived Values
     const getPeriodName = (month: number, year: number) => {
@@ -128,7 +234,7 @@ export default function PayPeriodPage() {
         setSelectedYear("");
         setStartDate(undefined);
         setEndDate(undefined);
-        setSelectedStatus("Open");
+        setSelectedStatus("Draft");
         setNotes("");
         setFormErrors({});
         setEditingId(null);
@@ -137,7 +243,6 @@ export default function PayPeriodPage() {
 
     const validateForm = (): boolean => {
         const errors: { [key: string]: string } = {};
-        const today = new Date();
 
         // ============================================================================
         // ⚠️ SPECIAL CASE: Status-Only Change (Skip Date Validations)
@@ -216,109 +321,113 @@ export default function PayPeriodPage() {
             errors.period = "The selected date range overlaps with an existing pay period.";
         }
 
-        // E) Sequential rule
-        // Check if the previous month exists. 
-        // Find previous month of the new period
-        const prevMonthDate = subMonths(newPeriodDate, 1);
-        const prevMonthExists = periods.some(p => p.month === prevMonthDate.getMonth() && p.year === prevMonthDate.getFullYear());
-
-        // Exception: If no periods exist at all, allow any start (or maybe enforce starting current/next?) 
-        // Usually systems allow starting fresh. Let's assume if there are periods, we check sequence.
-        if (periods.length > 0 && !prevMonthExists) {
-            // Double check if we are creating a past period that fills a gap? 
-            // User requirement: "If user creates a future month, ensure previous month exists"
-            // This implies no gaps forward.
-
-            // Find the latest period in the list
-            const sortedPeriods = [...periods].sort((a, b) => {
-                const dateA = new Date(a.startDate);
-                const dateB = new Date(b.startDate);
-                return dateB.getTime() - dateA.getTime();
-            });
-            const latestPeriod = sortedPeriods[0];
-            const latestPeriodDate = new Date(latestPeriod.year, latestPeriod.month, 1);
-
-            if (isAfter(newPeriodDate, addMonths(latestPeriodDate, 1))) {
-                errors.period = `Cannot create ${format(newPeriodDate, "MMM-yyyy")} because ${format(addMonths(latestPeriodDate, 1), "MMM-yyyy")} is missing.`;
-            }
-        }
-
-        // F) Future restriction (simple rule): Can create only up to next month
-        const nextMonth = addMonths(today, 1);
-        const maxAllowedDate = endOfMonth(nextMonth);
-
-        // Allow current month and next month. Block anything after next month.
-        // Actually "Can create only up to next month" often means "Current + 1". 
-        // Example: Today Feb. Allow Feb & Mar. Block Apr.
-        if (isAfter(newPeriodDate, maxAllowedDate)) {
-            errors.period = "Cannot create pay periods further than next month.";
-        }
-
         setFormErrors(errors);
         return Object.keys(errors).length === 0;
     };
 
-    const handleCreateSubmit = () => {
+    const handleCreateSubmit = async () => {
         if (validateForm()) {
             const month = parseInt(selectedMonth);
             const year = parseInt(selectedYear);
             const periodName = format(new Date(year, month, 1), "MMM-yyyy");
+            const statusId = payPeriodStatuses.find((s) => s.name === selectedStatus)?.id;
+            if (!statusId) {
+                toast({
+                    variant: "destructive",
+                    title: "Validation Error",
+                    description: "Please select a valid status.",
+                });
+                return;
+            }
 
+            setIsSubmitting(true);
             if (editingId) {
-                // Update existing
-                setPeriods(prev => prev.map(p => p.id === editingId ? {
-                    ...p,
-                    periodName,
-                    month,
-                    year,
-                    startDate: format(startDate!, "yyyy-MM-dd"),
-                    endDate: format(endDate!, "yyyy-MM-dd"),
-                    status: selectedStatus,
-                    notes: notes
-                } : p));
+                if (isReadOnlyStatus(originalPeriod?.status)) {
+                    toast({
+                        variant: "destructive",
+                        title: "Error",
+                        description: `${originalPeriod?.status} pay period cannot be updated.`,
+                    });
+                    setIsSubmitting(false);
+                    return;
+                }
+                try {
+                    const res = await payPeriodApi.update(Number(editingId), {
+                        period_month: month + 1,
+                        period_year: year,
+                        start_date: format(startDate!, "yyyy-MM-dd"),
+                        end_date: format(endDate!, "yyyy-MM-dd"),
+                        status_id: statusId,
+                        additional_notes: notes || "",
+                    });
 
-                toast({
-                    title: "Success",
-                    description: "Pay Period updated successfully.",
-                    className: "bg-green-50 border-green-200 text-green-900",
-                });
+                    if (!res?.isSuccessful) {
+                        toast({
+                            variant: "destructive",
+                            title: "Error",
+                            description: res?.message || "Failed to update pay period.",
+                        });
+                        return;
+                    }
+
+                    toast({
+                        ...crudSuccessToast,
+                        title: "Success",
+                        description: res?.message || "Pay Period updated successfully.",
+                    });
+
+                    await fetchPayPeriods();
+                } catch (error: any) {
+                    toast({
+                        variant: "destructive",
+                        title: "Error",
+                        description: error.message || "Failed to update pay period.",
+                    });
+                    return;
+                }
             } else {
-                // Create new
-                const newPeriod: PayPeriod = {
-                    id: Math.random().toString(36).substr(2, 9),
-                    periodName,
-                    month,
-                    year,
-                    startDate: format(startDate!, "yyyy-MM-dd"),
-                    endDate: format(endDate!, "yyyy-MM-dd"),
-                    status: selectedStatus,
-                    notes: notes
-                };
+                try {
+                    const res = await payPeriodApi.create({
+                        period_month: month + 1,
+                        period_year: year,
+                        start_date: format(startDate!, "yyyy-MM-dd"),
+                        end_date: format(endDate!, "yyyy-MM-dd"),
+                        status_id: statusId,
+                        additional_notes: notes || "",
+                    });
 
-                setPeriods(prev => [newPeriod, ...prev].sort((a, b) => {
-                    const dateA = new Date(a.startDate);
-                    const dateB = new Date(b.startDate);
-                    return dateB.getTime() - dateA.getTime();
-                }));
+                    if (!res?.isSuccessful) {
+                        toast({
+                            variant: "destructive",
+                            title: "Error",
+                            description: res?.message || "Failed to create pay period.",
+                        });
+                        return;
+                    }
 
-                toast({
-                    title: "Success",
-                    description: "Pay Period created successfully.",
-                    className: "bg-green-50 border-green-200 text-green-900",
-                });
+                    toast({
+                        ...crudSuccessToast,
+                        title: "Success",
+                        description: res?.message || "Pay Period created successfully.",
+                    });
+
+                    await fetchPayPeriods();
+                } catch (error: any) {
+                    toast({
+                        variant: "destructive",
+                        title: "Error",
+                        description: error.message || "Failed to create pay period.",
+                    });
+                    return;
+                }
             }
 
             setIsCreateOpen(false);
             resetForm();
+            setIsSubmitting(false);
         }
     };
 
-    // ============================================================================
-    // ⚠️ BUSINESS RULE: Edit is ALWAYS allowed regardless of status
-    // ============================================================================
-    // HR can edit any pay period (Open, Locked, Processed, or Paid)
-    // This provides flexibility to correct mistakes even after locking
-    // ============================================================================
     const handleEdit = (period: PayPeriod) => {
         setEditingId(period.id);
         setSelectedMonth(period.month.toString());
@@ -335,6 +444,7 @@ export default function PayPeriodPage() {
         // Lock rule: Allow locking if Open
         updatePeriodStatus(period.id, "Locked");
         toast({
+            ...crudSuccessToast,
             title: "Period Locked",
             description: `${period.periodName} has been locked.`,
         });
@@ -346,6 +456,7 @@ export default function PayPeriodPage() {
 
         updatePeriodStatus(period.id, "Open");
         toast({
+            ...crudSuccessToast,
             title: "Period Re-opened",
             description: `${period.periodName} is now Open.`,
         });
@@ -353,29 +464,48 @@ export default function PayPeriodPage() {
 
     const handleDelete = () => {
         if (!editingId) return;
+        if (isReadOnlyStatus(originalPeriod?.status)) {
+            toast({
+                variant: "destructive",
+                title: "Error",
+                description: `${originalPeriod?.status} pay period cannot be deleted.`,
+            });
+            return;
+        }
+        const deleteAction = async () => {
+            setIsSubmitting(true);
+            try {
+                const res = await payPeriodApi.delete(Number(editingId));
+                if (!res?.isSuccessful) {
+                    toast({
+                        variant: "destructive",
+                        title: "Error",
+                        description: res?.message || "Failed to delete pay period.",
+                    });
+                    return;
+                }
 
-        const periodToDelete = periods.find(p => p.id === editingId);
+                toast({
+                    ...crudSuccessToast,
+                    title: "Period Deleted",
+                    description: res?.message || "Pay period has been successfully deleted.",
+                });
 
-        // ============================================================================
-        // ⚠️ BUSINESS RULE CHANGE: Allow deletion for ALL statuses
-        // ============================================================================
-        // PREVIOUS RULE: Could not delete Locked/Processed/Paid periods
-        // NEW RULE: Can delete any period regardless of status
-        // REASON: HR needs flexibility to correct mistakes even after locking
-        // ============================================================================
-
-        // Delete the period (no status check)
-        setPeriods(prev => prev.filter(p => p.id !== editingId));
-
-        toast({
-            title: "Period Deleted",
-            description: "Pay period has been successfully deleted.",
-        });
-
-        // Close dialogs and reset form
-        setIsDeleteOpen(false);
-        setIsCreateOpen(false);
-        resetForm();
+                await fetchPayPeriods();
+                setIsDeleteOpen(false);
+                setIsCreateOpen(false);
+                resetForm();
+            } catch (error: any) {
+                toast({
+                    variant: "destructive",
+                    title: "Error",
+                    description: error.message || "Failed to delete pay period.",
+                });
+            } finally {
+                setIsSubmitting(false);
+            }
+        };
+        deleteAction();
     };
 
     const updatePeriodStatus = (id: string, status: PayPeriod["status"]) => {
@@ -385,14 +515,8 @@ export default function PayPeriodPage() {
     // --- Render Helpers ---
 
     // Pagination Logic
-    const filteredPeriods = periods.filter(p => {
-        const matchStatus = statusFilter === "All" || p.status === statusFilter;
-        const matchSearch = p.periodName.toLowerCase().includes(searchQuery.toLowerCase());
-        return matchStatus && matchSearch;
-    });
-
-    const totalPages = Math.ceil(filteredPeriods.length / itemsPerPage);
-    const paginatedPeriods = filteredPeriods.slice((currentPage - 1) * itemsPerPage, currentPage * itemsPerPage);
+    const totalPages = Math.ceil(totalItems / itemsPerPage);
+    const paginatedPeriods = periods;
 
     const months = [
         { value: "0", label: "January" },
@@ -430,23 +554,20 @@ export default function PayPeriodPage() {
                         onChange: setStatusFilter,
                         options: [
                             { label: "All Status", value: "All" },
-                            { label: "Open", value: "Open" },
-                            { label: "Locked", value: "Locked" },
-                            { label: "Processed", value: "Processed" },
-                            { label: "Paid", value: "Paid" }
+                            ...payPeriodStatuses.map((s) => ({ label: s.name, value: s.name }))
                         ],
                         searchable: true
                     }
                 ]}
                 actions={[
-                    {
+                    ...(canCreate(permissionModule) ? [{
                         label: "Create Pay Period",
                         icon: <Plus className="h-4 w-4 mr-2" />,
                         onClick: () => {
                             resetForm();
                             setIsCreateOpen(true);
                         }
-                    }
+                    }] : [])
                 ]}
             />
 
@@ -464,7 +585,16 @@ export default function PayPeriodPage() {
                                 </TableRow>
                             </TableHeader>
                             <TableBody>
-                                {paginatedPeriods.length === 0 ? (
+                                {isListLoading ? (
+                                    <TableRow>
+                                        <TableCell colSpan={5} className="h-32 text-center">
+                                            <div className="flex flex-col items-center justify-center gap-3">
+                                                <Loader2 className="h-8 w-8 animate-spin text-primary" />
+                                                <p className="text-sm text-muted-foreground">Loading...</p>
+                                            </div>
+                                        </TableCell>
+                                    </TableRow>
+                                ) : paginatedPeriods.length === 0 ? (
                                     <TableRow>
                                         <TableCell colSpan={5} className="h-32 text-center text-muted-foreground italic">
                                             No pay periods found.
@@ -478,22 +608,26 @@ export default function PayPeriodPage() {
                                             <TableCell className="text-sm">{format(new Date(period.endDate), 'dd-MM-yyyy')}</TableCell>
                                             <TableCell>
                                                 <Badge variant={
-                                                    period.status === 'Open' ? 'outline' :
-                                                        period.status === 'Locked' ? 'secondary' :
-                                                            period.status === 'Processed' ? 'default' : 'secondary'
+                                                    (period.status as any) === 'Active' ? 'outline' :
+                                                        (period.status as any) === 'Draft' ? 'outline' :
+                                                        (period.status as any) === 'Open' ? 'outline' :
+                                                        (period.status as any) === 'Locked' ? 'secondary' :
+                                                            (period.status as any) === 'Processed' ? 'default' : 'secondary'
                                                 } className={cn(
                                                     "text-xs",
-                                                    period.status === 'Open' && "bg-blue-50 text-blue-700 border-blue-200",
-                                                    period.status === 'Locked' && "bg-amber-50 text-amber-700 border-amber-200",
-                                                    period.status === 'Processed' && "bg-purple-50 text-purple-700 border-purple-200",
-                                                    period.status === 'Paid' && "bg-green-50 text-green-700 border-green-200"
+                                                    (period.status as any) === 'Active' && "bg-emerald-50 text-emerald-700 border-emerald-200",
+                                                    (period.status as any) === 'Draft' && "bg-slate-100 text-slate-700 border-slate-200",
+                                                    (period.status as any) === 'Open' && "bg-blue-50 text-blue-700 border-blue-200",
+                                                    (period.status as any) === 'Locked' && "bg-amber-50 text-amber-700 border-amber-200",
+                                                    (period.status as any) === 'Processed' && "bg-purple-50 text-purple-700 border-purple-200",
+                                                    (period.status as any) === 'Paid' && "bg-green-50 text-green-700 border-green-200"
                                                 )}>
                                                     {period.status}
                                                 </Badge>
                                             </TableCell>
                                             <TableCell className="text-center">
                                                 <TableActionButtons
-                                                    onEdit={() => handleEdit(period)}
+                                                    onEdit={canEdit(permissionModule) ? () => handleEdit(period) : undefined}
                                                 />
                                             </TableCell>
                                         </TableRow>
@@ -503,14 +637,16 @@ export default function PayPeriodPage() {
                         </Table>
                     </div>
 
-                    <DataTablePagination
-                        currentPage={currentPage}
-                        totalPages={totalPages}
-                        totalItems={filteredPeriods.length}
-                        itemsPerPage={itemsPerPage}
-                        onPageChange={setCurrentPage}
-                        onItemsPerPageChange={setItemsPerPage}
-                    />
+                    {!isListLoading && (
+                        <DataTablePagination
+                            currentPage={currentPage}
+                            totalPages={totalPages}
+                            totalItems={totalItems}
+                            itemsPerPage={itemsPerPage}
+                            onPageChange={setCurrentPage}
+                            onItemsPerPageChange={setItemsPerPage}
+                        />
+                    )}
                 </CardContent>
             </Card>
 
@@ -520,8 +656,9 @@ export default function PayPeriodPage() {
                 if (!open) resetForm();
                 setIsCreateOpen(open);
             }}>
-                <DialogContent className="sm:max-w-[600px] p-6">
-                    <DialogHeader className="mb-4">
+                <DialogContent className="w-[92%] sm:max-w-2xl md:max-w-3xl max-h-[80vh] overflow-hidden p-0 flex flex-col gap-0">
+                    <div className="shrink-0 border-b bg-white p-5 sm:p-6">
+                    <DialogHeader className="p-0">
                         <DialogTitle className="text-xl">
                             {editingId ? "Edit Pay Period" : "Create Pay Period"}
                         </DialogTitle>
@@ -532,8 +669,14 @@ export default function PayPeriodPage() {
                             }
                         </DialogDescription>
                     </DialogHeader>
+                    </div>
 
-                    <div className="grid gap-6 py-2">
+                    <div className="min-h-0 flex-1 overflow-y-auto px-5 py-5 sm:px-6 space-y-5">
+                        {editingId && isReadOnlyStatus(originalPeriod?.status) && (
+                            <div className="p-3 rounded-md bg-amber-50 text-amber-800 text-sm">
+                                {originalPeriod?.status} pay period is finalized and cannot be edited.
+                            </div>
+                        )}
                         {/* Global Error Message */}
                         {formErrors.period && (
                             <div className="p-3 rounded-md bg-destructive/10 text-destructive text-sm flex items-center gap-2">
@@ -542,7 +685,7 @@ export default function PayPeriodPage() {
                             </div>
                         )}
 
-                        <div className="grid grid-cols-2 gap-6">
+                        <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
                             <div className="space-y-2">
                                 <Label className="text-sm font-medium">Period Month <span className="text-destructive">*</span></Label>
                                 <Popover open={isMonthOpen} onOpenChange={setIsMonthOpen}>
@@ -554,6 +697,7 @@ export default function PayPeriodPage() {
                                                 !selectedMonth && "text-muted-foreground",
                                                 formErrors.month && "border-destructive hover:bg-destructive/5"
                                             )}
+                                            disabled={!!editingId && isReadOnlyStatus(originalPeriod?.status)}
                                         >
                                             <CalendarIcon className="mr-2 h-4 w-4" />
                                             {selectedMonth ? months.find(m => m.value === selectedMonth)?.label : "Select Month"}
@@ -561,25 +705,27 @@ export default function PayPeriodPage() {
                                     </PopoverTrigger>
                                     <PopoverContent className="w-[300px] p-4" align="start">
                                         <div className="grid grid-cols-4 gap-3">
-                                            {months.map((m) => (
-                                                <Button
-                                                    key={m.value}
-                                                    variant="ghost"
-                                                    className={cn(
-                                                        "h-9 w-full text-sm hover:bg-primary/10 hover:text-primary",
-                                                        selectedMonth === m.value
-                                                            ? "bg-primary/15 text-primary font-semibold"
-                                                            : "text-muted-foreground"
-                                                    )}
-                                                    onClick={() => {
-                                                        setSelectedMonth(m.value);
-                                                        handlePeriodChange(m.value, selectedYear);
-                                                        setIsMonthOpen(false);
-                                                    }}
-                                                >
-                                                    {m.label.substring(0, 3)}
-                                                </Button>
-                                            ))}
+                                            {months.map((m) => {
+                                                return (
+                                                    <Button
+                                                        key={m.value}
+                                                        variant="ghost"
+                                                        className={cn(
+                                                            "h-9 w-full text-sm hover:bg-primary/10 hover:text-primary",
+                                                            selectedMonth === m.value
+                                                                ? "bg-primary/15 text-primary font-semibold"
+                                                                : "text-muted-foreground"
+                                                        )}
+                                                        onClick={() => {
+                                                            setSelectedMonth(m.value);
+                                                            handlePeriodChange(m.value, selectedYear);
+                                                            setIsMonthOpen(false);
+                                                        }}
+                                                    >
+                                                        {m.label.substring(0, 3)}
+                                                    </Button>
+                                                );
+                                            })}
                                         </div>
                                     </PopoverContent>
                                 </Popover>
@@ -597,6 +743,7 @@ export default function PayPeriodPage() {
                                                 !selectedYear && "text-muted-foreground",
                                                 formErrors.year && "border-destructive hover:bg-destructive/5"
                                             )}
+                                            disabled={!!editingId && isReadOnlyStatus(originalPeriod?.status)}
                                         >
                                             <CalendarIcon className="mr-2 h-4 w-4" />
                                             {selectedYear ? selectedYear : "Select Year"}
@@ -625,26 +772,31 @@ export default function PayPeriodPage() {
                                             </Button>
                                         </div>
                                         <div className="grid grid-cols-4 gap-3">
-                                            {Array.from({ length: 12 }, (_, i) => yearNavStart + i).map((y) => (
-                                                <Button
-                                                    key={y}
-                                                    variant="ghost"
-                                                    className={cn(
-                                                        "h-9 w-full text-sm hover:bg-primary/10 hover:text-primary",
-                                                        selectedYear === y.toString()
-                                                            ? "bg-primary/15 text-primary font-semibold"
-                                                            : "text-muted-foreground",
-                                                        y === new Date().getFullYear() && !selectedYear && "text-primary font-medium"
-                                                    )}
-                                                    onClick={() => {
-                                                        setSelectedYear(y.toString());
-                                                        handlePeriodChange(selectedMonth, y.toString());
-                                                        setIsYearOpen(false);
-                                                    }}
-                                                >
-                                                    {y}
-                                                </Button>
-                                            ))}
+                                            {Array.from({ length: 12 }, (_, i) => yearNavStart + i).map((y) => {
+                                                const yearStr = y.toString();
+                                                const currentYear = new Date().getFullYear();
+
+                                                return (
+                                                    <Button
+                                                        key={y}
+                                                        variant="ghost"
+                                                        className={cn(
+                                                            "h-9 w-full text-sm hover:bg-primary/10 hover:text-primary",
+                                                            selectedYear === yearStr
+                                                                ? "bg-primary/15 text-primary font-semibold"
+                                                                : "text-muted-foreground",
+                                                            y === currentYear && !selectedYear && "text-primary font-medium"
+                                                        )}
+                                                        onClick={() => {
+                                                            setSelectedYear(yearStr);
+                                                            handlePeriodChange(selectedMonth, yearStr);
+                                                            setIsYearOpen(false);
+                                                        }}
+                                                    >
+                                                        {y}
+                                                    </Button>
+                                                );
+                                            })}
                                         </div>
                                     </PopoverContent>
                                 </Popover>
@@ -652,7 +804,7 @@ export default function PayPeriodPage() {
                             </div>
                         </div>
 
-                        <div className="grid grid-cols-2 gap-6">
+                        <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
                             <div className="space-y-2">
                                 <Label className="text-sm font-medium">Start Date <span className="text-destructive">*</span></Label>
                                 <Popover>
@@ -718,23 +870,23 @@ export default function PayPeriodPage() {
                             </div>
                         </div>
 
-                        <div className="grid grid-cols-2 gap-6">
+                        <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
                             <div className="space-y-2">
                                 <Label className="text-sm font-medium">Status</Label>
                                 <Select
                                     value={selectedStatus}
                                     onValueChange={(val: PayPeriod["status"]) => setSelectedStatus(val)}
+                                    disabled={!!editingId && isReadOnlyStatus(originalPeriod?.status)}
                                 >
                                     <SelectTrigger className="h-10">
                                         <SelectValue placeholder="Select Status" />
                                     </SelectTrigger>
                                     <SelectContent>
-                                        {/* ⚠️ BUSINESS RULE: All statuses always available */}
-                                        {/* HR can change to any status regardless of current status */}
-                                        <SelectItem value="Open">Open</SelectItem>
-                                        <SelectItem value="Locked">Locked</SelectItem>
-                                        <SelectItem value="Processed">Processed</SelectItem>
-                                        <SelectItem value="Paid">Paid</SelectItem>
+                                        {payPeriodStatuses.map((status) => (
+                                            <SelectItem key={status.id} value={status.name}>
+                                                {status.name}
+                                            </SelectItem>
+                                        ))}
                                     </SelectContent>
                                 </Select>
                             </div>
@@ -746,47 +898,59 @@ export default function PayPeriodPage() {
                                     placeholder="Optional remarks"
                                     value={notes}
                                     onChange={(e) => setNotes(e.target.value)}
+                                    disabled={!!editingId && isReadOnlyStatus(originalPeriod?.status)}
                                 />
                             </div>
                         </div>
                     </div>
 
-                    <DialogFooter className="mt-4 flex justify-between">
-                        {editingId && (
-                            <AlertDialog open={isDeleteOpen} onOpenChange={setIsDeleteOpen}>
-                                <AlertDialogTrigger asChild>
-                                    <Button variant="destructive" className="mr-auto">
-                                        <Trash2 className="mr-2 h-4 w-4" /> Delete
-                                    </Button>
-                                </AlertDialogTrigger>
-                                <AlertDialogContent>
-                                    <AlertDialogHeader>
-                                        <AlertDialogTitle>Are you absolutely sure?</AlertDialogTitle>
-                                        <AlertDialogDescription>
-                                            This action cannot be undone. This will permanently delete the pay period record.
-                                        </AlertDialogDescription>
-                                    </AlertDialogHeader>
-                                    <AlertDialogFooter>
-                                        <AlertDialogCancel>Cancel</AlertDialogCancel>
-                                        <AlertDialogAction onClick={handleDelete} className="bg-destructive text-destructive-foreground hover:bg-destructive/90">
-                                            Delete
-                                        </AlertDialogAction>
-                                    </AlertDialogFooter>
-                                </AlertDialogContent>
-                            </AlertDialog>
-                        )}
-
-                        <div className="flex gap-2 ml-auto">
-                            <Button variant="outline" className="h-10 px-6" onClick={() => setIsCreateOpen(false)}>Cancel</Button>
-                            <Button
-                                className="h-10 px-6"
-                                onClick={handleCreateSubmit}
-                                disabled={!selectedMonth || !selectedYear || !startDate || !endDate}
-                            >
-                                {editingId ? "Update Period" : "Create Period"}
-                            </Button>
+                    <div className="shrink-0 border-t bg-white p-5 sm:p-6 flex flex-col-reverse gap-3 sm:flex-row sm:items-center sm:justify-between">
+                        <div className="mr-auto">
+                            {editingId && canDelete(permissionModule) && (
+                                <AlertDialog open={isDeleteOpen} onOpenChange={setIsDeleteOpen}>
+                                    <AlertDialogTrigger asChild>
+                                        <Button variant="destructive">
+                                            <Trash2 className="mr-2 h-4 w-4" /> Delete
+                                        </Button>
+                                    </AlertDialogTrigger>
+                                    <AlertDialogContent>
+                                        <AlertDialogHeader>
+                                            <AlertDialogTitle>Are you absolutely sure?</AlertDialogTitle>
+                                            <AlertDialogDescription>
+                                                This action cannot be undone. This will permanently delete the pay period record.
+                                            </AlertDialogDescription>
+                                        </AlertDialogHeader>
+                                        <AlertDialogFooter>
+                                            <AlertDialogCancel>Cancel</AlertDialogCancel>
+                                            <AlertDialogAction onClick={handleDelete} loading={isSubmitting} className="bg-destructive text-destructive-foreground hover:bg-destructive/90">
+                                                Delete
+                                            </AlertDialogAction>
+                                        </AlertDialogFooter>
+                                    </AlertDialogContent>
+                                </AlertDialog>
+                            )}
                         </div>
-                    </DialogFooter>
+
+                        <div className="flex gap-2 sm:ml-auto">
+                            <Button variant="outline" className="h-10 px-6" onClick={() => setIsCreateOpen(false)}>Cancel</Button>
+                            {((editingId && canEdit(permissionModule)) || (!editingId && canCreate(permissionModule))) && (
+                                <Button
+                                    className={cn("h-10 px-6", savePrimaryDisabledClass)}
+                                    onClick={handleCreateSubmit}
+                                    loading={isSubmitting}
+                                    disabled={
+                                        !selectedMonth ||
+                                        !selectedYear ||
+                                        !startDate ||
+                                        !endDate ||
+                                        isSubmitting
+                                    }
+                                >
+                                    {editingId ? "Update Period" : "Create Period"}
+                                </Button>
+                            )}
+                        </div>
+                    </div>
                 </DialogContent>
             </Dialog>
         </div>

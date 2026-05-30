@@ -1,4 +1,5 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback, useMemo, useRef } from "react";
+import { useDebounce } from "@/hooks/useDebounce";
 import { format, parse, isValid } from "date-fns";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -20,34 +21,32 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import {
-  Popover,
-  PopoverContent,
-  PopoverTrigger,
-} from "@/components/ui/popover";
-import {
-  Command,
-  CommandList,
-  CommandEmpty,
-  CommandGroup,
-  CommandItem,
-  CommandInputBorderless,
-} from "@/components/ui/command";
 import { Badge } from "@/components/ui/badge";
-import { Plus, Search, ChevronLeft, ChevronRight, ChevronsUpDown, Check, Upload, Printer } from "lucide-react";
+import { Plus, Search, ChevronLeft, ChevronRight, Upload, Printer, Loader2, Check } from "lucide-react";
+import { SearchableSelect as SharedSearchableSelect } from "@/components/shared/SearchableSelect";
 import { DataTablePagination } from "@/components/shared/DataTablePagination";
 import { TableActionButtons } from "@/components/shared/TableActionButtons";
 import { AppListToolbar, FilterField } from "@/components/shared/AppListToolbar";
 import { useToast } from "@/hooks/use-toast";
 import { cn } from "@/lib/utils";
 import * as XLSX from "xlsx";
-import { mockBatchRecords } from "@/lib/batchSharedData";
-import { 
-  mockReleaseRecords, 
-  addReleaseRecord, 
-  OperationRelease, 
-  ProducedItem 
+import {
+  OperationRelease,
+  ProducedItem,
+  aggregateProducedItems,
+  parseBatchWiseOutputs,
 } from "@/lib/releaseSharedData";
+import { productionApi, commonApi } from "@/lib/api";
+import { useCommonStore } from "@/store/commonStore";
+import { isMaterialReleaseStatusEntityName } from "@/services/loadCommonData";
+import { useAuth } from "@/lib/store";
+import { useHasPermission } from "@/hooks/usePermissions";
+import Unauthorized from "@/pages/Unauthorized";
+import {
+  getAssignedIds,
+  getFirstAssignedMatch,
+  prioritizeByAssigned,
+} from "@/utils/assignedDropdown";
 
 // ============================================================================
 // OPERATION-WISE RELEASE REQUEST / ISSUE TO WH MODULE
@@ -119,6 +118,131 @@ const parseDateString = (dateStr: string): Date => {
   return new Date();
 };
 
+function filterDateToApiYmd(ddMmYyyy: string | undefined | ""): string | undefined {
+  if (!ddMmYyyy || !String(ddMmYyyy).trim()) return undefined;
+  const p = parseDateString(String(ddMmYyyy).trim());
+  if (!isValid(p)) return undefined;
+  return format(p, "yyyy-MM-dd");
+}
+
+function mapMaterialReleaseListRecord(r: Record<string, any>): OperationRelease {
+  const st = (r.status_name ?? r.status ?? "Issued to Warehouse") as string;
+  return {
+    id: Number(r.release_id ?? r.id),
+    releaseNo: String(r.release_code ?? r.release_no ?? r.releaseCode ?? ""),
+    releaseDate: String(r.release_date ?? r.releaseDate ?? "").slice(0, 10),
+    operation: r.operation_name ?? r.operation ?? "",
+    workCenter: r.work_center_name ?? r.workCenter ?? "",
+    warehouse: r.warehouse_name ?? r.warehouse ?? "",
+    releasedBy: r.released_by_name ?? r.released_by ?? r.created_by_name ?? "—",
+    status:
+      st === "Received By Warehouse" || (typeof st === "string" && st.toLowerCase().includes("received"))
+        ? "Received By Warehouse"
+        : "Issued to Warehouse",
+    batchIds: (Array.isArray(r.batch_ids) ? r.batch_ids : Array.isArray(r.batch_nos) ? r.batch_nos : []) as string[],
+    items: []
+  };
+}
+
+/**
+ * Map GET /getmaterialreleasebyid payload to OperationRelease (tolerates common key variants).
+ */
+function mapMaterialReleaseDetailPayload(d: Record<string, any>): OperationRelease {
+  const st = (d.status_name ?? d.status ?? "Issued to Warehouse") as string;
+  const toBatchIdStrings = (raw: unknown): string[] => {
+    if (!Array.isArray(raw)) return [];
+    return raw.map((b) => {
+      if (b != null && typeof b === "object") {
+        return String(
+          (b as any).batch_no ?? (b as any).batch_code ?? (b as any).code ?? (b as any).id ?? ""
+        );
+      }
+      return String(b);
+    }).filter(Boolean);
+  };
+  const rawItems =
+    d.items ?? d.produced_items ?? d.output_items ?? d.material_release_items ?? d.production_items ?? [];
+  let items: ProducedItem[] = Array.isArray(rawItems)
+    ? rawItems.map((r: any, i: number) => ({
+        id: Number(r.item_id ?? r.id ?? i + 1),
+        itemCode: String(r.item_code ?? r.itemCode ?? ""),
+        itemName: String(r.item_name ?? r.itemName ?? ""),
+        uom: String(r.uom_name ?? r.uom ?? ""),
+        qtyProduced: Number(
+          r.produced_qty ?? r.qty_produced ?? r.qtyProduced ?? r.qty ?? 0
+        ),
+        itemTypeCode: String(r.item_type_code ?? r.itemTypeCode ?? "")
+      }))
+    : [];
+
+  const bwo = parseBatchWiseOutputs(
+    d.batch_wise_outputs ?? d.batchWiseOutputs
+  );
+  if (items.length === 0 && bwo.lineItems.length > 0) {
+    items = aggregateProducedItems(bwo.lineItems);
+  }
+
+  let batchIds: string[] = [];
+  if (Array.isArray(d.batches) && d.batches.length) {
+    batchIds = toBatchIdStrings(d.batches);
+  } else if (Array.isArray(d.batch_ids) && d.batch_ids.length) {
+    batchIds =
+      typeof d.batch_ids[0] === "object"
+        ? toBatchIdStrings(d.batch_ids)
+        : d.batch_ids.map((x: any) => String(x));
+  } else if (Array.isArray(d.batch_nos) && d.batch_nos.length) {
+    batchIds = d.batch_nos.map((x: any) => String(x));
+  }
+  if (batchIds.length === 0 && bwo.batchIds.length > 0) {
+    batchIds = bwo.batchIds;
+  }
+
+  const rawBatchDetails = d.batch_details ?? d.batchDetails;
+  let batchDetails: OperationRelease["batchDetails"];
+  if (Array.isArray(rawBatchDetails) && rawBatchDetails.length > 0) {
+    batchDetails = rawBatchDetails.map((bd: any) => {
+      const shiftVal = (bd.shift_name ?? bd.shift ?? "Morning") as string;
+      const shift: string = String(shiftVal);
+      const bItems = bd.items ?? bd.produced_items ?? [];
+      return {
+        batchNo: String(bd.batch_no ?? bd.batchNo ?? bd.batch_code ?? ""),
+        shift,
+        items: Array.isArray(bItems)
+          ? bItems.map((r: any, i: number) => ({
+              id: Number(r.item_id ?? r.id ?? i + 1),
+              itemCode: String(r.item_code ?? r.itemCode ?? ""),
+              itemName: String(r.item_name ?? r.itemName ?? ""),
+              uom: String(r.uom_name ?? r.uom ?? ""),
+              qtyProduced: Number(r.produced_qty ?? r.qty_produced ?? r.qtyProduced ?? 0),
+              itemTypeCode: String(r.item_type_code ?? r.itemTypeCode ?? "")
+            }))
+          : []
+      };
+    });
+  } else if (bwo.batchDetails.length > 0) {
+    batchDetails = bwo.batchDetails;
+  }
+
+  return {
+    id: Number(d.release_id ?? d.id),
+    releaseNo: String(d.release_code ?? d.release_no ?? d.releaseCode ?? ""),
+    releaseDate: String(d.release_date ?? d.releaseDate ?? "").slice(0, 10),
+    operation: String(d.operation_name ?? d.operation ?? ""),
+    workCenter: String(d.work_center_name ?? d.workCenter ?? ""),
+    warehouse: String(d.warehouse_name ?? d.warehouse ?? ""),
+    releasedBy: String(
+      d.released_by_name ?? d.released_by_user_name ?? d.released_by ?? d.created_by_name ?? "—"
+    ),
+    status:
+      st === "Received By Warehouse" || (typeof st === "string" && st.toLowerCase().includes("received"))
+        ? "Received By Warehouse"
+        : "Issued to Warehouse",
+    batchIds,
+    items,
+    ...(batchDetails && batchDetails.length > 0 ? { batchDetails } : {})
+  };
+}
+
 /**
  * Generate next release number
  */
@@ -127,6 +251,53 @@ const generateReleaseNumber = (existingReleases: OperationRelease[]): string => 
   const count = existingReleases.filter(r => r.releaseNo.includes(`REL-${year}`)).length + 1;
   return `REL-${year}-${String(count).padStart(3, '0')}`;
 };
+
+const SERIAL_HEADER_KEYWORDS = ["serial", "number", "sr no", "sr_no", "code", "item"];
+
+/** Parse serial column from sheet; skips header row when detected (matches UI count). */
+function parseSerialNumbersFromWorksheet(worksheet: XLSX.WorkSheet): {
+  serials: string[];
+  hadHeader: boolean;
+} {
+  const rows = XLSX.utils.sheet_to_json(worksheet, { header: 1, defval: "" }) as unknown[][];
+  if (!rows?.length) return { serials: [], hadHeader: false };
+
+  const firstRow = rows[0] ?? [];
+  const isHeader = firstRow.some(
+    (cell) =>
+      typeof cell === "string" &&
+      SERIAL_HEADER_KEYWORDS.some((kw) => cell.toLowerCase().includes(kw))
+  );
+
+  let targetColIndex = 0;
+  if (isHeader) {
+    const foundIndex = firstRow.findIndex(
+      (cell) =>
+        typeof cell === "string" &&
+        (cell.toLowerCase().includes("serial") || cell.toLowerCase().includes("sr no"))
+    );
+    if (foundIndex !== -1) targetColIndex = foundIndex;
+  }
+
+  const dataRows = isHeader ? rows.slice(1) : rows;
+  const serials = dataRows
+    .map((row) => String((row as unknown[])?.[targetColIndex] ?? "").trim())
+    .filter(Boolean);
+
+  return { serials, hadHeader: isHeader };
+}
+
+/** Backend counts every row in the uploaded file — send data rows only (no header). */
+function buildSerialsOnlyExcelFile(serials: string[], originalFileName: string): File {
+  const sheet = XLSX.utils.aoa_to_sheet(serials.map((s) => [s]));
+  const workbook = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(workbook, sheet, "Serials");
+  const buffer = XLSX.write(workbook, { bookType: "xlsx", type: "array" });
+  const baseName = String(originalFileName || "serials").replace(/\.(xlsx|xls|csv)$/i, "") || "serials";
+  return new File([buffer], `${baseName}.xlsx`, {
+    type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  });
+}
 
 // ============================================================================
 // TYPE DEFINITIONS
@@ -181,19 +352,6 @@ interface OperationMaster {
 }
 
 /**
- * Work Center Interface
- * 
- * Represents a work center associated with an operation.
- * 
- * @property operation - Parent operation name
- * @property workCenter - Work center name
- */
-interface WorkCenterMapping {
-  operation: string;
-  workCenter: string;
-}
-
-/**
  * Batch Tracking Interface
  * 
  * Represents a completed production batch that can be included in a release.
@@ -215,146 +373,113 @@ interface BatchTracking {
   operation: string;
   workCenter: string;
   warehouse: string;
-  shift: "Morning" | "Night";
+  /** API shift label, e.g. "Day Shift" (list UI); legacy mock used Morning/Night */
+  shift: string;
   status: string;
-  qcStatus: string; // Changed to string for flexibility with "Verified" value
-  outputItems: ProducedItem[]; // Use imported ProducedItem
+  qcStatus: string;
+  outputItems: ProducedItem[];
 }
 
-// ============================================================================
-// SEARCHABLE SELECT COMPONENT
-// ============================================================================
-
-/**
- * SearchableSelect Props Interface
- * 
- * Props for the SearchableSelect dropdown component.
- * 
- * @property value - Currently selected value
- * @property onValueChange - Callback when selection changes
- * @property options - Array of selectable options
- * @property placeholder - Placeholder text when no value selected
- * @property searchPlaceholder - Placeholder text in search input
- * @property emptyText - Text shown when no options match search
- * @property className - Optional CSS classes
- */
-interface SearchableSelectProps {
-  value: string;
-  onValueChange: (value: string) => void;
-  options: { value: string; label: string }[];
-  placeholder?: string;
-  searchPlaceholder?: string;
-  emptyText?: string;
-  className?: string;
+function mapGetBatchWithItemsToBatchTracking(
+  r: Record<string, any>,
+  operation: string,
+  workCenter: string,
+  warehouse: string
+): BatchTracking {
+  const rawItems = Array.isArray(r.items) ? r.items : [];
+  const outputItems: ProducedItem[] = rawItems.map((it: any, i: number) => ({
+    id: Number(it.item_id ?? it.id ?? i + 1),
+    itemCode: String(it.item_code ?? it.itemCode ?? ""),
+    itemName: String(it.item_name ?? it.itemName ?? ""),
+    uom: String(it.uom_name ?? it.uom ?? ""),
+    qtyProduced: Number(it.produced_qty ?? it.qtyProduced ?? 0),
+    itemTypeCode: String(it.item_type_code ?? it.itemTypeCode ?? "")
+  }));
+  return {
+    id: Number(r.batch_id ?? r.id),
+    batchNo: String(r.batch_code ?? r.batchNo ?? ""),
+    operation,
+    workCenter,
+    warehouse,
+    shift: String(r.shift_name ?? r.shift ?? "—"),
+    status: String(r.status_name ?? r.status ?? "—"),
+    qcStatus: String(r.qc_status_name ?? r.qc_status ?? r.qcStatus ?? "—"),
+    outputItems
+  };
 }
 
-/**
- * SearchableSelect Component
- * 
- * A dropdown select component with built-in search functionality.
- * Uses Radix UI Popover and Command components for accessibility.
- * 
- * Features:
- * - Searchable dropdown with keyboard navigation
- * - Visual checkmark for selected option
- * - Accessible with ARIA attributes
- * - Responsive width matching trigger button
- * 
- * @param props - SearchableSelectProps
- * @returns JSX.Element
- */
-function LocalSearchableSelect({
-  value,
-  onValueChange,
-  options,
-  placeholder = "Select...",
-  searchPlaceholder = "Search...",
-  emptyText = "No results found.",
-  className,
-}: SearchableSelectProps) {
-  const [open, setOpen] = useState(false);
-
-  return (
-    <Popover open={open} onOpenChange={setOpen}>
-      <PopoverTrigger asChild>
-        <Button
-          variant="outline"
-          role="combobox"
-          aria-expanded={open}
-          className={cn(
-            "w-full justify-between h-10 font-normal px-3 py-2 text-sm border border-input shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50 hover:bg-white",
-            className
-          )}
-        >
-          <span className={cn(!value && "text-muted-foreground")}>
-            {value
-              ? options.find((option) => option.value === value)?.label
-              : placeholder}
-          </span>
-          <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
-        </Button>
-      </PopoverTrigger>
-      <PopoverContent className="w-[var(--radix-popover-trigger-width)] p-0" align="start">
-        <Command>
-          <CommandInputBorderless placeholder={searchPlaceholder} className="h-9" />
-          <CommandList className="max-h-[200px] overflow-y-auto">
-            <CommandEmpty>{emptyText}</CommandEmpty>
-            <CommandGroup>
-              {options.map((option) => (
-                <CommandItem
-                  key={option.value}
-                  value={option.value}
-                  onSelect={(currentValue) => {
-                    // Command component lowercases the value, so find the original
-                    const selectedOption = options.find(
-                      opt => opt.value.toLowerCase() === currentValue.toLowerCase()
-                    );
-                    if (selectedOption) {
-                      onValueChange(selectedOption.value);
-                    }
-                    setOpen(false);
-                  }}
-                  className="cursor-pointer"
-                >
-                  <Check
-                    className={cn(
-                      "mr-2 h-4 w-4",
-                      value === option.value ? "opacity-100" : "opacity-0"
-                    )}
-                  />
-                  {option.label}
-                </CommandItem>
-              ))}
-            </CommandGroup>
-          </CommandList>
-        </Command>
-      </PopoverContent>
-    </Popover>
-  );
-}
+const resolveFormOperationId = (op: any): number | null => {
+  const n = Number((op as any)?.operation_id ?? (op as any)?.id);
+  return Number.isFinite(n) ? n : null;
+};
 
 // ============================================================================
 // MAIN COMPONENT
 // ============================================================================
 
 export default function MaterialRelease() {
+  const { isMenuVisible, canCreate, canView } = useHasPermission();
+  const permissionModule = "PRODUCTION/MATERIAL_RELEASE";
+
+  if (!isMenuVisible(permissionModule)) {
+    return <Unauthorized />;
+  }
+
   const { toast } = useToast();
+  const { user } = useAuth();
 
   // ============================================================================
   // STATE - LISTING PAGE
   // ============================================================================
 
   const [searchTerm, setSearchTerm] = useState("");
-  const [statusFilter, setStatusFilter] = useState("Issued to Warehouse"); // Default filter to show issued
+  const debouncedSearchTerm = useDebounce(searchTerm, 500);
+  const [statusFilter, setStatusFilter] = useState<string>("");
   const [operationFilter, setOperationFilter] = useState("all");
   const [shiftFilter, setShiftFilter] = useState("all");
   const [filterDate, setFilterDate] = useState("");
   const [currentPage, setCurrentPage] = useState(1);
   const [isViewModalOpen, setIsViewModalOpen] = useState(false);
   const [viewingRelease, setViewingRelease] = useState<OperationRelease | null>(null);
-  const [releases, setReleases] = useState<OperationRelease[]>(mockReleaseRecords);
-  // Pagination state - using DataTablePagination component
+  const [isViewDetailLoading, setIsViewDetailLoading] = useState(false);
+  const [openingViewId, setOpeningViewId] = useState<number | null>(null);
+  const [releases, setReleases] = useState<OperationRelease[]>([]);
+  const [totalRecords, setTotalRecords] = useState(0);
+  const [isListLoading, setIsListLoading] = useState(true);
+  const [operations, setOperations] = useState<any[]>([]);
+  const [shifts, setShifts] = useState<any[]>([]);
   const [itemsPerPage, setItemsPerPage] = useState(10);
+  const appliedOperationFilterDefault = useRef(false);
+  const appliedStatusFilterDefault = useRef(false);
+  const appliedFormWorkCenterDefault = useRef(false);
+  const appliedFormOperationDefault = useRef(false);
+  const appliedFormWarehouseDefault = useRef(false);
+  const [areListFiltersReady, setAreListFiltersReady] = useState(
+    () => getAssignedIds("operation").length === 0
+  );
+
+  const assignedOperationIds = getAssignedIds("operation");
+  const assignedWorkcenterIds = getAssignedIds("workcenter");
+  const assignedWarehouseIds = getAssignedIds("warehouse");
+  const assignedOperationKey = assignedOperationIds.join(",");
+  const assignedWorkcenterKey = assignedWorkcenterIds.join(",");
+
+  const orderedListOperations = useMemo(
+    () => prioritizeByAssigned(operations, assignedOperationIds, (o) => o.id || o.operation_id),
+    [operations, assignedOperationKey]
+  );
+
+  const entityValues = useCommonStore((s) => s.entityValues);
+
+  const materialReleaseStatusEntities = useMemo(() => {
+    return (entityValues || []).filter((r: any) =>
+      isMaterialReleaseStatusEntityName(
+        r.entity_type_name,
+        r.entity_type_code,
+        r.entity_type_id
+      )
+    );
+  }, [entityValues]);
 
   // ============================================================================
   // STATE - CREATE MODAL
@@ -362,8 +487,10 @@ export default function MaterialRelease() {
 
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
   const [selectedOperation, setSelectedOperation] = useState("");
+  const [operationChangeTick, setOperationChangeTick] = useState(0);
   const [selectedWorkCenter, setSelectedWorkCenter] = useState("");
   const [selectedWarehouse, setSelectedWarehouse] = useState("");
+  const [selectedWarehouseId, setSelectedWarehouseId] = useState<number | null>(null);
   const [eligibleBatches, setEligibleBatches] = useState<BatchTracking[]>([]);
   const [selectedBatchIds, setSelectedBatchIds] = useState<number[]>([]);
 
@@ -376,20 +503,82 @@ export default function MaterialRelease() {
   const [selectedProductionPlan, setSelectedProductionPlan] = useState("");
   const [producedItems, setProducedItems] = useState<ProducedItem[]>([]);
 
+  /** Create modal: work centers from GET /common/getworkcenters */
+  const [formAssignedWorkCenters, setFormAssignedWorkCenters] = useState<
+    { work_center_id: number; work_center_name: string }[]
+  >([]);
+  /** Create modal: operations from GET /common/getoperationwithworkcenter?work_center_id= */
+  const [formWorkCenterOperations, setFormWorkCenterOperations] = useState<any[]>([]);
+  const [selectedWorkCenterId, setSelectedWorkCenterId] = useState<number | null>(null);
+  const [isLoadingFormWorkCenters, setIsLoadingFormWorkCenters] = useState(false);
+  const [isLoadingFormOperations, setIsLoadingFormOperations] = useState(false);
+  const [isLoadingFormWarehouses, setIsLoadingFormWarehouses] = useState(false);
+  /** common/getwarehouses for create modal */
+  const [formWarehouses, setFormWarehouses] = useState<{ id: number; name: string }[]>([]);
+  /** common/getproductionplan?operation_id= */
+  const [formProductionPlans, setFormProductionPlans] = useState<
+    { production_plan_id: number; plan_code: string; display_name: string; operation_id: number }[]
+  >([]);
+  const [isLoadingFormProductionPlans, setIsLoadingFormProductionPlans] = useState(false);
+  const [isLoadingEligibleBatches, setIsLoadingEligibleBatches] = useState(false);
+  const [isSubmittingCreate, setIsSubmittingCreate] = useState(false);
+  const [latestCreatedReleaseId, setLatestCreatedReleaseId] = useState<number | null>(null);
+
   // Serial Numbers for batches/items: Record<batchNo, Record<itemCode, serialNumbers[]>>
   const [batchSerialNumbers, setBatchSerialNumbers] = useState<Record<string, Record<string, string[]>>>({});
+  const [batchFiles, setBatchFiles] = useState<Record<string, Record<string, File>>>({});
 
   // ============================================================================
-  // EFFECTS
+  // EFFECTS - list API + master dropdowns
   // ============================================================================
 
   useEffect(() => {
-    setCurrentPage(1);
-  }, [searchTerm, statusFilter, operationFilter, shiftFilter]);
-
-  // ============================================================================
-  // MOCK DATA
-  // ============================================================================
+    const load = async () => {
+      try {
+        const [opRes, shiftRes] = await Promise.all([
+          commonApi.getOperations(),
+          productionApi.getShiftForProduction()
+        ]);
+        let operationRecords: any[] = [];
+        if (opRes.isSuccessful && opRes.data?.records) {
+          operationRecords = opRes.data.records;
+          setOperations(operationRecords);
+        }
+        if (
+          !appliedOperationFilterDefault.current &&
+          assignedOperationIds.length > 0 &&
+          operationRecords.length > 0
+        ) {
+          const ordered = prioritizeByAssigned(
+            operationRecords,
+            assignedOperationIds,
+            (o) => o.id || o.operation_id
+          );
+          const firstAssigned = getFirstAssignedMatch(
+            assignedOperationIds,
+            ordered.map((o) => o.id || o.operation_id)
+          );
+          if (firstAssigned) {
+            const op = operationRecords.find(
+              (o) => String(o.id || o.operation_id) === firstAssigned
+            );
+            if (op) {
+              setOperationFilter(String(op.operation_name || op.name || "").trim());
+              appliedOperationFilterDefault.current = true;
+            }
+          }
+        }
+        if (shiftRes.isSuccessful && shiftRes.data?.records) {
+          setShifts(shiftRes.data.records);
+        }
+      } catch (e) {
+        console.error("Material Release filter masters failed", e);
+      } finally {
+        setAreListFiltersReady(true);
+      }
+    };
+    void load();
+  }, []);
 
   // Operation Masters with QC requirements
   const operationMasters: OperationMaster[] = [
@@ -399,61 +588,429 @@ export default function MaterialRelease() {
     { operation: "Assembly line & Packaging", qcRequired: true },
   ];
 
-  // Work Centers mapped to operations
-  const workCenterMappings: WorkCenterMapping[] = [
-    { operation: "Lead Generation & Purification", workCenter: "Lead Furnace Center" },
-    { operation: "Case Creation", workCenter: "Plastic Casing Center" },
-    { operation: "Grid Creation & Oxidization", workCenter: "Grid Generation Center" },
-    { operation: "Assembly line & Packaging", workCenter: "Assembly Line" },
-  ];
+  const operationSelectOptions = useMemo(() => {
+    if (orderedListOperations.length > 0) {
+      return [
+        { label: "All Operations", value: "all" },
+        ...orderedListOperations
+          .map((o) => ({
+            label: String(o.operation_name || o.name || "").trim(),
+            value: String(o.operation_name || o.name || "").trim()
+          }))
+          .filter((o) => o.value)
+      ];
+    }
+    return [
+      { label: "All Operations", value: "all" },
+      ...operationMasters.map((om) => ({ label: om.operation, value: om.operation }))
+    ];
+  }, [orderedListOperations]);
 
-  // Warehouses
-  const warehouses = ["Jinja WH"];
+  const statusSelectOptions = useMemo(() => {
+    const fromEntities = materialReleaseStatusEntities
+      .map((e: any) => ({
+        label: String(e.value_name || e.name || e.status_name || "").trim(),
+        value: String(e.status_id ?? e.id).trim()
+      }))
+      .filter((o) => o.value);
+    if (fromEntities.length > 0) {
+      return [{ label: "All Status", value: "all" }, ...fromEntities];
+    }
+    return [
+      { label: "All Status", value: "all" },
+      { label: "Issued to Warehouse", value: "Issued to Warehouse" },
+      { label: "Received By Warehouse", value: "Received By Warehouse" }
+    ];
+  }, [materialReleaseStatusEntities]);
 
-  // Mock Production Plans
-  const mockProductionPlans = [
-    { value: "PLN-24-001", label: "PLN-24-001 (Purified Lead)" },
-    { value: "PLN-24-002", label: "PLN-24-002 (GSV 7)" },
-    { value: "PLN-24-003", label: "PLN-24-003 (Battery Cases)" },
-  ];
+  const shiftSelectOptions = useMemo(() => {
+    if (!shifts.length) {
+      return [{ label: "All Shifts", value: "all" }];
+    }
+    return [
+      { label: "All Shifts", value: "all" },
+      ...shifts
+        .map((s) => ({
+          label: String(s.shift_name || s.name || s.value_name || "").trim(),
+          value: String(s.shift_name || s.name || s.value_name || "").trim()
+        }))
+        .filter((o) => o.value)
+    ];
+  }, [shifts]);
+
+  // Default list status filter to "Issued to Warehouse" (dynamic from entity values).
+  useEffect(() => {
+    if (appliedStatusFilterDefault.current) return;
+
+    if (!Array.isArray(materialReleaseStatusEntities) || materialReleaseStatusEntities.length === 0) {
+      const timer = setTimeout(() => {
+        if (!appliedStatusFilterDefault.current) {
+          setStatusFilter("all");
+          appliedStatusFilterDefault.current = true;
+        }
+      }, 2000);
+      return () => clearTimeout(timer);
+    }
+
+    const issued = materialReleaseStatusEntities.find((e: any) => {
+      const name = String(e.value_name || e.name || e.status_name || "").trim().toLowerCase();
+      return name === "issued to warehouse";
+    });
+    const issuedId = issued != null ? String((issued as any).status_id ?? (issued as any).id ?? "").trim() : "";
+
+    setStatusFilter(issuedId || "all");
+    appliedStatusFilterDefault.current = true;
+  }, [materialReleaseStatusEntities]);
 
   // Sample operation releases data moved to releaseSharedData.ts
 
-
-  // ============================================================================
-  // EFFECTS
-  // ============================================================================
-
-  useEffect(() => {
-    setCurrentPage(1);
-  }, [searchTerm, statusFilter]);
-
-  // Load eligible batches when Operation + Work Center are selected
-  // Filters batches based on QC requirements:
-  // - If QC Required = YES: Show only batches with QC Status = "Verified"
-  // - If QC Required = NO: Show only batches with Batch Status = "Completed"
-  useEffect(() => {
-    if (selectedOperation && selectedWorkCenter && selectedWarehouse) {
-      // Filter batches by Operation + Work Center + Eligibility from shared records
-      const filtered = (mockBatchRecords as any[]).filter(batch => {
-        const matchesOperation = batch.operation === selectedOperation;
-        const matchesWorkCenter = batch.workCenter === selectedWorkCenter;
-        const matchesWarehouse = batch.warehouse === selectedWarehouse;
-        
-        // Per User Rule: Show only "Verified QC" batches
-        // Note: qcStatus is "Verified" when QC is completed successfully
-        return matchesOperation && matchesWorkCenter && matchesWarehouse && batch.qcStatus === "Verified";
+  const fetchMaterialReleaseList = useCallback(async (pageOverride?: number) => {
+    if (!areListFiltersReady) return;
+    setIsListLoading(true);
+    const page = pageOverride ?? currentPage;
+    try {
+      const op =
+        operationFilter === "all"
+          ? undefined
+          : operations.find(
+              (o) => (o.operation_name || o.name) === operationFilter
+            );
+      const sh =
+        shiftFilter === "all"
+          ? undefined
+          : shifts.find(
+              (s) => (s.shift_name || s.name || s.value_name) === shiftFilter
+            );
+      const statusId =
+        statusFilter === "" || statusFilter === "all"
+          ? undefined
+          : Number(statusFilter);
+      const res = await productionApi.getMaterialReleaseList({
+        page,
+        limit: itemsPerPage,
+        search: debouncedSearchTerm?.trim() || undefined,
+        date: filterDateToApiYmd(filterDate),
+        operation_id: (() => {
+          if (op == null) return undefined;
+          const n = Number((op as any).id ?? (op as any).operation_id);
+          return !Number.isNaN(n) && Number.isFinite(n) ? n : undefined;
+        })(),
+        status_id:
+          statusId != null && !Number.isNaN(statusId) && Number.isFinite(statusId)
+            ? statusId
+            : undefined,
+        shift_id: (() => {
+          if (sh == null) return undefined;
+          const n = Number((sh as any).shift_id ?? (sh as any).id);
+          return !Number.isNaN(n) && Number.isFinite(n) ? n : undefined;
+        })()
       });
+      if (res.isSuccessful && res.data) {
+        setReleases(
+          (res.data.records || []).map((r) => mapMaterialReleaseListRecord(r as Record<string, any>))
+        );
+        setTotalRecords(res.data.pagination?.totalRecords ?? 0);
+      } else {
+        setReleases([]);
+        setTotalRecords(0);
+        toast({
+          variant: "destructive",
+          title: "Error",
+          description: res.message || "Failed to load material releases"
+        });
+      }
+    } catch (e) {
+      setReleases([]);
+      setTotalRecords(0);
+      toast({ variant: "destructive", title: "Error", description: "Failed to load material releases" });
+    } finally {
+      setIsListLoading(false);
+    }
+  }, [
+    currentPage,
+    itemsPerPage,
+    debouncedSearchTerm,
+    statusFilter,
+    operationFilter,
+    shiftFilter,
+    filterDate,
+    operations,
+    shifts,
+    areListFiltersReady,
+    toast,
+  ]);
 
-      setEligibleBatches(filtered);
-      setSelectedBatchIds([]); // Clear selections when filters change
-      setProducedItems([]); // Clear produced items
-    } else {
+  const isRowActionBusy = openingViewId !== null || isViewDetailLoading;
+
+  useEffect(() => {
+    if (statusFilter === "") return; // Wait for default status
+    void fetchMaterialReleaseList();
+  }, [fetchMaterialReleaseList, statusFilter]);
+
+  // Create modal: work centers (assigned) + warehouses (common) when the dialog opens
+  useEffect(() => {
+    if (!isCreateModalOpen) return;
+    let cancelled = false;
+    (async () => {
+      setIsLoadingFormWorkCenters(true);
+      setIsLoadingFormWarehouses(true);
+      try {
+        const [wcRes, whRes] = await Promise.all([
+          commonApi.getWorkCenters(),
+          commonApi.getWarehouses()
+        ]);
+        if (cancelled) return;
+        if (wcRes.isSuccessful && Array.isArray(wcRes.data?.records)) {
+          const records = wcRes.data.records
+            .map((r: any) => ({
+              work_center_id: Number(r.id ?? r.work_center_id),
+              work_center_name: String(r.work_center_name || r.name || r.value_name || "").trim()
+            }))
+            .filter(
+              (r: { work_center_id: number; work_center_name: string }) =>
+                r.work_center_name && Number.isFinite(r.work_center_id)
+            );
+          const ordered = prioritizeByAssigned<{ work_center_id: number; work_center_name: string }>(
+            records,
+            assignedWorkcenterIds,
+            (w) => w.work_center_id
+          );
+          setFormAssignedWorkCenters(ordered);
+          if (
+            !appliedFormWorkCenterDefault.current &&
+            assignedWorkcenterIds.length > 0 &&
+            ordered.length > 0
+          ) {
+            const firstAssigned = getFirstAssignedMatch(
+              assignedWorkcenterIds,
+              ordered.map((w) => w.work_center_id)
+            );
+            if (firstAssigned) {
+              const row = ordered.find((w) => String(w.work_center_id) === firstAssigned);
+              if (row) {
+                setSelectedWorkCenterId(row.work_center_id);
+                setSelectedWorkCenter(row.work_center_name);
+                appliedFormWorkCenterDefault.current = true;
+              }
+            }
+          }
+        } else {
+          setFormAssignedWorkCenters([]);
+        }
+        if (whRes.isSuccessful && Array.isArray(whRes.data?.records)) {
+          const warehouseRecords = whRes.data.records
+            .map((r: any) => ({
+              id: Number(r.id ?? r.warehouse_id),
+              name: String(r.warehouse_name ?? r.name ?? "").trim()
+            }))
+            .filter((r: { id: number; name: string }) => r.name && Number.isFinite(r.id));
+          const orderedWarehouses = prioritizeByAssigned<{ id: number; name: string }>(
+            warehouseRecords,
+            assignedWarehouseIds,
+            (wh) => wh.id
+          );
+          setFormWarehouses(orderedWarehouses);
+          if (
+            !appliedFormWarehouseDefault.current &&
+            assignedWarehouseIds.length > 0 &&
+            orderedWarehouses.length > 0
+          ) {
+            const firstAssigned = getFirstAssignedMatch(
+              assignedWarehouseIds,
+              orderedWarehouses.map((wh) => wh.id)
+            );
+            if (firstAssigned) {
+              const row = orderedWarehouses.find((wh) => String(wh.id) === firstAssigned);
+              if (row) {
+                setSelectedWarehouseId(row.id);
+                setSelectedWarehouse(row.name);
+                appliedFormWarehouseDefault.current = true;
+              }
+            }
+          }
+        } else {
+          setFormWarehouses([]);
+        }
+      } catch {
+        if (!cancelled) {
+          setFormAssignedWorkCenters([]);
+          setFormWarehouses([]);
+        }
+      } finally {
+        if (!cancelled) {
+          setIsLoadingFormWorkCenters(false);
+          setIsLoadingFormWarehouses(false);
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [isCreateModalOpen]);
+
+  // Create modal: operations for the selected work center
+  useEffect(() => {
+    if (!isCreateModalOpen) {
+      setFormWorkCenterOperations([]);
+      return;
+    }
+    if (selectedWorkCenterId == null) {
+      setFormWorkCenterOperations([]);
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      setIsLoadingFormOperations(true);
+      try {
+        const res = await commonApi.getOperationWithWorkCenter(selectedWorkCenterId);
+        if (cancelled) return;
+        if (res.isSuccessful && Array.isArray(res.data?.records)) {
+          const records = res.data.records;
+          const ordered = prioritizeByAssigned(
+            records,
+            assignedOperationIds,
+            (o) => resolveFormOperationId(o) ?? ""
+          );
+          setFormWorkCenterOperations(ordered);
+          if (
+            !appliedFormOperationDefault.current &&
+            assignedOperationIds.length > 0 &&
+            ordered.length > 0
+          ) {
+            const availableOpIds = ordered
+              .map((o) => resolveFormOperationId(o))
+              .filter((id): id is number => id != null);
+            const firstAssigned = getFirstAssignedMatch(assignedOperationIds, availableOpIds);
+            if (firstAssigned) {
+              const opRow = ordered.find(
+                (o) => String(resolveFormOperationId(o)) === firstAssigned
+              );
+              const opId = resolveFormOperationId(opRow);
+              if (opId != null) {
+                setSelectedOperation(String(opId));
+                appliedFormOperationDefault.current = true;
+              }
+            }
+          }
+        } else {
+          setFormWorkCenterOperations([]);
+        }
+      } catch {
+        if (!cancelled) setFormWorkCenterOperations([]);
+      } finally {
+        if (!cancelled) setIsLoadingFormOperations(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [isCreateModalOpen, selectedWorkCenterId]);
+
+  // Create modal: production plans for the selected operation (common/getproductionplan?operation_id=)
+  useEffect(() => {
+    if (!isCreateModalOpen) {
+      setFormProductionPlans([]);
+      return;
+    }
+    if (!selectedOperation) {
+      setFormProductionPlans([]);
+      return;
+    }
+    const selOpId = Number(selectedOperation);
+    const opRow = formWorkCenterOperations.find(
+      (o) => resolveFormOperationId(o) === selOpId
+    );
+    const operationId = resolveFormOperationId(opRow);
+    if (opRow == null || operationId == null) {
+      setFormProductionPlans([]);
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      setIsLoadingFormProductionPlans(true);
+      try {
+        const res = await commonApi.getProductionPlans({ operation_id: operationId });
+        if (cancelled) return;
+        if (res.isSuccessful && Array.isArray(res.data?.records)) {
+          setFormProductionPlans(res.data.records);
+        } else {
+          setFormProductionPlans([]);
+        }
+      } catch {
+        if (!cancelled) setFormProductionPlans([]);
+      } finally {
+        if (!cancelled) setIsLoadingFormProductionPlans(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [isCreateModalOpen, selectedOperation, formWorkCenterOperations, operationChangeTick]);
+
+  // Eligible batches: GET /common/getbatchwithitems?operation_id= (from selected operation row)
+  useEffect(() => {
+    if (!isCreateModalOpen || !selectedOperation || !selectedWorkCenter || !selectedWarehouse) {
       setEligibleBatches([]);
       setSelectedBatchIds([]);
       setProducedItems([]);
+      setIsLoadingEligibleBatches(false);
+      return;
     }
-  }, [selectedOperation, selectedWorkCenter, selectedWarehouse]);
+    const selOpId = Number(selectedOperation);
+    const opRow = formWorkCenterOperations.find(
+      (o) => resolveFormOperationId(o) === selOpId
+    );
+    const operationId = resolveFormOperationId(opRow);
+    if (opRow == null || operationId == null) {
+      setEligibleBatches([]);
+      setSelectedBatchIds([]);
+      setProducedItems([]);
+      setIsLoadingEligibleBatches(false);
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      setIsLoadingEligibleBatches(true);
+      setSelectedBatchIds([]);
+      setProducedItems([]);
+      try {
+        const res = await commonApi.getBatchWithItems({ operation_id: operationId });
+        if (cancelled) return;
+        if (res.isSuccessful && Array.isArray((res as any).data?.records)) {
+          const records = (res as any).data.records as Record<string, any>[];
+          const operationLabel = String(
+            (opRow as any)?.operation_name ?? (opRow as any)?.name ?? (opRow as any)?.operation ?? ""
+          ).trim();
+          setEligibleBatches(
+            records.map((r) =>
+              mapGetBatchWithItemsToBatchTracking(
+                r,
+                operationLabel,
+                selectedWorkCenter,
+                selectedWarehouse
+              )
+            )
+          );
+        } else {
+          setEligibleBatches([]);
+        }
+      } catch {
+        if (!cancelled) setEligibleBatches([]);
+      } finally {
+        if (!cancelled) setIsLoadingEligibleBatches(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    isCreateModalOpen,
+    selectedOperation,
+    selectedWorkCenter,
+    selectedWarehouse,
+    formWorkCenterOperations,
+    operationChangeTick
+  ]);
 
   // Auto-calculate produced items when batch selection changes
   // Groups items by itemCode and sums quantities across all selected batches
@@ -476,6 +1033,7 @@ export default function MaterialRelease() {
               itemName: item.itemName,
               uom: item.uom,
               qtyProduced: item.qtyProduced,
+              itemTypeCode: item.itemTypeCode,
             });
           }
         });
@@ -493,25 +1051,91 @@ export default function MaterialRelease() {
   // ============================================================================
 
   /**
-   * Open view modal to display release details
+   * Open view modal and load full record from GET /getmaterialreleasebyid/:id
    */
-  const handleViewRelease = (release: OperationRelease) => {
-    setViewingRelease(release);
+  const handleViewRelease = async (release: OperationRelease) => {
+    if (openingViewId !== null || isViewDetailLoading) return;
+    if (release.id == null || !Number.isFinite(release.id)) {
+      toast({
+        title: "Error",
+        description: "Invalid release to view.",
+        variant: "destructive"
+      });
+      return;
+    }
+    setOpeningViewId(release.id);
+    setViewingRelease(null);
+    setIsViewDetailLoading(true);
     setIsViewModalOpen(true);
+    try {
+      const res = await productionApi.getMaterialReleaseById(release.id);
+      if (res.isSuccessful) {
+        const raw = (res as any).data;
+        const payload =
+          raw && typeof raw === "object" && (raw as any).data && typeof (raw as any).data === "object"
+            ? (raw as any).data
+            : raw;
+        if (payload && typeof payload === "object" && !Array.isArray(payload)) {
+          setViewingRelease(mapMaterialReleaseDetailPayload(payload as Record<string, any>));
+        } else {
+          setViewingRelease(release);
+          toast({
+            title: "Notice",
+            description: "No detail payload; showing list row.",
+            variant: "default"
+          });
+        }
+      } else {
+        setViewingRelease(release);
+        toast({
+          title: "Error",
+          description: (res as any).message || "Failed to load release details. Showing list row.",
+          variant: "destructive"
+        });
+      }
+    } catch {
+      setViewingRelease(release);
+      toast({
+        title: "Error",
+        description: "Failed to load release details. Showing list row.",
+        variant: "destructive"
+      });
+    } finally {
+      setIsViewDetailLoading(false);
+      setOpeningViewId(null);
+    }
   };
 
   /**
    * Open create modal to add new release
    */
   const handleAddRelease = () => {
-    // Generate new release number
-    setFormData(prev => ({
+    if (openingViewId !== null || isViewDetailLoading || isSubmittingCreate) return;
+    appliedFormWorkCenterDefault.current = false;
+    appliedFormOperationDefault.current = false;
+    appliedFormWarehouseDefault.current = false;
+    setLatestCreatedReleaseId(null);
+    setSelectedWorkCenterId(null);
+    setSelectedWorkCenter("");
+    setSelectedOperation("");
+    setOperationChangeTick(0);
+    setFormWorkCenterOperations([]);
+    setSelectedWarehouse("");
+    setSelectedWarehouseId(null);
+    setFormProductionPlans([]);
+    setEligibleBatches([]);
+    setSelectedBatchIds([]);
+    setProducedItems([]);
+    setSelectedProductionPlan("");
+    setBatchSerialNumbers({});
+    setBatchFiles({});
+
+    setFormData((prev) => ({
       ...prev,
       releaseNo: generateReleaseNumber(releases),
       releaseDate: getCurrentDateForInput(),
     }));
 
-    // Open modal
     setIsCreateModalOpen(true);
   };
 
@@ -525,38 +1149,89 @@ export default function MaterialRelease() {
   const handleCancel = () => {
     // Close modal
     setIsCreateModalOpen(false);
+    appliedFormWorkCenterDefault.current = false;
+    appliedFormOperationDefault.current = false;
+    appliedFormWarehouseDefault.current = false;
+    setLatestCreatedReleaseId(null);
 
     // Reset form
     setSelectedOperation("");
+    setOperationChangeTick(0);
     setSelectedWorkCenter("");
+    setSelectedWorkCenterId(null);
+    setFormWorkCenterOperations([]);
     setSelectedWarehouse("");
+    setSelectedWarehouseId(null);
+    setFormProductionPlans([]);
     setEligibleBatches([]);
     setSelectedBatchIds([]);
     setProducedItems([]);
     setSelectedProductionPlan("");
+    setBatchSerialNumbers({});
+    setBatchFiles({});
   };
 
   /**
    * Handle operation selection change
-   * Resets dependent fields (work center, batches, items)
+   * Resets batches and production plan (work center is unchanged)
    */
   const handleOperationChange = (operation: string) => {
+    appliedFormOperationDefault.current = true;
     setSelectedOperation(operation);
-    // Reset dependent fields
-    setSelectedWorkCenter("");
     setEligibleBatches([]);
     setSelectedBatchIds([]);
     setProducedItems([]);
     setSelectedProductionPlan("");
+    setFormProductionPlans([]);
+    if (operation) {
+      setOperationChangeTick((t) => t + 1);
+    }
   };
 
   /**
-   * Handle work center selection change
-   * Eligible batches will be loaded by useEffect
+   * Work center from GET /common/getworkcenters; then operations load via
+   * GET /common/getoperationwithworkcenter?work_center_id=
    */
-  const handleWorkCenterChange = (workCenter: string) => {
-    setSelectedWorkCenter(workCenter);
-    // Batches will be loaded by useEffect
+  const handleWorkCenterChange = (workCenterIdStr: string) => {
+    appliedFormOperationDefault.current = false;
+    if (!workCenterIdStr) {
+      setSelectedWorkCenterId(null);
+      setSelectedWorkCenter("");
+      setSelectedOperation("");
+      setFormWorkCenterOperations([]);
+      setSelectedWarehouse("");
+      setSelectedWarehouseId(null);
+      setFormProductionPlans([]);
+      setSelectedProductionPlan("");
+      setEligibleBatches([]);
+      setSelectedBatchIds([]);
+      setProducedItems([]);
+      return;
+    }
+    const id = Number(workCenterIdStr);
+    const row = formAssignedWorkCenters.find((w) => w.work_center_id === id);
+    setSelectedWorkCenterId(Number.isFinite(id) ? id : null);
+    setSelectedWorkCenter(row?.work_center_name ?? "");
+    setSelectedOperation("");
+    setSelectedWarehouse("");
+    setSelectedWarehouseId(null);
+    setFormProductionPlans([]);
+    setSelectedProductionPlan("");
+    setEligibleBatches([]);
+    setSelectedBatchIds([]);
+    setProducedItems([]);
+  };
+
+  const handleWarehouseChange = (warehouseIdStr: string) => {
+    if (!warehouseIdStr) {
+      setSelectedWarehouseId(null);
+      setSelectedWarehouse("");
+      return;
+    }
+    const id = Number(warehouseIdStr);
+    const row = formWarehouses.find((w) => w.id === id);
+    setSelectedWarehouseId(Number.isFinite(id) ? id : null);
+    setSelectedWarehouse(row?.name ?? "");
   };
 
   /**
@@ -576,8 +1251,7 @@ export default function MaterialRelease() {
    * Submit form to create new material release
    * Validates required fields, creates release record, and issues to warehouse
    */
-  const handleSubmit = () => {
-    // Validation
+  const handleSubmit = async () => {
     if (!selectedProductionPlan) {
       toast({
         title: "Validation Error",
@@ -623,109 +1297,283 @@ export default function MaterialRelease() {
       return;
     }
 
-    // Create new release
-    const selectedBatches = eligibleBatches.filter(b => selectedBatchIds.includes(b.id));
-    const batchNumbers = selectedBatches.map(b => b.batchNo);
-
-    // ✅ ADDED: Store batch-wise produced qty breakdown for Release Details view (frontend-only)
-    // NOTE: Frontend-only grouping using existing response data; no backend changes
-    const batchDetails = selectedBatches.map(batch => ({
-      batchNo: batch.batchNo,
-      shift: batch.shift,
-      items: batch.outputItems
-    }));
-
-    const newRelease: OperationRelease = {
-      id: mockReleaseRecords.length + 1,
-      releaseNo: formData.releaseNo,
-      releaseDate: formData.releaseDate,
-      releasedBy: formData.releasedBy,
-      operation: selectedOperation,
-      workCenter: selectedWorkCenter,
-      warehouse: selectedWarehouse,
-      batchIds: batchNumbers,
-      status: "Issued to Warehouse",
-      items: producedItems,
-      batchDetails: batchDetails,
-    };
-
-    setReleases(addReleaseRecord(newRelease));
-
-    toast({
-      variant: "success",
-      title: "Success",
-      description: "Material issued to warehouse successfully.",
+    // Frontend validation: for Finished Goods, serial numbers must be imported before issuing
+    const selectedBatches = eligibleBatches.filter((b) => selectedBatchIds.includes(b.id));
+    const hasMissingFGSerials = selectedBatches.some((batch) => {
+      const fgItems = (batch.outputItems || []).filter(
+        (item: any) => String(item.itemTypeCode || "").trim().toUpperCase() === "FG"
+      );
+      return fgItems.some((item: any) => {
+        const expectedQty = Number(item.qtyProduced || 0);
+        const importedCount =
+          batchSerialNumbers?.[batch.batchNo]?.[item.itemCode]?.length || 0;
+        return expectedQty > 0 && importedCount !== expectedQty;
+      });
     });
 
-    // Close modal and reset
-    setIsCreateModalOpen(false);
-    setSelectedOperation("");
-    setSelectedWorkCenter("");
-    setSelectedWarehouse("");
-    setEligibleBatches([]);
-    setSelectedBatchIds([]);
-    setProducedItems([]);
-    setBatchSerialNumbers({}); // Reset serial numbers
-    setSelectedProductionPlan("");
+    if (hasMissingFGSerials) {
+      toast({
+        title: "Validation Error",
+        description: "Serial numbers are required for Finished Goods. Please import serial numbers before issuing.",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    if (user == null || user.id == null) {
+      toast({
+        title: "Session required",
+        description: "Sign in to create a material release.",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    const selOpId = Number(selectedOperation);
+    const opRow = formWorkCenterOperations.find(
+      (o) => resolveFormOperationId(o) === selOpId
+    );
+    const operationId = resolveFormOperationId(opRow);
+    if (opRow == null || operationId == null) {
+      toast({
+        title: "Validation Error",
+        description: "Could not resolve operation. Please re-select work center and operation.",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    if (selectedWorkCenterId == null || !Number.isFinite(selectedWorkCenterId)) {
+      toast({
+        title: "Validation Error",
+        description: "Work center is required.",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    if (selectedWarehouseId == null || !Number.isFinite(selectedWarehouseId)) {
+      toast({
+        title: "Validation Error",
+        description: "Warehouse is required.",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    const productionPlanId = Number(selectedProductionPlan);
+    if (!Number.isFinite(productionPlanId)) {
+      toast({
+        title: "Validation Error",
+        description: "Invalid production plan.",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    const releaseDateYmd = String(formData.releaseDate || "").trim().slice(0, 10);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(releaseDateYmd)) {
+      toast({
+        title: "Validation Error",
+        description: "Release date must be in YYYY-MM-DD format.",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    setIsSubmittingCreate(true);
+    try {
+      // ✅ Step 1: Import Serials (Single API call for all batches) using dynamic FormData
+      const batchFileEntries = Object.entries(batchFiles);
+      if (batchFileEntries.length > 0) {
+        const formData = new FormData();
+        
+        for (const [batchNo, items] of batchFileEntries) {
+          const batch = eligibleBatches.find(b => b.batchNo === batchNo);
+          if (!batch) continue;
+
+          for (const [itemCode, fileObj] of Object.entries(items)) {
+            if (fileObj) {
+              // As per Postman screenshot: 
+              // 1. Repeat "batch_id" field
+              // 2. Use dynamic file key: "file[batch_id]"
+              formData.append("batch_id", String(batch.id));
+              formData.append(`file[${batch.id}]`, fileObj);
+            }
+          }
+        }
+
+        // Call API ONCE with all batches combined
+        const importRes = await productionApi.importMaterialReleaseSerials(formData);
+        
+        if (!importRes.isSuccessful) {
+          toast({
+            variant: "destructive",
+            title: "Serial Import Failed",
+            description: importRes.message || "Failed to import serial numbers. Process stopped."
+          });
+          setIsSubmittingCreate(false);
+          return; // STOP EXECUTION
+        }
+        
+        toast({
+          variant: "success",
+          title: "Serials Imported",
+          description: "All serial numbers have been successfully validated and imported."
+        });
+      }
+
+      // ✅ Step 2: Create Material Release ONLY IF STEP 1 SUCCEEDS
+      const res = await productionApi.createMaterialRelease({
+        release_date: releaseDateYmd,
+        released_by: user.id,
+        operation_id: operationId,
+        work_center_id: selectedWorkCenterId,
+        warehouse_id: selectedWarehouseId,
+        production_plan_id: productionPlanId,
+        batch_ids: selectedBatchIds,
+      });
+
+      if (!res.isSuccessful) {
+        toast({
+          variant: "destructive",
+          title: "Release Creation Failed",
+          description: res.message || "Serials were imported, but release creation failed.",
+        });
+        setIsSubmittingCreate(false);
+        return;
+      }
+
+      const rawData = (res as any).data;
+      const resolvedReleaseId = Number(
+        rawData?.release_id ??
+        rawData?.id ??
+        rawData?.material_release_id ??
+        rawData?.data?.release_id ??
+        rawData?.data?.id
+      );
+      const release_id = Number.isFinite(resolvedReleaseId) ? resolvedReleaseId : null;
+      setLatestCreatedReleaseId(release_id);
+
+      // ✅ Step 3: Finalize
+      setCurrentPage(1);
+      void fetchMaterialReleaseList(1);
+      toast({
+        variant: "success",
+        title: "Success",
+        description: res.message || "Material release issued to warehouse successfully.",
+      });
+      
+      setIsCreateModalOpen(false);
+      setSelectedOperation("");
+      setSelectedWorkCenter("");
+      setSelectedWorkCenterId(null);
+      setSelectedWarehouse("");
+      setSelectedWarehouseId(null);
+      setFormWorkCenterOperations([]);
+      setFormProductionPlans([]);
+      setEligibleBatches([]);
+      setSelectedBatchIds([]);
+      setProducedItems([]);
+      setBatchSerialNumbers({});
+      setBatchFiles({});
+      setSelectedProductionPlan("");
+
+    } catch (error: any) {
+      console.error("Submit error:", error);
+      toast({
+        variant: "destructive",
+        title: "Submission Error",
+        description: error.message || "An unexpected error occurred."
+      });
+    } finally {
+      setIsSubmittingCreate(false);
+    }
   };
 
   /**
    * Handle Excel import for serial numbers
    */
-  const handleImportSerialNumbers = (batchNo: string, itemCode: string, file: File, expectedQty: number) => {
-    const reader = new FileReader();
-    reader.onload = (e) => {
-      try {
-        const data = new Uint8Array(e.target?.result as ArrayBuffer);
-        const workbook = XLSX.read(data, { type: "array" });
-        const sheetName = workbook.SheetNames[0];
-        const worksheet = workbook.Sheets[sheetName];
-        const json = XLSX.utils.sheet_to_json(worksheet, { header: 1 }) as any[][];
+  const handleImportSerialNumbers = async (
+    batchId: number,
+    batchNo: string,
+    itemCode: string,
+    file: File,
+    expectedQty: number
+  ) => {
+    try {
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        try {
+          const data = new Uint8Array(e.target?.result as ArrayBuffer);
+          const workbook = XLSX.read(data, { type: "array" });
+          const firstSheetName = workbook.SheetNames[0];
+          const worksheet = workbook.Sheets[firstSheetName];
+          const { serials: importedSerials, hadHeader } = parseSerialNumbersFromWorksheet(worksheet);
 
-        // Assuming serial numbers are in the first column, skipping header if exists
-        // Filter out empty rows
-        let serialNumbers = json
-          .map(row => row[0])
-          .filter(val => val !== undefined && val !== "" && val !== null)
-          .map(val => String(val).trim());
+          if (!importedSerials.length) {
+            toast({
+              title: "Import Error",
+              description: "No serial numbers found in the file.",
+              variant: "destructive",
+            });
+            return;
+          }
 
-        // If the first row is likely a header (non-numeric and count is one extra), skip it
-        if (serialNumbers.length === expectedQty + 1 && isNaN(Number(serialNumbers[0]))) {
-          serialNumbers.shift();
-        }
+          // Strict validation: count must match exactly
+          if (importedSerials.length !== expectedQty) {
+            toast({
+              title: "Quantity Mismatch",
+              description: `Expected exactly ${expectedQty} serials, but found ${importedSerials.length} in file. Typing/Import blocked.`,
+              variant: "destructive",
+            });
+            return;
+          }
 
-        if (serialNumbers.length !== expectedQty) {
+          // Store serials for UI count
+          setBatchSerialNumbers((prev) => ({
+            ...prev,
+            [batchNo]: {
+              ...prev[batchNo],
+              [itemCode]: importedSerials,
+            },
+          }));
+
+          // Upload a data-only file so backend row count matches frontend (backend counts all rows, including header).
+          const fileForApi = buildSerialsOnlyExcelFile(importedSerials, file.name);
+          setBatchFiles((prev) => ({
+            ...prev,
+            [batchNo]: {
+              ...prev[batchNo],
+              [itemCode]: fileForApi,
+            },
+          }));
+
+          toast({
+            variant: "success",
+            title: "File Validated",
+            description: hadHeader
+              ? `${importedSerials.length} serials ready (header row excluded from upload).`
+              : `${importedSerials.length} serials parsed and ready for submission.`,
+          });
+        } catch (err) {
+          console.error("Excel parse error:", err);
           toast({
             title: "Import Error",
-            description: `Number of serial numbers (${serialNumbers.length}) does not match produced quantity (${expectedQty}).`,
+            description: "Failed to parse Excel file. Ensure it is a valid .xlsx or .xls file.",
             variant: "destructive",
           });
-          return;
         }
-
-        setBatchSerialNumbers(prev => ({
-          ...prev,
-          [batchNo]: {
-            ...(prev[batchNo] || {}),
-            [itemCode]: serialNumbers,
-          },
-        }));
-
-        toast({
-          variant: "success",
-          title: "Import Success",
-          description: `Imported ${serialNumbers.length} serial numbers for batch ${batchNo}.`,
-        });
-      } catch (error) {
-        console.error("Excel import error:", error);
-        toast({
-          title: "Import Error",
-          description: "Failed to parse Excel file.",
-          variant: "destructive",
-        });
-      }
-    };
-    reader.readAsArrayBuffer(file);
+      };
+      reader.readAsArrayBuffer(file);
+    } catch (error) {
+      console.error("Import serials error:", error);
+      toast({
+        title: "Import Error",
+        description: error instanceof Error ? error.message : "Failed to import serial numbers.",
+        variant: "destructive",
+      });
+    }
   };
 
   /**
@@ -815,54 +1663,52 @@ export default function MaterialRelease() {
   };
 
   // ============================================================================
-  // FILTERING & PAGINATION
+  // SERVER PAGINATION (getmaterialreleaselist)
   // ============================================================================
 
-  const filteredReleases = releases.filter(release => {
-    const matchesSearch =
-      release.releaseNo.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      release.operation.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      release.workCenter.toLowerCase().includes(searchTerm.toLowerCase());
+  const totalPages = Math.ceil(totalRecords / itemsPerPage);
 
-    const matchesStatus = statusFilter === "all" || release.status === statusFilter;
-    const matchesOperation = operationFilter === "all" || release.operation === operationFilter;
-    const matchesShift = shiftFilter === "all" || (release.batchDetails?.some(b => b.shift === shiftFilter) ?? false);
-    const matchesDate = !filterDate || formatDate(release.releaseDate) === filterDate;
-
-    return matchesSearch && matchesStatus && matchesOperation && matchesShift && matchesDate;
-  });
-
-  const totalPages = Math.ceil(filteredReleases.length / itemsPerPage);
-  const paginatedData = filteredReleases.slice(
-    (currentPage - 1) * itemsPerPage,
-    currentPage * itemsPerPage
-  );
-
-  // Auto-adjust page when data changes
   useEffect(() => {
-    if (currentPage > totalPages && totalPages > 0) {
+    if (totalPages > 0 && currentPage > totalPages) {
       setCurrentPage(totalPages);
     }
-  }, [filteredReleases.length, currentPage, totalPages]);
-
-  // Reset to page 1 when filters change
-  useEffect(() => {
-    setCurrentPage(1);
-  }, [searchTerm, statusFilter, operationFilter, shiftFilter, filterDate]);
+  }, [totalPages, currentPage]);
 
   // ============================================================================
   // RENDER - LISTING PAGE
   // ============================================================================
 
-  // Get work centers for selected operation (used in create modal)
-  const availableWorkCenters = selectedOperation
-    ? workCenterMappings
-      .filter(wc => wc.operation === selectedOperation)
-      .map(wc => wc.workCenter)
-    : [];
+  const formOperationSelectOptions = useMemo(() => {
+    return formWorkCenterOperations
+      .map((op) => {
+        const id = resolveFormOperationId(op);
+        const label = String(
+          (op as any).operation_name || (op as any).name || (op as any).operation || ""
+        ).trim();
+        if (id == null || !label) return null;
+        const code = String((op as any).operation_code || (op as any).code || "").trim() || `OP${String(id).padStart(3, "0")}`;
+        return {
+          value: String(id),
+          label: `${label} — ${code}`,
+          primaryText: label,
+          secondaryText: code,
+        };
+      })
+      .filter((o): o is { value: string; label: string; primaryText: string; secondaryText: string } => o != null);
+  }, [formWorkCenterOperations]);
+
+  const formProductionPlanOptions = useMemo(
+    () =>
+      formProductionPlans.map((p) => ({
+        value: String(p.production_plan_id),
+        label: p.display_name || p.plan_code
+      })),
+    [formProductionPlans]
+  );
 
   // Check if primary button should be disabled (used in create modal)
   const isPrimaryButtonDisabled =
+    isSubmittingCreate ||
     !selectedProductionPlan ||
     !selectedOperation ||
     !selectedWorkCenter ||
@@ -870,8 +1716,28 @@ export default function MaterialRelease() {
     selectedBatchIds.length === 0;
 
   // Check if any selected item is Finished Good (FG)
-  const isFGProduced = producedItems.some(item => item.itemCode.toLowerCase().startsWith("fg-"));
-  const selectedBatches = eligibleBatches.filter(b => selectedBatchIds.includes(b.id));
+  const isFGProduced = producedItems.some(
+    (item) => String(item.itemTypeCode || "").trim().toUpperCase() === "FG"
+  );
+  const selectedBatches = eligibleBatches.filter((b) => selectedBatchIds.includes(b.id));
+
+  const hasMissingFGSerials = useMemo(() => {
+    if (!isFGProduced || selectedBatches.length === 0) return false;
+    return selectedBatches.some((batch) => {
+      const fgItems = (batch.outputItems || []).filter(
+        (item: any) => String(item.itemTypeCode || "").trim().toUpperCase() === "FG"
+      );
+      return fgItems.some((item: any) => {
+        const expectedQty = Number(item.qtyProduced || 0);
+        const importedCount =
+          batchSerialNumbers?.[batch.batchNo]?.[item.itemCode]?.length || 0;
+        return expectedQty > 0 && importedCount !== expectedQty;
+      });
+    });
+  }, [isFGProduced, selectedBatches, batchSerialNumbers]);
+
+  const isPrimaryButtonDisabledWithFG =
+    isPrimaryButtonDisabled || (isFGProduced && hasMissingFGSerials);
 
   return (
     <div className="flex flex-col gap-6 h-full">
@@ -886,48 +1752,63 @@ export default function MaterialRelease() {
       <AppListToolbar
         search={{
           value: searchTerm,
-          onChange: setSearchTerm,
-          placeholder: "Search by Release No / Operation..."
+          onChange: (v) => {
+            setSearchTerm(v);
+            setCurrentPage(1);
+          },
+          placeholder: "Search by Release Code"
         }}
         filters={[
           {
             type: 'select',
-            label: 'Shift',
-            value: shiftFilter,
-            options: [{ label: "All Shifts", value: "all" }, "Morning", "Night"],
-            onChange: setShiftFilter,
-            searchable: true
-          },
-          {
-            type: 'select',
             label: 'Operation',
             value: operationFilter,
-            options: [{ label: "All Operations", value: "all" }, ...operationMasters.map(om => om.operation)],
-            onChange: setOperationFilter,
-            searchable: true
-          },
-          {
-            type: 'select',
-            label: 'Status',
-            value: statusFilter,
-            options: [{ label: "All Status", value: "all" }, "Issued to Warehouse", "Received By Warehouse"],
-            onChange: setStatusFilter,
+            options: operationSelectOptions,
+            onChange: (v) => {
+              setOperationFilter(v);
+              setCurrentPage(1);
+            },
             searchable: true
           },
           {
             type: 'date',
             label: 'Date',
             value: filterDate ? parseDateString(filterDate) : undefined,
-            onChange: (date) => setFilterDate(date ? format(date, "dd-MM-yyyy") : ""),
+            onChange: (date) => {
+              setFilterDate(date ? format(date, "dd-MM-yyyy") : "");
+              setCurrentPage(1);
+            },
             showClear: !!filterDate
+          },
+          {
+            type: 'select',
+            label: 'Status',
+            value: statusFilter,
+            options: statusSelectOptions,
+            onChange: (v) => {
+              setStatusFilter(v);
+              setCurrentPage(1);
+            },
+            searchable: true
+          },
+          {
+            type: 'select',
+            label: 'Shift',
+            value: shiftFilter,
+            options: shiftSelectOptions,
+            onChange: (v) => {
+              setShiftFilter(v);
+              setCurrentPage(1);
+            },
+            searchable: true
           }
         ]}
         actions={[
-          {
+          ...(canCreate(permissionModule) ? [{
             label: "Create Material Release",
             icon: <Plus className="h-4 w-4" />,
-            onClick: handleAddRelease
-          }
+            onClick: handleAddRelease,
+          }] : [])
         ]}
       />
 
@@ -939,7 +1820,7 @@ export default function MaterialRelease() {
               <TableHeader>
                 <TableRow className="bg-muted/50">
                   <TableHead>Release Date</TableHead>
-                  <TableHead>Release No</TableHead>
+                  <TableHead>Release Code</TableHead>
                   <TableHead>Operation</TableHead>
                   <TableHead>Work Center</TableHead>
                   <TableHead>Warehouse</TableHead>
@@ -948,14 +1829,23 @@ export default function MaterialRelease() {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {paginatedData.length === 0 ? (
+                {!areListFiltersReady || isListLoading ? (
+                  <TableRow>
+                    <TableCell colSpan={7} className="h-32 text-center">
+                      <div className="flex flex-col items-center justify-center gap-3">
+                        <Loader2 className="h-8 w-8 animate-spin text-primary" />
+                        <p className="text-sm text-muted-foreground">Loading...</p>
+                      </div>
+                    </TableCell>
+                  </TableRow>
+                ) : releases.length === 0 ? (
                   <TableRow>
                     <TableCell colSpan={7} className="h-24 text-center text-muted-foreground">
                       No releases found.
                     </TableCell>
                   </TableRow>
                 ) : (
-                  paginatedData.map((release) => (
+                  releases.map((release) => (
                     <TableRow key={release.id}>
                       <TableCell>{formatDate(release.releaseDate)}</TableCell>
                       <TableCell className="font-medium">{release.releaseNo}</TableCell>
@@ -970,10 +1860,12 @@ export default function MaterialRelease() {
                           {release.status}
                         </Badge>
                       </TableCell>
-                      <TableCell className="text-center py-4">
-                        <TableActionButtons
-                          onView={() => handleViewRelease(release)}
-                        />
+                      <TableCell className="text-center">
+                        <div className={cn(isRowActionBusy && "pointer-events-none opacity-50")}>
+                          <TableActionButtons
+                            onView={canView(permissionModule) ? () => handleViewRelease(release) : undefined}
+                          />
+                        </div>
                       </TableCell>
                     </TableRow>
                   ))
@@ -982,12 +1874,11 @@ export default function MaterialRelease() {
             </Table>
           </div>
 
-          {/* Pagination - using standardized DataTablePagination component */}
-          {filteredReleases.length > 0 && (
+          {areListFiltersReady && totalRecords > 0 && !isListLoading && (
             <DataTablePagination
               currentPage={currentPage}
               totalPages={totalPages}
-              totalItems={filteredReleases.length}
+              totalItems={totalRecords}
               itemsPerPage={itemsPerPage}
               onPageChange={setCurrentPage}
               onItemsPerPageChange={setItemsPerPage}
@@ -998,59 +1889,91 @@ export default function MaterialRelease() {
       </Card>
 
       {/* View Release Modal */}
-      <Dialog open={isViewModalOpen} onOpenChange={setIsViewModalOpen}>
+      <Dialog
+        open={isViewModalOpen}
+        onOpenChange={(open) => {
+          setIsViewModalOpen(open);
+          if (!open) {
+            setViewingRelease(null);
+            setIsViewDetailLoading(false);
+          }
+        }}
+      >
         <DialogContent
-          className="sm:max-w-[700px] max-h-[90vh] overflow-y-auto"
+          className="flex! min-h-0 w-[95%] max-h-[82vh] flex-col gap-0 overflow-hidden bg-white p-0 sm:max-w-3xl md:max-w-4xl lg:max-w-5xl xl:max-w-6xl"
           onPointerDownOutside={(e) => e.preventDefault()}
+          onInteractOutside={(e) => e.preventDefault()}
         >
-          <DialogHeader>
-            <DialogTitle>Release Details</DialogTitle>
-            <DialogDescription>
+          <DialogHeader className="shrink-0 space-y-1 border-b p-4 pb-2 sm:p-5 sm:pb-3">
+            <DialogTitle className="text-lg font-bold sm:text-xl">Release Details</DialogTitle>
+            <DialogDescription className="text-xs leading-snug text-muted-foreground sm:text-sm">
               View operation release details
             </DialogDescription>
           </DialogHeader>
-          {viewingRelease && (
-            <div className="space-y-4">
-              {/* Header Info */}
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <Label className="text-xs text-muted-foreground">Release No</Label>
-                  <p className="font-medium">{viewingRelease.releaseNo}</p>
-                </div>
-                <div>
-                  <Label className="text-xs text-muted-foreground">Release Date</Label>
-                  <p className="font-medium">{formatDate(viewingRelease.releaseDate)}</p>
-                </div>
-                <div>
-                  <Label className="text-xs text-muted-foreground">Status</Label>
-                  <Badge 
-                    variant={viewingRelease.status === "Issued to Warehouse" ? "default" : "secondary"}
-                    className="whitespace-nowrap w-fit px-2.5 py-0.5"
-                  >
-                    {viewingRelease.status}
-                  </Badge>
-                </div>
-                <div>
-                  <Label className="text-xs text-muted-foreground">Released By</Label>
-                  <p className="font-medium">{viewingRelease.releasedBy}</p>
-                </div>
-                <div>
-                  <Label className="text-xs text-muted-foreground">Operation</Label>
-                  <p className="font-medium">{viewingRelease.operation}</p>
-                </div>
-                <div>
-                  <Label className="text-xs text-muted-foreground">Work Center</Label>
-                  <p className="font-medium">{viewingRelease.workCenter}</p>
-                </div>
-                <div>
-                  <Label className="text-xs text-muted-foreground">Warehouse</Label>
-                  <p className="font-medium">{viewingRelease.warehouse}</p>
-                </div>
-                <div>
-                  <Label className="text-xs text-muted-foreground">Batches</Label>
-                  <p className="font-medium">{viewingRelease.batchIds.join(", ")}</p>
-                </div>
+
+          <div className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto px-4 py-3 sm:px-5 sm:py-4">
+            {isViewDetailLoading && (
+              <div className="flex min-h-[240px] flex-col items-center justify-center gap-3 sm:min-h-[320px]">
+                <Loader2 className="h-8 w-8 animate-spin text-primary" />
+                <p className="text-sm text-muted-foreground">Loading...</p>
               </div>
+            )}
+            {!isViewDetailLoading && viewingRelease && (
+              <div className="space-y-5">
+                {/* Header Info */}
+                <div className="grid grid-cols-1 gap-3 rounded-lg border bg-muted/20 p-4 sm:grid-cols-2 sm:gap-4 sm:p-5 lg:grid-cols-3">
+                  <div className="min-w-0 space-y-1">
+                    <Label className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">Release Code</Label>
+                    <p className="truncate text-sm font-semibold" title={viewingRelease.releaseNo}>
+                      {viewingRelease.releaseNo}
+                    </p>
+                  </div>
+                  <div className="min-w-0 space-y-1">
+                    <Label className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">Release Date</Label>
+                    <p className="text-sm font-semibold">{formatDate(viewingRelease.releaseDate)}</p>
+                  </div>
+                  <div className="min-w-0 space-y-1">
+                    <Label className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">Status</Label>
+                    <div className="pt-0.5">
+                      <Badge
+                        variant={viewingRelease.status === "Issued to Warehouse" ? "default" : "secondary"}
+                        className="whitespace-nowrap w-fit px-2.5 py-0.5"
+                      >
+                        {viewingRelease.status}
+                      </Badge>
+                    </div>
+                  </div>
+                  <div className="min-w-0 space-y-1">
+                    <Label className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">Released By</Label>
+                    <p className="truncate text-sm font-semibold" title={viewingRelease.releasedBy}>
+                      {viewingRelease.releasedBy}
+                    </p>
+                  </div>
+                  <div className="min-w-0 space-y-1 sm:col-span-2 lg:col-span-1">
+                    <Label className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">Operation</Label>
+                    <p className="whitespace-normal wrap-break-word text-sm font-semibold leading-snug" title={viewingRelease.operation}>
+                      {viewingRelease.operation}
+                    </p>
+                  </div>
+                  <div className="min-w-0 space-y-1">
+                    <Label className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">Work Center</Label>
+                    <p className="whitespace-normal wrap-break-word text-sm font-semibold leading-snug" title={viewingRelease.workCenter}>
+                      {viewingRelease.workCenter}
+                    </p>
+                  </div>
+                  <div className="min-w-0 space-y-1">
+                    <Label className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">Warehouse</Label>
+                    <p className="whitespace-normal wrap-break-word text-sm font-semibold leading-snug" title={viewingRelease.warehouse}>
+                      {viewingRelease.warehouse}
+                    </p>
+                  </div>
+                  <div className="min-w-0 space-y-1">
+                    <Label className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">Batches</Label>
+                    <p className="whitespace-normal wrap-break-word text-sm font-semibold leading-snug">
+                      {viewingRelease.batchIds.length ? viewingRelease.batchIds.join(", ") : "—"}
+                    </p>
+                  </div>
+                </div>
 
               {/* Batch-wise Produced Items (Breakdown) */}
               {/* ✅ ADDED: Release Details shows batch-wise produced qty breakdown (batch -> items -> qty) */}
@@ -1063,7 +1986,7 @@ export default function MaterialRelease() {
                       <TableHeader>
                         <TableRow className="bg-muted/50">
                           <TableHead>Shift</TableHead>
-                          <TableHead>Batch No</TableHead>
+                          <TableHead>Batch Code</TableHead>
                           <TableHead>Items Produced</TableHead>
                         </TableRow>
                       </TableHeader>
@@ -1104,25 +2027,35 @@ export default function MaterialRelease() {
                       </TableRow>
                     </TableHeader>
                     <TableBody>
-                      {viewingRelease.items.map((item) => (
-                        <TableRow key={item.id}>
-                          <TableCell>
-                            <div>
-                              <div className="font-medium">{item.itemCode}</div>
-                              <div className="text-sm text-muted-foreground">{item.itemName}</div>
-                              <div className="text-xs text-muted-foreground">{item.uom}</div>
-                            </div>
+                      {viewingRelease.items.length === 0 ? (
+                        <TableRow>
+                          <TableCell colSpan={2} className="text-center text-muted-foreground py-8">
+                            No line items
                           </TableCell>
-                          <TableCell className="text-right font-medium">{item.qtyProduced}</TableCell>
                         </TableRow>
-                      ))}
+                      ) : (
+                        viewingRelease.items.map((item) => (
+                          <TableRow key={item.id}>
+                            <TableCell>
+                              <div>
+                                <div className="font-medium">{item.itemCode}</div>
+                                <div className="text-sm text-muted-foreground">{item.itemName}</div>
+                                <div className="text-xs text-muted-foreground">{item.uom}</div>
+                              </div>
+                            </TableCell>
+                            <TableCell className="text-right font-medium">{item.qtyProduced}</TableCell>
+                          </TableRow>
+                        ))
+                      )}
                     </TableBody>
                   </Table>
                 </div>
               </div>
-            </div>
-          )}
-          <DialogFooter>
+              </div>
+            )}
+          </div>
+
+          <DialogFooter className="shrink-0 border-t bg-muted/20 p-4 sm:p-5">
             <Button variant="outline" onClick={() => setIsViewModalOpen(false)}>
               Close
             </Button>
@@ -1137,116 +2070,137 @@ export default function MaterialRelease() {
         }
       }}>
         <DialogContent
-          className="sm:max-w-[950px] max-h-[95vh] overflow-y-auto"
+          className="flex! min-h-0 w-[95%] max-h-[82vh] flex-col gap-0 overflow-hidden bg-white p-0 sm:max-w-3xl md:max-w-4xl lg:max-w-5xl xl:max-w-6xl"
           onPointerDownOutside={(e) => e.preventDefault()}
+          onInteractOutside={(e) => e.preventDefault()}
         >
-          <DialogHeader>
-            <DialogTitle>Create Material Release</DialogTitle>
-            <DialogDescription>
+          <DialogHeader className="shrink-0 space-y-1 p-4 pb-2 sm:p-5 sm:pb-3">
+            <DialogTitle className="text-lg font-bold sm:text-xl">Create Material Release</DialogTitle>
+            <DialogDescription className="text-xs leading-snug text-muted-foreground sm:text-sm">
               Release produced output from production operations to warehouse
             </DialogDescription>
           </DialogHeader>
 
-          <div className="space-y-6">
-            {/* Header Summary Section */}
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              {/* Auto-filled fields (read-only) */}
-              <div>
-                <Label>Release Date</Label>
-                <div
-                  className="flex h-10 w-full items-center rounded-md border border-input bg-muted/30 px-3 text-sm text-foreground tabular-nums"
-                  aria-readonly="true"
-                >
-                  {formData.releaseDate ? formatDate(formData.releaseDate) : ""}
+          <div className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto px-4 py-3 sm:px-5 sm:py-4">
+            <div className="space-y-5">
+              {/* Header Summary Section */}
+              <div className="grid grid-cols-1 gap-4 md:grid-cols-2 md:items-start">
+                {/* Auto-filled fields (read-only) */}
+                <div className="min-w-0 space-y-1.5">
+                  <Label className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">Release Date</Label>
+                  <div
+                    className="flex h-9 w-full items-center rounded-md border border-input bg-muted/30 px-3 text-sm text-foreground tabular-nums"
+                    aria-readonly="true"
+                  >
+                    {formData.releaseDate ? formatDate(formData.releaseDate) : ""}
+                  </div>
+                </div>
+                <div className="min-w-0 space-y-1.5">
+                  <Label className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">Released By</Label>
+                  <div
+                    className="flex h-9 w-full items-center rounded-md border border-input bg-muted/30 px-3 text-sm text-foreground"
+                    aria-readonly="true"
+                  >
+                    {formData.releasedBy}
+                  </div>
+                </div>
+
+                {/* Required dropdowns */}
+                <div className="min-w-0">
+                  <SharedSearchableSelect
+                    label="Work Center"
+                    required
+                    value={selectedWorkCenterId != null ? String(selectedWorkCenterId) : ""}
+                    onChange={(val) => handleWorkCenterChange(String(val))}
+                    options={formAssignedWorkCenters.map((wc) => ({
+                      value: String(wc.work_center_id),
+                      label: wc.work_center_name
+                    }))}
+                    placeholder={isLoadingFormWorkCenters ? "Loading..." : "Select Work Center"}
+                    disabled={isLoadingFormWorkCenters}
+                    className="h-9"
+                    listClassName="max-h-[200px]"
+                  />
+                </div>
+
+                <div className="min-w-0">
+                  <SharedSearchableSelect
+                    label="Operation"
+                    required
+                    value={selectedOperation}
+                    onChange={(val) => handleOperationChange(String(val))}
+                    options={formOperationSelectOptions}
+                    placeholder={
+                      selectedWorkCenterId == null
+                        ? "Select a work center first"
+                        : isLoadingFormOperations
+                          ? "Loading operations..."
+                          : "Select Operation"
+                    }
+                    disabled={selectedWorkCenterId == null || isLoadingFormOperations}
+                    showSelectedTitle
+                    selectedPrimaryLineClamp={2}
+                    className="h-auto min-h-[52px] items-start! py-0.5"
+                    listClassName="max-h-[220px]"
+                  />
+                </div>
+
+                <div className="min-w-0">
+                  <SharedSearchableSelect
+                    label="Warehouse"
+                    required
+                    value={selectedWarehouseId != null ? String(selectedWarehouseId) : ""}
+                    onChange={(val) => handleWarehouseChange(String(val))}
+                    options={formWarehouses.map((w) => ({
+                      value: String(w.id),
+                      label: w.name
+                    }))}
+                    placeholder={isLoadingFormWarehouses ? "Loading..." : "Select Warehouse"}
+                    disabled={isLoadingFormWarehouses}
+                    className="h-9"
+                    listClassName="max-h-[200px]"
+                  />
+                </div>
+
+                <div className="min-w-0">
+                  <SharedSearchableSelect
+                    label="Production Plan"
+                    required
+                    value={selectedProductionPlan}
+                    onChange={(val) => setSelectedProductionPlan(String(val))}
+                    options={formProductionPlanOptions}
+                    placeholder={
+                      !selectedOperation
+                        ? "Select an operation first"
+                        : isLoadingFormProductionPlans
+                          ? "Loading production plans..."
+                          : "Select Production Plan"
+                    }
+                    disabled={!selectedOperation || isLoadingFormProductionPlans}
+                    selectedTruncate="end"
+                    showSelectedTitle
+                    lightSelectedText
+                    className="h-9"
+                    listClassName="max-h-[220px]"
+                  />
                 </div>
               </div>
-              <div>
-                <Label>Released By</Label>
-                <div
-                  className="flex h-10 w-full items-center rounded-md border border-input bg-muted/30 px-3 text-sm text-foreground"
-                  aria-readonly="true"
-                >
-                  {formData.releasedBy}
-                </div>
-              </div>
-
-              {/* Required dropdowns */}
-              <div>
-                <Label>
-                  Operation <span className="text-destructive">*</span>
-                </Label>
-                <LocalSearchableSelect
-                  value={selectedOperation}
-                  onValueChange={handleOperationChange}
-                  options={operationMasters.map(om => ({
-                    value: om.operation,
-                    label: om.operation,
-                  }))}
-                  placeholder="Select Operation"
-                  searchPlaceholder="Search operation..."
-                  emptyText="No operation found"
-                />
-              </div>
-
-              <div>
-                <Label>
-                  Work Center <span className="text-destructive">*</span>
-                </Label>
-                <LocalSearchableSelect
-                  value={selectedWorkCenter}
-                  onValueChange={handleWorkCenterChange}
-                  options={availableWorkCenters.map(wc => ({
-                    value: wc,
-                    label: wc,
-                  }))}
-                  placeholder="Select Work Center"
-                  searchPlaceholder="Search work center..."
-                  emptyText="No work center found"
-                />
-              </div>
-
-              <div>
-                <Label>
-                  Warehouse <span className="text-destructive">*</span>
-                </Label>
-                <LocalSearchableSelect
-                  value={selectedWarehouse}
-                  onValueChange={setSelectedWarehouse}
-                  options={warehouses.map(wh => ({
-                    value: wh,
-                    label: wh,
-                  }))}
-                  placeholder="Select Warehouse"
-                  searchPlaceholder="Search warehouse..."
-                  emptyText="No warehouse found"
-                />
-              </div>
-
-              <div>
-                <Label>
-                  Production Plan <span className="text-destructive">*</span>
-                </Label>
-                <LocalSearchableSelect
-                  value={selectedProductionPlan}
-                  onValueChange={setSelectedProductionPlan}
-                  options={mockProductionPlans}
-                  placeholder="Select Production Plan"
-                  searchPlaceholder="Search plan..."
-                  emptyText="No plan found"
-                />
-              </div>
-            </div>
 
             {/* Eligible Batches Section with Multi-Select */}
             <div>
               <Label className="text-sm font-semibold mb-2 block">Eligible Batches</Label>
-              {!selectedOperation || !selectedWorkCenter ? (
-                <div className="text-center py-8 text-muted-foreground border rounded-md">
-                  Please select Operation and Work Center to view eligible batches
+              {!selectedOperation || !selectedWorkCenter || !selectedWarehouse ? (
+                <div className="text-center py-5 text-sm text-muted-foreground border rounded-md">
+                  Please select Work Center, Operation, and Warehouse to view eligible batches
+                </div>
+              ) : isLoadingEligibleBatches ? (
+                <div className="flex flex-col items-center justify-center gap-3 py-8 text-muted-foreground border rounded-md">
+                  <Loader2 className="h-8 w-8 animate-spin text-primary" />
+                  <p className="text-sm">Loading...</p>
                 </div>
               ) : eligibleBatches.length === 0 ? (
-                <div className="text-center py-8 text-muted-foreground border rounded-md">
-                  No eligible batches found for this Operation and Work Center
+                <div className="text-center py-5 text-sm text-muted-foreground border rounded-md">
+                  No eligible batches for this operation
                 </div>
               ) : (
                 <div className="rounded-md border">
@@ -1255,7 +2209,7 @@ export default function MaterialRelease() {
                       <TableRow className="bg-muted/50">
                         <TableHead className="w-12">Select</TableHead>
                         <TableHead>Shift</TableHead>
-                        <TableHead>Batch No</TableHead>
+                        <TableHead>Batch Code</TableHead>
                         <TableHead>Items Produced</TableHead>
                       </TableRow>
                     </TableHeader>
@@ -1305,7 +2259,7 @@ export default function MaterialRelease() {
                   <Table>
                     <TableHeader>
                       <TableRow className="bg-primary/10 border-none hover:bg-primary/10">
-                        <TableHead className="text-primary font-bold">Batch No</TableHead>
+                        <TableHead className="text-primary font-bold">Batch Code</TableHead>
                         <TableHead className="text-primary font-bold">Item Details</TableHead>
                         <TableHead className="text-primary font-bold">Import Serial No</TableHead>
                         <TableHead className="text-primary font-bold">Import Count</TableHead>
@@ -1316,7 +2270,7 @@ export default function MaterialRelease() {
                       {selectedBatches.flatMap((batch) => {
                         // Filter for FG items in this batch
                         const fgItems = batch.outputItems.filter(item =>
-                          item.itemCode.toLowerCase().startsWith("fg-")
+                          item.itemTypeCode === "FG"
                         );
 
                         return fgItems.map((item) => {
@@ -1349,8 +2303,16 @@ export default function MaterialRelease() {
                                     onChange={(e) => {
                                       const file = e.target.files?.[0];
                                       if (file) {
-                                        handleImportSerialNumbers(batch.batchNo, item.itemCode, file, expectedQty);
+                                        void handleImportSerialNumbers(
+                                          batch.id,
+                                          batch.batchNo,
+                                          item.itemCode,
+                                          file,
+                                          expectedQty
+                                        );
                                       }
+                                      // Reset value so the same file can be selected again
+                                      e.target.value = "";
                                     }}
                                   />
                                   <Button
@@ -1388,7 +2350,7 @@ export default function MaterialRelease() {
                                   className={cn(
                                     "h-8 shadow-sm",
                                     importedCount === 0
-                                      ? "bg-muted text-muted-foreground border-muted hover:bg-muted disabled:!opacity-100"
+                                      ? "bg-muted text-muted-foreground border-muted hover:bg-muted disabled:opacity-100!"
                                       : "bg-blue-600 text-white hover:bg-blue-600/90 border-blue-600"
                                   )}
                                 >
@@ -1410,7 +2372,7 @@ export default function MaterialRelease() {
             <div className="space-y-3">
               <Label className="text-sm font-semibold mb-2 block">Produced Items (Total from Selected Batches)</Label>
               {producedItems.length === 0 ? (
-                <div className="text-center py-8 text-muted-foreground border rounded-md">
+                <div className="text-center py-5 text-sm text-muted-foreground border rounded-md">
                   No items to display. Select batches to see produced items.
                 </div>
               ) : (
@@ -1442,17 +2404,19 @@ export default function MaterialRelease() {
               )}
             </div>
           </div>
+          </div>
 
-          <DialogFooter className="mt-6 border-t pt-4">
-            <Button variant="outline" onClick={handleCancel}>
+          <DialogFooter className="shrink-0 border-t bg-muted/20 p-4 sm:p-5">
+            <Button variant="outline" onClick={handleCancel} disabled={isSubmittingCreate}>
               Cancel
             </Button>
             <Button
               onClick={handleSubmit}
-              disabled={isPrimaryButtonDisabled}
+              loading={isSubmittingCreate}
+              disabled={isPrimaryButtonDisabledWithFG}
               className={
-                isPrimaryButtonDisabled
-                  ? "bg-muted text-muted-foreground border-muted hover:bg-muted disabled:!opacity-100"
+                isPrimaryButtonDisabledWithFG
+                  ? "bg-muted text-muted-foreground border-muted hover:bg-muted disabled:opacity-100!"
                   : "bg-blue-600 text-white hover:bg-blue-600/90 border-blue-600"
               }
             >

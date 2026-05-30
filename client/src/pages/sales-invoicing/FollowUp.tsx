@@ -4,7 +4,7 @@
 // 
 // INTEGRATION WITH PAYMENT FOLLOW UP:
 // - Both modules work with the same Invoice data source (mockInvoices.ts)
-// - Linked using Invoice No or Invoice ID
+// - Linked using Invoice Code or Invoice ID
 // - Records appear in both modules only when Due Amount > 0
 // - Sales team records customer communication (calls, emails, meetings)
 // - Accounting team records payment activity (in Payment Follow Up module)
@@ -18,11 +18,14 @@
 // - Does NOT modify due amount (only Payment Follow Up can update due amount)
 // ============================================================================
 
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useCallback } from "react";
+import { useDebounce } from "@/hooks/useDebounce";
 import { useLocation } from "wouter";
 import { format } from "date-fns";
 import { Card, CardContent } from "@/components/ui/card";
-import { Search, Download, Plus, CalendarIcon, ChevronLeft, ChevronRight, ChevronDown, Trash2, X } from "lucide-react";
+import { Search, Download, Plus, CalendarIcon, ChevronLeft, ChevronRight, ChevronDown, Trash2, X, Loader2 } from "lucide-react";
+import { useHasPermission } from "@/hooks/usePermissions";
+import Unauthorized from "@/pages/Unauthorized";
 import { TableActionButtons } from "@/components/shared/TableActionButtons";
 import { AppListToolbar } from "@/components/shared/AppListToolbar";
 import { SearchableSelect } from "@/components/shared/SearchableSelect";
@@ -70,6 +73,8 @@ import {
     getSalesFollowUpRecords
 } from "@/lib/followUpStore";
 import { type PaymentTermBreakdown } from "@/lib/mockFollowUpData";
+import { salesFollowUpApi, type SalesFollowUpRecord } from "@/lib/api";
+import { useCommonStore } from "@/store/commonStore";
 
 // ============================================================================
 // HELPER FUNCTIONS
@@ -79,19 +84,30 @@ import { type PaymentTermBreakdown } from "@/lib/mockFollowUpData";
 const getCurrencySymbol = (currency: string): string => {
     const symbols: Record<string, string> = {
         'USD': '$',
+        'US DOLLAR': '$',
         'EUR': '€',
+        'EURO': '€',
         'GBP': '£',
+        'BRITISH POUND': '£',
         'INR': '₹',
+        'INDIAN RUPEE': '₹',
         'JPY': '¥',
+        'CHINESE YUAN': '¥',
         'CNY': '¥',
         'AUD': 'A$',
+        'AUSTRALIAN DOLLAR': 'A$',
         'CAD': 'C$',
+        'CANADIAN DOLLAR': 'C$',
         'CHF': 'CHF',
+        'SWISS FRANC': 'Fr',
         'SEK': 'kr',
         'NZD': 'NZ$',
-        'UGX': 'USh'
+        'UGX': 'USh',
+        'UGANDAN SHILLING': 'USh',
+        'USH': 'USh'
     };
-    return symbols[currency] || currency;
+    const upper = (currency || "").toUpperCase().trim();
+    return symbols[upper] || symbols[upper.replace(/\s/g, "")] || upper;
 };
 
 // Safe date formatting helper - validates date before formatting
@@ -132,9 +148,13 @@ interface FollowUpRecord {
 // - Existing statuses: Upcoming, Overdue
 // - Completed records remain visible in listing (under "Completed" filter)
 // ============================================================================
-type FollowUpStatus = "Upcoming" | "Overdue" | "Completed";
+type FollowUpStatus = "Upcoming" | "Overdue" | "Closed" | "Partially Paid" | "Completed";
 
-interface FollowUpDisplay extends Omit<InvoiceData, 'status' | 'terms'> {
+interface FollowUpDisplay extends Partial<Omit<InvoiceData, 'status' | 'terms'>> {
+    id: number;
+    invoiceId: number;
+    customerName: string;
+    invoiceNumber: string;
     dueAmount: number;
     status: FollowUpStatus;
     lastFollowUpDate?: string;
@@ -160,7 +180,10 @@ const getFollowUpStatusBadge = (status: FollowUpStatus) => {
         case "Overdue":
             return <Badge variant="destructive">Overdue</Badge>;
         case "Completed":
-            return <Badge variant="default" className="bg-green-600 hover:bg-green-700">Completed</Badge>;
+        case "Closed":
+            return <Badge variant="default" className="bg-green-600 hover:bg-green-700">{status}</Badge>;
+        case "Partially Paid":
+            return <Badge variant="default" className="bg-orange-500 hover:bg-orange-600">Partially Paid</Badge>;
         default:
             return <Badge variant="outline">{status}</Badge>;
     }
@@ -171,10 +194,12 @@ const getFollowUpStatusBadge = (status: FollowUpStatus) => {
 // ============================================================================
 
 // Local DatePicker for forms/modals to avoid conflict with shared DatePicker
-function LocalFollowUpDatePicker({ date, setDate, disabled = false }: {
+function LocalFollowUpDatePicker({ date, setDate, disabled = false, minDate, maxDate }: {
     date?: Date,
     setDate: (d?: Date) => void,
-    disabled?: boolean
+    disabled?: boolean,
+    minDate?: Date,
+    maxDate?: Date
 }) {
     const [isOpen, setIsOpen] = useState(false);
     const [viewMode, setViewMode] = useState<"day" | "month" | "year">("day");
@@ -231,11 +256,13 @@ function LocalFollowUpDatePicker({ date, setDate, disabled = false }: {
         const startingDayOfWeek = firstDay.getDay();
 
         const days = [];
+        const today = new Date();
+        today.setHours(0, 0, 0, 0);
 
         // Previous month's trailing days
-        const prevMonth = new Date(year, month - 1, 0);
+        const prevMonthLastDay = new Date(year, month, 0).getDate();
         for (let i = startingDayOfWeek - 1; i >= 0; i--) {
-            const dayDate = new Date(year, month - 1, prevMonth.getDate() - i);
+            const dayDate = new Date(year, month - 1, prevMonthLastDay - i);
             dayDate.setHours(0, 0, 0, 0);
             days.push({
                 date: dayDate,
@@ -249,14 +276,35 @@ function LocalFollowUpDatePicker({ date, setDate, disabled = false }: {
         for (let day = 1; day <= daysInMonth; day++) {
             const currentDate = new Date(year, month, day);
             currentDate.setHours(0, 0, 0, 0);
-            const isToday = new Date().toDateString() === currentDate.toDateString();
-            const isSelected = date && currentDate.toDateString() === date.toDateString();
+
+            const isSelected = date &&
+                currentDate.getDate() === date.getDate() &&
+                currentDate.getMonth() === date.getMonth() &&
+                currentDate.getFullYear() === date.getFullYear();
+
+            const isToday = today.getDate() === day &&
+                today.getMonth() === month &&
+                today.getFullYear() === year;
+
+            // Check if date is within min/max bounds
+            let isDateDisabled = false;
+            if (minDate) {
+                const min = new Date(minDate);
+                min.setHours(0, 0, 0, 0);
+                if (currentDate < min) isDateDisabled = true;
+            }
+            if (maxDate) {
+                const max = new Date(maxDate);
+                max.setHours(23, 59, 59, 999);
+                if (currentDate > max) isDateDisabled = true;
+            }
 
             days.push({
                 date: currentDate,
                 isCurrentMonth: true,
                 isToday,
-                isSelected
+                isSelected: !!isSelected,
+                isDisabled: isDateDisabled
             });
         }
 
@@ -335,12 +383,14 @@ function LocalFollowUpDatePicker({ date, setDate, disabled = false }: {
                             key={index}
                             variant="ghost"
                             size="icon"
+                            disabled={day.isDisabled || !day.isCurrentMonth}
                             className={cn(
                                 "h-8 w-8 text-sm font-normal",
                                 !day.isCurrentMonth && "text-muted-foreground opacity-50",
                                 day.isToday && "bg-accent text-accent-foreground font-semibold",
                                 day.isSelected && "bg-primary text-primary-foreground font-semibold",
-                                day.isCurrentMonth && "hover:bg-accent hover:text-accent-foreground"
+                                day.isCurrentMonth && "hover:bg-accent hover:text-accent-foreground",
+                                day.isDisabled && "opacity-20 cursor-not-allowed pointer-events-none"
                             )}
                             onClick={() => handleDateSelect(day.date)}
                         >
@@ -461,7 +511,7 @@ function LocalFollowUpDatePicker({ date, setDate, disabled = false }: {
                     {date ? formatDisplayDate(date) : <span>Pick a date</span>}
                 </Button>
             </PopoverTrigger>
-            <PopoverContent className="w-auto p-4 shadow-lg border rounded-lg z-[9999]" align="start" side="bottom" sideOffset={4}>
+            <PopoverContent className="w-auto p-4 shadow-lg border rounded-lg z-9999" align="start" side="bottom" sideOffset={4}>
                 {viewMode === "day" && renderDayView()}
                 {viewMode === "month" && renderMonthView()}
                 {viewMode === "year" && renderYearView()}
@@ -478,18 +528,35 @@ function LocalFollowUpDatePicker({ date, setDate, disabled = false }: {
 // ============================================================================
 
 const SalesFollowUp = () => {
+    const { canView, canEdit, canPrint } = useHasPermission();
+    const MODULE_KEY = "SALES/FOLLOW_UP";
+
+    if (!canView(MODULE_KEY)) {
+        return <Unauthorized />;
+    }
+
     const { toast } = useToast();
     const [, setLocation] = useLocation();
 
     // State management
     const [followUpRecords, setFollowUpRecords] = useState<FollowUpDisplay[]>([]);
     const [searchTerm, setSearchTerm] = useState("");
+    const debouncedSearchTerm = useDebounce(searchTerm, 500);
     const [filterStatus, setFilterStatus] = useState<string>("all");
     const [filterDueDate, setFilterDueDate] = useState<Date | undefined>(undefined);
+    const [isListLoading, setIsListLoading] = useState(true);
+    const [isViewDetailLoading, setIsViewDetailLoading] = useState(false);
+    const [isEditDetailLoading, setIsEditDetailLoading] = useState(false);
+    const [isSavingFollowUp, setIsSavingFollowUp] = useState(false);
+    const [openingRecordId, setOpeningRecordId] = useState<number | null>(null);
+    const [totalRecords, setTotalRecords] = useState(0);
 
     // Pagination
     const [currentPage, setCurrentPage] = useState(1);
     const [itemsPerPage, setItemsPerPage] = useState(10);
+
+    // Common Store for Statuses
+    const followUpStatuses = useCommonStore(state => state.followUpStatuses);
 
     // Dialog states
     const [isDialogOpen, setIsDialogOpen] = useState(false);
@@ -500,6 +567,7 @@ const SalesFollowUp = () => {
     const [editFollowUpDate, setEditFollowUpDate] = useState<Date | undefined>(undefined);
     const [editFollowUpNote, setEditFollowUpNote] = useState("");
     const [editNextFollowUpDate, setEditNextFollowUpDate] = useState<Date | undefined>(undefined);
+    const [editStatusId, setEditStatusId] = useState<string>("");
     const [tempHistoryEntries, setTempHistoryEntries] = useState<FollowUpNote[]>([]);
 
     // ============================================================================
@@ -511,126 +579,87 @@ const SalesFollowUp = () => {
     // CRITICAL FIX: Only show records that exist in both invoice data AND follow-up store
     // This prevents orphaned follow-up records and duplicate display issues
     // ============================================================================
-    const loadFollowUpRecords = React.useCallback(() => {
-        console.log('[DEBUG] Load Follow-Up Records - Start');
-        
-        // Get follow-up records from store (primary source)
-        const salesFollowUpRecords = getSalesFollowUpRecords();
-        const invoices = getInvoices();
-        
-        console.log('[DEBUG] Data sources:', {
-            salesFollowUpCount: salesFollowUpRecords.length,
-            invoiceCount: invoices.length,
-            salesInvoices: salesFollowUpRecords.map(r => r.invoiceNo),
-            availableInvoices: invoices.map(i => i.invoiceNumber)
-        });
-        
-        // DEBUG: Check for duplicates in the store data
-        const invoiceNumbers = salesFollowUpRecords.map(r => r.invoiceNo);
-        const duplicates = invoiceNumbers.filter((item, index) => invoiceNumbers.indexOf(item) !== index);
-        if (duplicates.length > 0) {
-            console.warn('[DEBUG] ⚠️ DUPLICATE INVOICE NUMBERS FOUND IN STORE:', duplicates);
-        }
-        
-        const today = new Date();
-        today.setHours(0, 0, 0, 0);
+    const loadFollowUpRecords = React.useCallback(async () => {
+        setIsListLoading(true);
+        try {
+            const res = await salesFollowUpApi.getFollowUpList({
+                search: debouncedSearchTerm,
+                due_date: filterDueDate ? format(filterDueDate, "yyyy-MM-dd") : undefined,
+                status_id: filterStatus === "all" ? undefined : filterStatus,
+                page: currentPage,
+                limit: itemsPerPage
+            });
 
-        // CRITICAL FIX: Only process follow-up records that have corresponding invoices
-        // This prevents orphaned records and duplicate display issues
-        const records: FollowUpDisplay[] = salesFollowUpRecords
-            .map(salesFollowUp => {
-                // CRITICAL: Must have corresponding invoice data
-                const invoice = invoices.find(inv => inv.invoiceNumber === salesFollowUp.invoiceNo);
-                
-                if (!invoice) {
-                    console.warn(`[SKIP] No invoice found for follow-up record: ${salesFollowUp.invoiceNo}`);
-                    return null;
-                }
-                
-                // Get corresponding payment follow-up data
-                const paymentFollowUp = getPaymentFollowUpByInvoice(salesFollowUp.invoiceNo);
-                
-                console.log(`[DEBUG] Processing follow-up ${salesFollowUp.invoiceNo}:`, {
-                    invoiceFound: true,
-                    lastFollowUpDate: salesFollowUp.lastFollowUpDate,
-                    nextFollowUpDate: salesFollowUp.nextFollowUpDate,
-                    historyCount: salesFollowUp.history.length,
-                    dueAmount: salesFollowUp.dueAmount
-                });
-                
-                // Use follow-up data for amounts (more accurate than invoice data)
-                const invoiceAmount = salesFollowUp.invoiceAmount;
-                const dueAmount = salesFollowUp.dueAmount;
-                
-                // Get the next unpaid due date from sales follow-up
-                const nextUnpaidDueDate = salesFollowUp.dueDate;
-                
-                // ============================================================================
-                // STATUS DETERMINATION LOGIC (synchronized with Payment Follow Up)
-                // Priority 1: Check if payment is completed (Due Amount = 0)
-                // Priority 2: Check if overdue (today > next unpaid due date)
-                // Priority 3: Default to Upcoming
-                // ============================================================================
-                let status: FollowUpStatus = "Upcoming";
-                
-                // Priority 1: Check if payment is completed (Due Amount = 0)
-                if (dueAmount <= 0) {
-                    status = "Completed";
-                } 
-                // Priority 2: Check if overdue (only if not completed and has next unpaid due date)
-                else if (nextUnpaidDueDate && nextUnpaidDueDate !== "-") {
-                    const dueDate = new Date(nextUnpaidDueDate);
-                    dueDate.setHours(0, 0, 0, 0);
-                    if (dueDate < today) {
-                        status = "Overdue";
-                    }
-                }
-                
-                // Convert sales follow-up history to display format
-                const notes: FollowUpNote[] = salesFollowUp.history.map((entry: any, index: number) => ({
-                    id: index + 1,
-                    date: entry.followUpDate,
-                    note: entry.note
+            if (res.isSuccessful && res.data) {
+                const mappedRecords: FollowUpDisplay[] = res.data.records.map(record => ({
+                    id: record.follow_up_id,
+                    invoiceId: record.invoice_id,
+                    customerName: record.customer_name,
+                    invoiceNumber: record.invoice_code,
+                    grandTotal: record.invoice_amount,
+                    dueAmount: record.due_amount,
+                    currency: record.currency_name,
+                    dueDate: record.due_date,
+                    lastFollowUpDate: record.follow_up_date,
+                    nextFollowUpDate: record.upcoming_follow_up_date,
+                    status: record.status_name as FollowUpStatus,
+                    notes: [], // Notes will be loaded when record is opened if needed
+                    contactPerson: "-", // Placeholder
+                    mobileNo: "-", // Placeholder
+                    invoiceDate: record.due_date, // Placeholder
+                    soNumber: "-", // Placeholder
+                    soDate: "-", // Placeholder
+                    deliveryDate: "-", // Placeholder
                 }));
-                
-                return {
-                    ...invoice,
-                    grandTotal: invoiceAmount, // Use follow-up invoice amount
-                    dueDate: nextUnpaidDueDate || "", // Use next unpaid due date (empty if all paid)
-                    dueAmount,
-                    status,
-                    lastFollowUpDate: salesFollowUp.lastFollowUpDate,
-                    nextFollowUpDate: salesFollowUp.nextFollowUpDate,
-                    notes,
-                    terms: salesFollowUp.terms || [] // Include terms for breakdown display
-                } as FollowUpDisplay;
-            })
-            .filter((record): record is FollowUpDisplay => record !== null);
-
-        // ADDITIONAL DUPLICATE PREVENTION: Remove any duplicates by invoice number
-        const uniqueRecords = records.filter((record, index, array) => {
-            const firstIndex = array.findIndex(r => r.invoiceNumber === record.invoiceNumber);
-            if (firstIndex !== index) {
-                console.warn(`[DUPLICATE REMOVED] Duplicate follow-up record for invoice: ${record.invoiceNumber}`);
-                return false;
+                setFollowUpRecords(mappedRecords);
+                setTotalRecords(res.data.pagination.total_records);
             }
-            return true;
-        });
+        } catch (error) {
+            console.error("Failed to load follow-up records:", error);
+            toast({
+                title: "Error",
+                description: "Failed to load follow-up records.",
+                variant: "destructive"
+            });
+        } finally {
+            setIsListLoading(false);
+        }
+    }, [debouncedSearchTerm, filterDueDate, filterStatus, currentPage, itemsPerPage, toast]);
 
-        console.log('[DEBUG] Load Follow-Up Records - Complete', {
-            totalRecords: uniqueRecords.length,
-            recordsWithLastFollowUp: uniqueRecords.filter(r => r.lastFollowUpDate).length,
-            recordsWithNextFollowUp: uniqueRecords.filter(r => r.nextFollowUpDate).length,
-            finalInvoices: uniqueRecords.map(r => r.invoiceNumber)
-        });
+    const isRowActionBusy =
+        openingRecordId !== null ||
+        isViewDetailLoading ||
+        isEditDetailLoading ||
+        isSavingFollowUp;
 
-        setFollowUpRecords(uniqueRecords);
-    }, []);
+    // Track if we've set the default status to avoid resetting user selection
+    const [isDefaultStatusSet, setIsDefaultStatusSet] = useState(false);
+    const isMasterDataLoaded = useCommonStore(state => state.isLoaded);
+
+    // Set default status to 'Upcoming' only once on initial load
+    useEffect(() => {
+        if (isMasterDataLoaded && !isDefaultStatusSet) {
+            if (followUpStatuses.length > 0) {
+                const upcomingStatus = followUpStatuses.find(s => 
+                    (s.name && s.name.toLowerCase() === 'upcoming') || 
+                    (s.value_name && s.value_name.toLowerCase() === 'upcoming')
+                );
+                if (upcomingStatus) {
+                    setFilterStatus(String(upcomingStatus.id || upcomingStatus.value_id || upcomingStatus.status_id));
+                }
+            }
+            setIsDefaultStatusSet(true);
+        }
+    }, [isMasterDataLoaded, followUpStatuses, isDefaultStatusSet]);
 
     // Initial load
     useEffect(() => {
-        loadFollowUpRecords();
-    }, [loadFollowUpRecords]);
+        // Only load if we've determined the default status and master data is ready
+        // This ensures the first API call correctly uses the 'Upcoming' filter if available
+        if (isMasterDataLoaded && isDefaultStatusSet) {
+            loadFollowUpRecords();
+        }
+    }, [loadFollowUpRecords, isMasterDataLoaded, isDefaultStatusSet]);
 
     // Subscribe to store changes (updates from Payment Follow Up module)
     useEffect(() => {
@@ -645,7 +674,16 @@ const SalesFollowUp = () => {
         const matchesSearch = record.customerName.toLowerCase().includes(searchTerm.toLowerCase()) ||
             record.invoiceNumber.toLowerCase().includes(searchTerm.toLowerCase());
         
-        const matchesStatus = filterStatus === "all" ? true : record.status === filterStatus;
+        // Since the API already filters by status_id, we only apply client-side status filtering
+        // as a safety check or if the status name matches (mapping back from filterStatus ID)
+        let matchesStatus = true;
+        if (filterStatus !== "all") {
+            const selectedStatus = followUpStatuses.find(s => 
+                String(s.id || s.value_id || s.status_id) === filterStatus
+            );
+            const statusName = selectedStatus?.name || selectedStatus?.value_name;
+            matchesStatus = !statusName || record.status === statusName;
+        }
         
         const matchesDueDate = filterDueDate ? record.dueDate === format(filterDueDate, "yyyy-MM-dd") : true;
 
@@ -653,38 +691,143 @@ const SalesFollowUp = () => {
     });
 
     // Pagination calculations
-    const totalPages = Math.ceil(filteredRecords.length / itemsPerPage);
-    const paginatedData = filteredRecords.slice(
-        (currentPage - 1) * itemsPerPage,
-        currentPage * itemsPerPage
-    );
+    const totalPages = Math.ceil(totalRecords / itemsPerPage);
+    const paginatedData = followUpRecords; // API already returns paginated data
 
     // Auto-adjust page when data changes
     React.useEffect(() => {
         if (currentPage > totalPages && totalPages > 0) {
             setCurrentPage(totalPages);
         }
-    }, [filteredRecords.length, currentPage, totalPages]);
+    }, [totalRecords, currentPage, totalPages]);
 
-    // Reset to page 1 when filters change
-    React.useEffect(() => {
-        setCurrentPage(1);
-    }, [searchTerm, filterStatus]);
+    // Removed redundant useEffect that was causing double API calls on filter changes
+    // Current page reset is now handled directly in the onChange handlers of the filters
 
     // Open follow-up preview
-    const handleOpenRecord = (record: FollowUpDisplay) => {
-        setActiveRecord({ ...record });
+    const handleOpenRecord = async (record: FollowUpDisplay) => {
+        if (isRowActionBusy) return;
+        setOpeningRecordId(record.id);
+        setIsViewDetailLoading(true);
+        setActiveRecord(null);
         setIsDialogOpen(true);
+        try {
+            const res = await salesFollowUpApi.getFollowUpById(record.id);
+            if (res.isSuccessful && res.data) {
+                const detail = res.data;
+                const mappedRecord: FollowUpDisplay = {
+                    ...record,
+                    customerName: detail.customer_name,
+                    contactPerson: detail.contact_person,
+                    mobileNo: detail.mobile_no,
+                    status: detail.status_name as FollowUpStatus,
+                    invoiceNumber: detail.invoice?.invoice_code ?? record.invoiceNumber,
+                    invoiceDate: detail.invoice?.invoice_date ?? record.invoiceDate,
+                    soNumber: detail.so_code || detail.invoice?.so_code || "-",
+                    soDate: detail.so_date || detail.invoice?.order_date || "-",
+                    deliveryDate: detail.invoice?.delivery_date || detail.invoice?.due_date || record.deliveryDate,
+                    grandTotal: detail.invoice?.invoice_amount ?? record.grandTotal,
+                    dueAmount: detail.invoice?.due_amount ?? record.dueAmount,
+                    currency: detail.invoice?.currency_name || record.currency || "USh",
+                    nextFollowUpDate: detail.upcoming_follow_up_date,
+                    notes: (detail.follow_up_history || []).map((h, i) => ({
+                        id: i + 1,
+                        date: h.follow_up_date,
+                        note: h.note
+                    })),
+                    terms: (detail.payment_terms || []).map(t => ({
+                        id: Math.random(),
+                        termType: t.term_type,
+                        percentage: t.percentage,
+                        dueDate: t.due_date,
+                        termAmount: t.term_amount,
+                        paidAmount: t.paid_amount,
+                        dueAmount: t.remaining_amount,
+                        status: (t.status.charAt(0).toUpperCase() + t.status.slice(1).toLowerCase()) as any
+                    }))
+                };
+                setActiveRecord(mappedRecord);
+            } else {
+                toast({
+                    title: "Error",
+                    description: res.message || "Failed to fetch follow-up details.",
+                    variant: "destructive"
+                });
+                setIsDialogOpen(false);
+            }
+        } catch (error) {
+            console.error("Failed to fetch follow-up details:", error);
+            toast({
+                title: "Error",
+                description: "Failed to fetch follow-up details.",
+                variant: "destructive"
+            });
+            setIsDialogOpen(false);
+        } finally {
+            setIsViewDetailLoading(false);
+            setOpeningRecordId(null);
+        }
     };
 
     // Open edit dialog
-    const handleEditRecord = (record: FollowUpDisplay) => {
-        setActiveRecord({ ...record });
-        setEditFollowUpDate(undefined);
-        setEditFollowUpNote("");
-        setEditNextFollowUpDate(record.nextFollowUpDate ? new Date(record.nextFollowUpDate) : undefined);
-        setTempHistoryEntries([]);
-        setIsEditDialogOpen(true);
+    const handleEditRecord = async (record: FollowUpDisplay) => {
+        if (isRowActionBusy) return;
+        setOpeningRecordId(record.id);
+        setIsEditDetailLoading(true);
+        try {
+            const res = await salesFollowUpApi.getFollowUpById(record.id);
+            if (res.isSuccessful && res.data) {
+                const detail = res.data;
+                const mappedRecord: FollowUpDisplay = {
+                    ...record,
+                    customerName: detail.customer_name || "",
+                    contactPerson: detail.contact_person || "",
+                    mobileNo: detail.mobile_no || "",
+                    status: detail.status_name as FollowUpStatus,
+                    invoiceNumber: detail.invoice.invoice_code || "",
+                    invoiceDate: detail.invoice.invoice_date || "",
+                    soNumber: detail.so_code || detail.invoice?.so_code || "-",
+                    soDate: detail.so_date || detail.invoice?.order_date || "-",
+                    deliveryDate: detail.invoice.delivery_date || detail.invoice.due_date || "",
+                    grandTotal: detail.invoice.invoice_amount || 0,
+                    dueAmount: detail.invoice.due_amount || 0,
+                    currency: detail.invoice.currency_name || "USh",
+                    nextFollowUpDate: detail.upcoming_follow_up_date || "",
+                    notes: (detail.follow_up_history || []).map((h, i) => ({
+                        id: i + 1,
+                        date: h.follow_up_date,
+                        note: h.note
+                    })),
+                    terms: (detail.payment_terms || []).map(t => ({
+                        id: Math.random(),
+                        termType: t.term_type,
+                        percentage: t.percentage,
+                        dueDate: t.due_date,
+                        termAmount: t.term_amount,
+                        paidAmount: t.paid_amount,
+                        dueAmount: t.remaining_amount,
+                        status: (t.status.charAt(0).toUpperCase() + t.status.slice(1).toLowerCase()) as any
+                    }))
+                };
+                setActiveRecord(mappedRecord);
+                setEditStatusId(String(detail.status_id));
+                setEditFollowUpDate(undefined);
+                setEditFollowUpNote("");
+                setEditNextFollowUpDate(detail.upcoming_follow_up_date ? new Date(detail.upcoming_follow_up_date) : undefined);
+                setTempHistoryEntries([]);
+                setIsEditDialogOpen(true);
+            }
+        } catch (error) {
+            console.error("Failed to fetch follow-up details for editing:", error);
+            toast({
+                title: "Error",
+                description: "Failed to fetch follow-up details for editing.",
+                variant: "destructive"
+            });
+        } finally {
+            setIsEditDetailLoading(false);
+            setOpeningRecordId(null);
+        }
     };
 
     // Navigate to invoice detail page
@@ -700,7 +843,7 @@ const SalesFollowUp = () => {
         // Validate required fields
         if (!editFollowUpDate) {
             toast({
-                title: "Validation Error",
+                title: "Please Check",
                 description: "Please select a follow-up date.",
                 variant: "destructive"
             });
@@ -709,7 +852,7 @@ const SalesFollowUp = () => {
 
         if (!editFollowUpNote.trim()) {
             toast({
-                title: "Validation Error",
+                title: "Please Check",
                 description: "Please enter a follow-up note.",
                 variant: "destructive"
             });
@@ -731,7 +874,8 @@ const SalesFollowUp = () => {
 
         toast({
             title: "Entry Added",
-            description: "Follow-up entry added. Click Save to persist changes."
+            description: "Follow-up entry added. Click Save to persist changes.",
+            variant: "success"
         });
     };
 
@@ -741,57 +885,50 @@ const SalesFollowUp = () => {
     // Updates shared store so changes are visible in Payment Follow Up
     // Store update triggers notifyListeners() which reloads the listing
     // ============================================================================
-    const handleSaveFollowUp = () => {
-        if (!activeRecord) return;
+    const handleSaveFollowUp = async () => {
+        if (!activeRecord || isRowActionBusy) return;
 
-        console.log('[DEBUG] Save Follow-Up - Start', {
-            invoiceNumber: activeRecord.invoiceNumber,
-            tempHistoryEntries: tempHistoryEntries.length
-        });
+        const payload = {
+            status_id: parseInt(editStatusId),
+            upcoming_follow_up_date: editNextFollowUpDate ? format(editNextFollowUpDate, "yyyy-MM-dd") : undefined,
+            follow_up_history: tempHistoryEntries.map(entry => ({
+                follow_up_date: entry.date,
+                note: entry.note
+            }))
+        };
 
-        // Determine last follow-up date from latest entry
-        let lastFollowUpDate = activeRecord.lastFollowUpDate;
-        if (tempHistoryEntries.length > 0) {
-            const latestEntry = tempHistoryEntries[tempHistoryEntries.length - 1];
-            lastFollowUpDate = latestEntry.date;
+        setIsSavingFollowUp(true);
+        try {
+            const res = await salesFollowUpApi.updateFollowUp(activeRecord.id, payload);
+            if (res.isSuccessful) {
+                toast({
+                    title: "Success",
+                    description: res.message,
+                    variant: "success"
+                });
+                setIsEditDialogOpen(false);
+                setEditFollowUpDate(undefined);
+                setEditFollowUpNote("");
+                setEditNextFollowUpDate(undefined);
+                setTempHistoryEntries([]);
+                loadFollowUpRecords();
+            } else {
+                toast({
+                    title: "Update Failed",
+                    description: res.message || "Failed to update follow-up record.",
+                    variant: "destructive"
+                });
+            }
+        } catch (error: any) {
+            console.error("Failed to update follow-up:", error);
+            toast({
+                title: "Error",
+                description: error.message || "An unexpected error occurred while updating the follow-up.",
+                variant: "destructive"
+            });
+        } finally {
+            setIsSavingFollowUp(false);
         }
-
-        // Convert temporary entries to history format
-        const newHistory = tempHistoryEntries.map(entry => ({
-            followUpDate: entry.date,
-            note: entry.note
-        }));
-
-        const nextFollowUpDate = editNextFollowUpDate ? format(editNextFollowUpDate, "yyyy-MM-dd") : undefined;
-
-        console.log('[DEBUG] Save Follow-Up - Updates', {
-            invoiceNumber: activeRecord.invoiceNumber,
-            newHistory,
-            lastFollowUpDate,
-            nextFollowUpDate
-        });
-
-        // Update shared store (persists across route changes)
-        // This triggers notifyListeners() which calls loadFollowUpRecords() via subscription
-        updateSalesFollowUp(activeRecord.invoiceNumber, {
-            newHistory,
-            lastFollowUpDate,
-            nextFollowUpDate
-        });
-
-        console.log('[DEBUG] Save Follow-Up - Store Updated');
-
-        toast({
-            title: "Follow-Up Saved",
-            description: "Follow-up record has been saved successfully."
-        });
-
-        // Close dialog and reset form
-        setIsEditDialogOpen(false);
-        setEditFollowUpDate(undefined);
-        setEditFollowUpNote("");
-        setEditNextFollowUpDate(undefined);
-        setTempHistoryEntries([]);
     };
 
     // Download Follow Up Report as PDF
@@ -874,8 +1011,11 @@ const SalesFollowUp = () => {
             <AppListToolbar
                 search={{
                     value: searchTerm,
-                    onChange: setSearchTerm,
-                    placeholder: "Search by Invoice No. or Customer Name"
+                    onChange: (val) => {
+                        setSearchTerm(val);
+                        setCurrentPage(1);
+                    },
+                    placeholder: "Search by Invoice Code. or Customer Name"
                 }}
                 filters={[
                     {
@@ -896,7 +1036,13 @@ const SalesFollowUp = () => {
                             setFilterStatus(val);
                             setCurrentPage(1);
                         },
-                        options: [{ label: "All Status", value: "all" }, "Upcoming", "Overdue", "Completed"],
+                        options: [
+                            { label: "All Status", value: "all" },
+                            ...followUpStatuses.map(s => ({ 
+                                label: s.name || s.value_name, 
+                                value: String(s.id || s.value_id || s.status_id) 
+                            }))
+                        ],
                         searchable: true
                     }
                 ]}
@@ -910,7 +1056,7 @@ const SalesFollowUp = () => {
                             <TableHeader>
                                 <TableRow className="bg-muted/50 hover:bg-muted/50">
                                     <TableHead className="font-semibold text-xs uppercase tracking-wider py-4 pl-6">Customer Name</TableHead>
-                                    <TableHead className="font-semibold text-xs uppercase tracking-wider">Invoice No</TableHead>
+                                    <TableHead className="font-semibold text-xs uppercase tracking-wider">Invoice Code</TableHead>
                                     <TableHead className="font-semibold text-xs uppercase tracking-wider text-right">Invoice Amount</TableHead>
                                     <TableHead className="font-semibold text-xs uppercase tracking-wider text-right">Due Amount</TableHead>
                                     <TableHead className="font-semibold text-xs uppercase tracking-wider">Due Date</TableHead>
@@ -921,7 +1067,16 @@ const SalesFollowUp = () => {
                                 </TableRow>
                             </TableHeader>
                             <TableBody>
-                                {paginatedData.length === 0 ? (
+                                {isListLoading ? (
+                                    <TableRow>
+                                        <TableCell colSpan={9} className="h-32 text-center">
+                                            <div className="flex flex-col items-center justify-center gap-3">
+                                                <Loader2 className="h-8 w-8 animate-spin text-primary" />
+                                                <p className="text-sm text-muted-foreground">Loading...</p>
+                                            </div>
+                                        </TableCell>
+                                    </TableRow>
+                                ) : paginatedData.length === 0 ? (
                                     <TableRow>
                                         <TableCell colSpan={9} className="h-32 text-center text-muted-foreground italic">
                                             No follow-up records found
@@ -939,8 +1094,8 @@ const SalesFollowUp = () => {
                                                     {record.invoiceNumber}
                                                 </button>
                                             </TableCell>
-                                            <TableCell className="py-4 text-right text-sm font-bold text-green-600">USh {record.grandTotal.toFixed(2)}</TableCell>
-                                            <TableCell className="py-4 text-right text-sm font-bold text-orange-600">USh {record.dueAmount.toFixed(2)}</TableCell>
+                                            <TableCell className="py-4 text-right text-sm font-bold text-green-600">{getCurrencySymbol(record.currency || 'UGX')} {(record.grandTotal || 0).toFixed(2)}</TableCell>
+                                            <TableCell className="py-4 text-right text-sm font-bold text-orange-600">{getCurrencySymbol(record.currency || 'UGX')} {(record.dueAmount || 0).toFixed(2)}</TableCell>
                                             <TableCell className="py-4 text-sm font-medium">
                                                 {safeFormatDate(record.dueDate)}
                                             </TableCell>
@@ -955,8 +1110,8 @@ const SalesFollowUp = () => {
                                             </TableCell>
                                              <TableCell className="py-4 text-center">
                                                 <TableActionButtons
-                                                    onView={() => handleOpenRecord(record)}
-                                                    onEdit={() => handleEditRecord(record)}
+                                                    onView={canView(MODULE_KEY) ? () => handleOpenRecord(record) : undefined}
+                                                    onEdit={canEdit(MODULE_KEY) && record.status !== "Closed" ? () => handleEditRecord(record) : undefined}
                                                 />
                                             </TableCell>
                                         </TableRow>
@@ -966,25 +1121,31 @@ const SalesFollowUp = () => {
                         </Table>
                     </div>
 
-                    {/* Pagination */}
-                    <div className="px-4 py-2 border-t">
-                        <DataTablePagination
-                            currentPage={currentPage}
-                            totalPages={totalPages}
-                            totalItems={filteredRecords.length}
-                            itemsPerPage={itemsPerPage}
-                            onPageChange={setCurrentPage}
-                            onItemsPerPageChange={setItemsPerPage}
-                            options={[10, 15, 30, 50]}
-                        />
-                    </div>
+                    {totalRecords > 0 && !isListLoading && (
+                        <div className="px-4 py-2 border-t">
+                            <DataTablePagination
+                                currentPage={currentPage}
+                                totalPages={Math.ceil(totalRecords / itemsPerPage)}
+                                totalItems={totalRecords}
+                                itemsPerPage={itemsPerPage}
+                                onPageChange={setCurrentPage}
+                                onItemsPerPageChange={setItemsPerPage}
+                                options={[10, 15, 30, 50]}
+                            />
+                        </div>
+                    )}
                 </CardContent>
             </Card>
 
             {/* Follow Up Preview Dialog - PDF Style Document */}
             <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
                 <DialogContent className="max-w-[900px] max-h-[95vh] flex flex-col p-0">
-                    <div className="flex-1 overflow-y-auto p-8 bg-slate-100">
+                    <div className="flex-1 overflow-y-auto p-8 bg-slate-100 relative">
+                        {isViewDetailLoading && (
+                            <div className="absolute inset-0 z-10 flex items-center justify-center bg-slate-100/80">
+                                <Loader2 className="h-8 w-8 animate-spin text-primary" />
+                            </div>
+                        )}
                         {/* A4 Page Container */}
                         <div className="max-w-[210mm] mx-auto bg-white shadow-2xl" style={{ minHeight: '297mm' }}>
                             {/* PDF Document Content */}
@@ -1041,7 +1202,7 @@ const SalesFollowUp = () => {
                                             </span>
                                         </div>
                                         <div className="flex text-xs">
-                                            <span className="w-36 text-slate-600 font-medium">SO Number:</span>
+                                            <span className="w-36 text-slate-600 font-medium">SO Code:</span>
                                             <span className="font-medium text-slate-900">{activeRecord?.soNumber || "-"}</span>
                                         </div>
                                         <div className="flex text-xs">
@@ -1069,11 +1230,11 @@ const SalesFollowUp = () => {
                                     <div className="space-y-1.5">
                                         <div className="flex text-xs">
                                             <span className="w-36 text-slate-600 font-medium">Invoice Amount:</span>
-                                            <span className="font-bold text-slate-900">USh {activeRecord?.grandTotal.toFixed(2)}</span>
+                                            <span className="font-bold text-slate-900">USh {(activeRecord?.grandTotal || 0).toFixed(2)}</span>
                                         </div>
                                         <div className="flex text-xs">
                                             <span className="w-36 text-slate-600 font-medium">Due Amount:</span>
-                                            <span className="font-bold text-slate-900">USh {activeRecord?.dueAmount.toFixed(2)}</span>
+                                            <span className="font-bold text-slate-900">USh {(activeRecord?.dueAmount || 0).toFixed(2)}</span>
                                         </div>
                                         <div className="flex text-xs">
                                             <span className="w-36 text-slate-600 font-medium">Last Follow Up:</span>
@@ -1090,10 +1251,8 @@ const SalesFollowUp = () => {
                                     </div>
                                 </div>
 
-                                {/* Payment Terms Breakdown Section */}
                                 {(() => {
-                                    const salesFollowUp = activeRecord ? getSalesFollowUpByInvoice(activeRecord.invoiceNumber) : null;
-                                    const terms = salesFollowUp?.terms || [];
+                                    const terms = activeRecord?.terms || [];
                                     
                                     if (terms.length > 0) {
                                         return (
@@ -1119,9 +1278,9 @@ const SalesFollowUp = () => {
                                                                 <td className="border border-slate-300 px-3 py-2 text-xs text-center text-slate-600">
                                                                     {safeFormatDate(term.dueDate)}
                                                                 </td>
-                                                                <td className="border border-slate-300 px-3 py-2 text-xs text-right font-bold text-slate-700">USh {term.termAmount.toFixed(2)}</td>
-                                                                <td className="border border-slate-300 px-3 py-2 text-xs text-right font-bold text-green-600">USh {term.paidAmount.toFixed(2)}</td>
-                                                                <td className="border border-slate-300 px-3 py-2 text-xs text-right font-bold text-orange-600">USh {term.dueAmount.toFixed(2)}</td>
+                                                                <td className="border border-slate-300 px-3 py-2 text-xs text-right font-bold text-slate-700">{getCurrencySymbol(activeRecord?.currency || 'UGX')} {term.termAmount.toFixed(2)}</td>
+                                                                <td className="border border-slate-300 px-3 py-2 text-xs text-right font-bold text-green-600">{getCurrencySymbol(activeRecord?.currency || 'UGX')} {term.paidAmount.toFixed(2)}</td>
+                                                                <td className="border border-slate-300 px-3 py-2 text-xs text-right font-bold text-orange-600">{getCurrencySymbol(activeRecord?.currency || 'UGX')} {term.dueAmount.toFixed(2)}</td>
                                                                 <td className="border border-slate-300 px-3 py-2 text-center">
                                                                     <span className={`inline-block px-2 py-0.5 rounded text-[9px] font-bold ${
                                                                         term.status === "Paid" ? "bg-green-100 text-green-700" :
@@ -1135,9 +1294,9 @@ const SalesFollowUp = () => {
                                                         ))}
                                                         <tr className="bg-slate-200 font-bold">
                                                             <td colSpan={3} className="border border-slate-300 px-3 py-2 text-xs text-right text-slate-700">Total:</td>
-                                                            <td className="border border-slate-300 px-3 py-2 text-xs text-right text-slate-900">USh {terms.reduce((sum: number, t: any) => sum + t.termAmount, 0).toFixed(2)}</td>
-                                                            <td className="border border-slate-300 px-3 py-2 text-xs text-right text-green-700">USh {terms.reduce((sum: number, t: any) => sum + t.paidAmount, 0).toFixed(2)}</td>
-                                                            <td className="border border-slate-300 px-3 py-2 text-xs text-right text-orange-700">USh {terms.reduce((sum: number, t: any) => sum + t.dueAmount, 0).toFixed(2)}</td>
+                                                            <td className="border border-slate-300 px-3 py-2 text-xs text-right text-slate-900">{getCurrencySymbol(activeRecord?.currency || 'UGX')} {terms.reduce((sum: number, t: any) => sum + t.termAmount, 0).toFixed(2)}</td>
+                                                            <td className="border border-slate-300 px-3 py-2 text-xs text-right text-green-700">{getCurrencySymbol(activeRecord?.currency || 'UGX')} {terms.reduce((sum: number, t: any) => sum + t.paidAmount, 0).toFixed(2)}</td>
+                                                            <td className="border border-slate-300 px-3 py-2 text-xs text-right text-orange-700">{getCurrencySymbol(activeRecord?.currency || 'UGX')} {terms.reduce((sum: number, t: any) => sum + t.dueAmount, 0).toFixed(2)}</td>
                                                             <td className="border border-slate-300 px-3 py-2"></td>
                                                         </tr>
                                                     </tbody>
@@ -1190,50 +1349,63 @@ const SalesFollowUp = () => {
 
                     {/* Action Buttons Outside Document */}
                     <div className="flex justify-end gap-3 p-4 border-t bg-white">
-                        <Button 
-                            onClick={handleDownloadPDF} 
-                            className="bg-blue-600 hover:bg-blue-700"
-                        >
-                            <Download className="mr-2 h-4 w-4" /> Download PDF
-                        </Button>
+                        {canPrint(MODULE_KEY) && (
+                            <Button 
+                                onClick={handleDownloadPDF} 
+                                className="bg-blue-600 hover:bg-blue-700"
+                            >
+                                <Download className="mr-2 h-4 w-4" /> Download PDF
+                            </Button>
+                        )}
                     </div>
                 </DialogContent>
             </Dialog>
 
             {/* Edit Follow Up Dialog */}
             <Dialog open={isEditDialogOpen} onOpenChange={setIsEditDialogOpen}>
-                <DialogContent className="max-w-[900px] max-h-[90vh] flex flex-col p-0">
-                    <DialogHeader className="p-6 pb-4 border-b">
+                <DialogContent 
+                    className="flex! min-h-0 w-[95%] max-h-[82vh] flex-col gap-0 overflow-hidden bg-white p-0 sm:max-w-3xl md:max-w-4xl lg:max-w-6xl xl:max-w-7xl"
+                    onInteractOutside={(e) => e.preventDefault()}
+                    onEscapeKeyDown={(e) => e.preventDefault()}
+                >
+                    <DialogHeader className="border-b bg-white p-4 sm:p-6">
                         <DialogTitle className="text-2xl font-bold">Edit Follow Up</DialogTitle>
                         <DialogDescription>
                             Add follow-up note and update next follow-up date
                         </DialogDescription>
                     </DialogHeader>
 
-                    <div className="flex-1 overflow-y-auto px-6 py-4 space-y-6">
-                        {/* Readonly Header Section */}
-                        <div className="grid grid-cols-3 gap-4 p-4 bg-slate-50 rounded-lg border">
-                            <div className="space-y-1">
-                                <Label className="text-[10px] uppercase font-bold text-muted-foreground">Customer Name</Label>
-                                <p className="text-sm font-bold text-slate-900">{activeRecord?.customerName}</p>
+                    <div className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto px-4 py-4 sm:px-6 space-y-6 relative">
+                        {(isEditDetailLoading || isSavingFollowUp) && (
+                            <div className="absolute inset-0 z-10 flex items-center justify-center bg-background/60">
+                                <Loader2 className="h-8 w-8 animate-spin text-primary" />
                             </div>
-                            <div className="space-y-1">
-                                <Label className="text-[10px] uppercase font-bold text-muted-foreground">Invoice No</Label>
+                        )}
+                        {/* Readonly Header Section */}
+                        <div className="grid grid-cols-1 gap-4 rounded-lg border bg-muted/20 p-4 sm:p-5 md:grid-cols-2 lg:grid-cols-3">
+                            <div className="min-w-0 space-y-1">
+                                <Label className="text-[10px] uppercase font-bold text-muted-foreground">Customer Name</Label>
+                                <p className="text-sm font-bold text-slate-900 whitespace-normal wrap-break-word">{activeRecord?.customerName}</p>
+                            </div>
+                            <div className="min-w-0 space-y-1">
+                                <Label className="text-[10px] uppercase font-bold text-muted-foreground">Invoice Code</Label>
                                 <p className="text-sm font-bold text-blue-600">{activeRecord?.invoiceNumber}</p>
                             </div>
-                            <div className="space-y-1">
+                            <div className="min-w-0 space-y-1">
                                 <Label className="text-[10px] uppercase font-bold text-muted-foreground">Status</Label>
-                                {activeRecord && getFollowUpStatusBadge(activeRecord.status)}
+                                <div className="pt-0.5">
+                                    {activeRecord && getFollowUpStatusBadge(activeRecord.status)}
+                                </div>
                             </div>
-                            <div className="space-y-1">
+                            <div className="min-w-0 space-y-1">
                                 <Label className="text-[10px] uppercase font-bold text-muted-foreground">Invoice Amount</Label>
-                                <p className="text-sm font-bold text-green-600">USh {activeRecord?.grandTotal.toFixed(2)}</p>
+                                <p className="text-sm font-bold text-green-600 tabular-nums">USh {(activeRecord?.grandTotal || 0).toFixed(2)}</p>
                             </div>
-                            <div className="space-y-1">
+                            <div className="min-w-0 space-y-1">
                                 <Label className="text-[10px] uppercase font-bold text-muted-foreground">Due Amount</Label>
-                                <p className="text-sm font-bold text-orange-600">USh {activeRecord?.dueAmount.toFixed(2)}</p>
+                                <p className="text-sm font-bold text-orange-600 tabular-nums">USh {(activeRecord?.dueAmount || 0).toFixed(2)}</p>
                             </div>
-                            <div className="space-y-1">
+                            <div className="min-w-0 space-y-1">
                                 <Label className="text-[10px] uppercase font-bold text-muted-foreground">Due Date</Label>
                                 <p className="text-sm font-medium text-slate-700">
                                     {safeFormatDate(activeRecord?.dueDate)}
@@ -1254,36 +1426,45 @@ const SalesFollowUp = () => {
                                     <div className="space-y-3">
                                         <Label className="text-sm font-bold">Payment Terms Breakdown</Label>
                                         <div className="border rounded-lg overflow-hidden shadow-sm">
-                                            <Table>
+                                            <Table className="table-fixed">
+                                                <colgroup>
+                                                    <col className="w-[22%]" />
+                                                    <col className="w-[10%]" />
+                                                    <col className="w-[14%]" />
+                                                    <col className="w-[14%]" />
+                                                    <col className="w-[14%]" />
+                                                    <col className="w-[14%]" />
+                                                    <col className="w-[12%]" />
+                                                </colgroup>
                                                 <TableHeader>
-                                                    <TableRow className="bg-slate-100 border-b-2 border-slate-300">
-                                                        <TableHead className="font-bold text-slate-700 py-3 px-4 w-[140px]">Term Type</TableHead>
-                                                        <TableHead className="font-bold text-slate-700 text-center py-3 px-4 w-[100px]">Percentage</TableHead>
-                                                        <TableHead className="font-bold text-slate-700 py-3 px-4 w-[120px]">Due Date</TableHead>
-                                                        <TableHead className="font-bold text-slate-700 text-right py-3 px-4 w-[130px]">Term Amount</TableHead>
-                                                        <TableHead className="font-bold text-slate-700 text-right py-3 px-4 w-[120px]">Paid</TableHead>
-                                                        <TableHead className="font-bold text-slate-700 text-right py-3 px-4 w-[120px]">Due</TableHead>
-                                                        <TableHead className="font-bold text-slate-700 text-center py-3 px-4 w-[100px]">Status</TableHead>
+                                                    <TableRow className="bg-muted/30 border-b">
+                                                        <TableHead className="font-bold text-slate-700 py-2 px-4">Term Type</TableHead>
+                                                        <TableHead className="font-bold text-slate-700 text-center py-2 px-4">%</TableHead>
+                                                        <TableHead className="font-bold text-slate-700 text-center py-2 px-4">Due Date</TableHead>
+                                                        <TableHead className="font-bold text-slate-700 text-right py-2 px-4">Term Amt</TableHead>
+                                                        <TableHead className="font-bold text-slate-700 text-right py-2 px-4">Paid</TableHead>
+                                                        <TableHead className="font-bold text-slate-700 text-right py-2 px-4">Due</TableHead>
+                                                        <TableHead className="font-bold text-slate-700 text-center py-2 px-4">Status</TableHead>
                                                     </TableRow>
                                                 </TableHeader>
                                                 <TableBody>
                                                     {terms.map((term: any, index: number) => (
                                                         <TableRow 
                                                             key={term.id} 
-                                                            className={index % 2 === 0 ? 'border-b border-slate-200 transition-colors bg-white hover:bg-slate-50' : 'border-b border-slate-200 transition-colors bg-slate-50 hover:bg-slate-100'}
+                                                            className={index % 2 === 0 ? 'border-b border-slate-200 transition-colors bg-white hover:bg-slate-50 align-top' : 'border-b border-slate-200 transition-colors bg-slate-50 hover:bg-slate-100 align-top'}
                                                         >
-                                                            <TableCell className="font-medium text-slate-900 py-3 px-4">{term.termType}</TableCell>
-                                                            <TableCell className="text-center text-slate-700 py-3 px-4">{term.percentage}%</TableCell>
-                                                            <TableCell className="text-center text-slate-700 py-3 px-4">
+                                                            <TableCell className="font-medium text-slate-900 py-3 px-4 whitespace-normal wrap-break-word">{term.termType}</TableCell>
+                                                            <TableCell className="text-center text-slate-700 py-3 px-4 tabular-nums">{term.percentage}%</TableCell>
+                                                            <TableCell className="text-center text-slate-700 py-3 px-4 tabular-nums">
                                                                 {safeFormatDate(term.dueDate)}
                                                             </TableCell>
-                                                            <TableCell className="text-right font-semibold text-slate-900 py-3 px-4">
+                                                            <TableCell className="text-right font-semibold text-slate-900 py-3 px-4 tabular-nums">
                                                                 USh {term.termAmount.toFixed(2)}
                                                             </TableCell>
-                                                            <TableCell className="text-right font-semibold text-green-600 py-3 px-4">
+                                                            <TableCell className="text-right font-semibold text-green-600 py-3 px-4 tabular-nums">
                                                                 USh {term.paidAmount.toFixed(2)}
                                                             </TableCell>
-                                                            <TableCell className="text-right font-semibold text-orange-600 py-3 px-4">
+                                                            <TableCell className="text-right font-semibold text-orange-600 py-3 px-4 tabular-nums">
                                                                 USh {term.dueAmount.toFixed(2)}
                                                             </TableCell>
                                                             <TableCell className="text-center py-3 px-4">
@@ -1300,20 +1481,20 @@ const SalesFollowUp = () => {
                                                             </TableCell>
                                                         </TableRow>
                                                     ))}
-                                                    <TableRow className="bg-slate-200 border-t-2 border-slate-400">
-                                                        <TableCell colSpan={3} className="text-right font-bold text-slate-900 py-4 px-4 text-base">
+                                                    <TableRow className="bg-muted/40 border-t">
+                                                        <TableCell colSpan={3} className="text-right font-bold text-slate-900 py-3 px-4">
                                                             Total:
                                                         </TableCell>
-                                                        <TableCell className="text-right font-bold text-slate-900 py-4 px-4 text-base">
+                                                        <TableCell className="text-right font-bold text-slate-900 py-3 px-4 tabular-nums">
                                                             USh {terms.reduce((sum: number, t: any) => sum + t.termAmount, 0).toFixed(2)}
                                                         </TableCell>
-                                                        <TableCell className="text-right font-bold text-green-700 py-4 px-4 text-base">
+                                                        <TableCell className="text-right font-bold text-green-700 py-3 px-4 tabular-nums">
                                                             USh {terms.reduce((sum: number, t: any) => sum + t.paidAmount, 0).toFixed(2)}
                                                         </TableCell>
-                                                        <TableCell className="text-right font-bold text-orange-700 py-4 px-4 text-base">
+                                                        <TableCell className="text-right font-bold text-orange-700 py-3 px-4 tabular-nums">
                                                             USh {terms.reduce((sum: number, t: any) => sum + t.dueAmount, 0).toFixed(2)}
                                                         </TableCell>
-                                                        <TableCell className="py-4 px-4"></TableCell>
+                                                        <TableCell className="py-3 px-4"></TableCell>
                                                     </TableRow>
                                                 </TableBody>
                                             </Table>
@@ -1325,14 +1506,15 @@ const SalesFollowUp = () => {
                         })()}
 
                         {/* ============================================================================
-                            NEXT FOLLOW UP DATE
+                            UPCOMING FOLLOW UP DATE
                             Sales team sets the next scheduled follow-up date
                             ============================================================================ */}
-                        <div className="space-y-2">
-                            <Label className="text-sm font-bold">Next Follow Up Date</Label>
+                        <div className="space-y-2 max-w-md">
+                            <Label className="text-sm font-bold">Upcoming Follow Up Date</Label>
                             <LocalFollowUpDatePicker 
                                 date={editNextFollowUpDate} 
                                 setDate={setEditNextFollowUpDate}
+                                minDate={new Date()} // Allow only today and future dates
                             />
                         </div>
 
@@ -1341,31 +1523,38 @@ const SalesFollowUp = () => {
                             Fields: Follow Up Date, Follow Up Note
                             Each entry saved in Sales Follow Up History
                             ============================================================================ */}
-                        <div className="grid grid-cols-12 gap-6 bg-slate-50 p-6 rounded-2xl border border-slate-100 shadow-inner">
-                            <div className="col-span-4">
+                        <div className="grid grid-cols-1 gap-4 rounded-lg border bg-muted/20 p-4 sm:p-5 md:grid-cols-12 md:items-end">
+                            <div className="md:col-span-3">
                                 <Label className="text-xs font-bold text-slate-600 mb-2 block uppercase tracking-wide">Follow Up Date <span className="text-red-500">*</span></Label>
                                 <LocalFollowUpDatePicker 
                                     date={editFollowUpDate} 
                                     setDate={setEditFollowUpDate}
+                                    maxDate={new Date()} // Allow only today and past dates
                                 />
                             </div>
 
-                            <div className="col-span-7">
+                            <div className="md:col-span-8">
                                 <Label className="text-xs font-bold text-slate-600 mb-2 block uppercase tracking-wide">Follow Up Note <span className="text-red-500">*</span></Label>
                                 <Input
                                     value={editFollowUpNote}
-                                    onChange={(e) => setEditFollowUpNote(e.target.value)}
+                                    onChange={(e) => {
+                                        if (e.target.value.length <= 200) {
+                                            setEditFollowUpNote(e.target.value);
+                                        }
+                                    }}
                                     placeholder="Enter follow-up note..."
-                                    className="h-10 bg-white border-slate-200"
+                                    className="h-9 bg-white border-slate-200"
+                                    maxLength={200}
                                 />
                             </div>
 
-                            <div className="col-span-1 flex items-end pb-0.5">
+                            <div className="flex md:col-span-1 md:justify-end">
                                 <Button 
                                     onClick={handleAddFollowUpEntry}
-                                    className="h-10 w-10 p-0 rounded-xl shadow-lg shadow-primary/20"
+                                    className="h-9 w-9 p-0 rounded-lg shadow-sm"
+                                    title="Add follow-up entry"
                                 >
-                                    <Plus className="h-5 w-5" />
+                                    <Plus className="h-4 w-4" />
                                 </Button>
                             </div>
                         </div>
@@ -1377,29 +1566,37 @@ const SalesFollowUp = () => {
                         <div className="space-y-3">
                             <Label className="text-sm font-bold">Follow-Up History</Label>
                             {(activeRecord && (activeRecord.notes.length > 0 || tempHistoryEntries.length > 0)) ? (
-                                <div className="border rounded-lg overflow-hidden">
-                                    <Table>
+                                <div className="border rounded-lg overflow-hidden bg-muted/10">
+                                    <Table className="table-fixed">
+                                        <colgroup>
+                                            <col className="w-[140px]" />
+                                            <col />
+                                        </colgroup>
                                         <TableHeader>
-                                            <TableRow className="bg-muted/50">
-                                                <TableHead className="font-bold w-[150px]">Follow Up Date</TableHead>
-                                                <TableHead className="font-bold">Note</TableHead>
+                                            <TableRow className="bg-muted/30">
+                                                <TableHead className="font-bold py-2 pl-4">Follow Up Date</TableHead>
+                                                <TableHead className="font-bold py-2 pr-4">Note</TableHead>
                                             </TableRow>
                                         </TableHeader>
                                         <TableBody>
                                             {activeRecord.notes.map((note) => (
-                                                <TableRow key={note.id}>
-                                                    <TableCell className="font-medium">
+                                                <TableRow key={note.id} className="align-top">
+                                                    <TableCell className="py-3 pl-4 font-medium tabular-nums">
                                                         {safeFormatDate(note.date)}
                                                     </TableCell>
-                                                    <TableCell>{note.note}</TableCell>
+                                                    <TableCell className="py-3 pr-4 whitespace-normal wrap-break-word text-slate-600">
+                                                        {note.note}
+                                                    </TableCell>
                                                 </TableRow>
                                             ))}
                                             {tempHistoryEntries.map((entry) => (
-                                                <TableRow key={entry.id} className="bg-blue-50">
-                                                    <TableCell className="font-medium">
+                                                <TableRow key={entry.id} className="bg-blue-50/60 align-top">
+                                                    <TableCell className="py-3 pl-4 font-medium tabular-nums">
                                                         {safeFormatDate(entry.date)}
                                                     </TableCell>
-                                                    <TableCell>{entry.note}</TableCell>
+                                                    <TableCell className="py-3 pr-4 whitespace-normal wrap-break-word text-slate-600">
+                                                        {entry.note}
+                                                    </TableCell>
                                                 </TableRow>
                                             ))}
                                         </TableBody>
@@ -1414,9 +1611,16 @@ const SalesFollowUp = () => {
                     </div>
 
                     {/* Dialog Footer */}
-                    <DialogFooter className="p-6 border-t">
+                    <DialogFooter className="border-t bg-white p-4 sm:p-6 mt-auto gap-2 sm:flex-row sm:items-center sm:justify-end">
                         <Button variant="outline" onClick={() => setIsEditDialogOpen(false)}>Cancel</Button>
-                        <Button onClick={handleSaveFollowUp} className="bg-blue-600 hover:bg-blue-700">Save</Button>
+                        <Button 
+                            onClick={handleSaveFollowUp} 
+                            loading={isSavingFollowUp}
+                            className="bg-blue-600 hover:bg-blue-700"
+                            disabled={!canEdit(MODULE_KEY) || isEditDetailLoading || isSavingFollowUp}
+                        >
+                            Save
+                        </Button>
                     </DialogFooter>
                 </DialogContent>
             </Dialog>

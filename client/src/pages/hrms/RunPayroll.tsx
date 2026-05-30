@@ -2,26 +2,33 @@
  * ============================================================================
  * RUN PAYROLL TAB - PAYROLL PROCESSING
  * ============================================================================
- * 
- * This component is rendered inside the "Run Payroll" tab of Payroll Management.
- * It handles the employee list and employee payroll form.
- * 
- * ROUTES (nested under /hrms/payroll-management/run-payroll):
- * - /hrms/payroll-management/run-payroll → Employee List
- * - /hrms/payroll-management/run-payroll/:employeeId → Employee Form
- * 
- * ============================================================================
  */
 
 import React, { useState, useEffect, useMemo } from "react";
+import { useDebounce } from "@/hooks/useDebounce";
 import { useRoute, useLocation } from "wouter";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
-import { Command, CommandInput, CommandList, CommandEmpty, CommandGroup, CommandItem, CommandInputBorderless } from "@/components/ui/command";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { ArrowLeft, AlertCircle, ChevronLeft, Loader2 } from "lucide-react";
+import { useToast } from "@/hooks/use-toast";
+import { cn } from "@/lib/utils";
+import { useHasPermission } from "@/hooks/usePermissions";
+import { differenceInDays, isValid } from "date-fns";
+import { AppListToolbar } from "@/components/shared/AppListToolbar";
+import { DataTablePagination } from "@/components/shared/DataTablePagination";
+import {
+  useRunPayrollList,
+  usePayrollDetail,
+  useUpdatePayrollDetail,
+  usePayPeriods,
+  // useDepartmentsDropdown,
+  useCommonEmployees
+} from "@/hooks/useApi";
+import { useCommonStore } from "@/store/commonStore";
 import {
   Select,
   SelectContent,
@@ -29,144 +36,46 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table";
-import { Search, ArrowLeft, AlertCircle, Calculator, ChevronLeft, ChevronRight, ChevronsUpDown, Check } from "lucide-react";
-import { useToast } from "@/hooks/use-toast";
-import { cn } from "@/lib/utils";
-import { differenceInDays, parse, format, isValid } from "date-fns";
-import { PayPeriod, mockPayPeriods, PayrollRun, MOCK_PAYROLL_RUNS, PayrollStatus, MOCK_EMPLOYEES, Employee } from "@/lib/payrollSharedData";
-import { AppListToolbar } from "@/components/shared/AppListToolbar";
-import { SearchableSelect } from "@/components/shared/SearchableSelect";
-import { DataTablePagination } from "@/components/shared/DataTablePagination";
-import { getPayrollSalaryAssignment, type PayrollSalaryAssignment } from "@/lib/salaryAssignmentSharedData";
+import { CURRENCY_SYMBOL } from "@/config/appConfig";
 
 // ============================================================================
-// TYPE DEFINITIONS
+// TYPE DEFINITIONS & CONSTANTS
 // ============================================================================
 
-// Shared types are imported from @/lib/payrollSharedData
-
-// Shared types are imported from @/lib/payrollSharedData
-
-/**
- * Salary Component structure (for structure preview)
- */
-interface SalaryComponent {
-  code: string;
-  name: string;
-  ruleType: string; // "Fixed" or "% of CTC" or "% of Basic"
-  monthlyAmount: number;
-}
-
-/**
- * Salary Assignment with structure details (using shared data)
- */
-interface SalaryAssignment {
-  employeeId: string;
-  structureName: string;
-  monthlyCTC: number;
-  earnings: SalaryComponent[]; // Earnings components from structure
-  deductions: SalaryComponent[]; // Deduction components from structure
-}
-
-// Shared types are imported from @/lib/payrollSharedData
-
-// ============================================================================
-// CONSTANTS
-// ============================================================================
-
-/**
- * OT (Overtime) Rate per hour - Fixed constant for MVP
- */
 const OT_RATE_PER_HOUR = 100;
 
-// ============================================================================
-// MOCK DATA
-// ============================================================================
-// ⚠️ SAFE GUARD: Added mock data to prevent runtime crashes
-// This ensures Run Payroll page never crashes when empty
-// ============================================================================
-
-// Shared mock data is imported from @/lib/payrollSharedData
-
-// Shared mock data is imported from @/lib/payrollSharedData
-
-/**
- * Mock Salary Assignments - Now using shared data store
- * @deprecated Use getSalaryAssignmentByEmployeeId from salaryAssignmentSharedData instead
- */
-// const MOCK_SALARY_ASSIGNMENTS: SalaryAssignment[] = [
-//   ... (moved to shared data store)
-// ];
-
-// Shared mock data is imported from @/lib/payrollSharedData
-
-// ============================================================================
-// UTILITY FUNCTIONS
-// ============================================================================
-
-/**
- * Get payroll run for specific employee and pay period
- */
-const getPayrollRun = (employeeId: string, payPeriodId: string): PayrollRun | undefined => {
-  // ⚠️ SAFE GUARD: Return mock data instead of undefined
-  return MOCK_PAYROLL_RUNS.find(
-    run => run.employeeId === employeeId && run.payPeriodId === payPeriodId
-  );
-};
-
-/**
- * Calculate number of days in a pay period (inclusive)
- * Accepts DD-MM-YYYY format
- */
-const calculatePeriodDays = (startDate: string, endDate: string): number => {
+const calculatePeriodDays = (startDate: string | Date, endDate: string | Date): number => {
   const start = new Date(startDate);
   const end = new Date(endDate);
   if (!isValid(start) || !isValid(end)) return 0;
   return differenceInDays(end, start) + 1;
 };
 
-/**
- * Get salary assignment for an employee
- */
-const getSalaryAssignment = (employeeId: string): SalaryAssignment | undefined => {
-  // Get assignment from shared data store
-  const payrollAssignment = getPayrollSalaryAssignment(employeeId);
-  
-  if (!payrollAssignment) {
-    return undefined;
-  }
-  
-  // Already in the correct format for RunPayroll
-  return payrollAssignment;
+const getStatusBadge = (status: string) => {
+  const variants: Record<string, string> = {
+    Locked: "bg-green-100 text-green-700 border-green-200",
+    Available: "bg-green-100 text-green-700 border-green-200",
+    Draft: "bg-gray-100 text-gray-700 border-gray-200",
+    Pending: "bg-yellow-100 text-yellow-700 border-yellow-200",
+  };
+
+  return (
+    <Badge variant="outline" className={cn("font-semibold px-2 py-0.5 text-[10px]", variants[status] || "bg-gray-50 text-gray-500")}>
+      {status}
+    </Badge>
+  );
 };
 
 // ============================================================================
 // MAIN COMPONENT
 // ============================================================================
 
-/**
- * Main Run Payroll Component
- * Handles routing between Employee List and Employee Form
- */
-
-
 export default function RunPayroll() {
-  const [, setLocation] = useLocation();
   const [refreshTrigger, setRefreshTrigger] = useState(0);
-  const [matchList] = useRoute("/hrms/payroll-management/run-payroll");
   const [matchForm, params] = useRoute("/hrms/payroll-management/run-payroll/:employeeId");
 
-  // Determine which screen to show based on route
   if (matchForm && params?.employeeId) {
-    return <EmployeePayrollForm employeeId={params.employeeId} refreshTrigger={refreshTrigger} setRefreshTrigger={setRefreshTrigger} />;
+    return <EmployeePayrollForm employeeId={params.employeeId} setRefreshTrigger={setRefreshTrigger} />;
   }
 
   return <EmployeeListScreen refreshTrigger={refreshTrigger} />;
@@ -176,206 +85,153 @@ export default function RunPayroll() {
 // SCREEN A: EMPLOYEE LIST
 // ============================================================================
 
-/**
- * Employee List Screen
- * Shows all employees for a selected pay period
- */
 function EmployeeListScreen({ refreshTrigger }: { refreshTrigger: number }) {
   const [, setLocation] = useLocation();
   const { toast } = useToast();
+  const { canCreate, canEdit } = useHasPermission();
+  const canOpen = canCreate("HRMS:Payroll Management") || canEdit("HRMS:Payroll Management");
 
-  // ============================================================================
-  // PERSISTENT PAY PERIOD SELECTION
-  // ============================================================================
-  // PURPOSE: Remembers selected pay period across page navigations
-  // WHY NEEDED: When user goes to employee form and comes back, period stays selected
-  // HOW IT WORKS: Loads from localStorage on mount, saves on change
-  // KEEP: Essential for good UX - prevents re-selecting period every time
-  // ============================================================================
   const [selectedPeriodId, setSelectedPeriodId] = useState<string>("");
-
-  // ============================================================================
-  // AUTO-SELECT PAY PERIOD WHEN ONLY ONE OPTION AVAILABLE
-  // ============================================================================
-  // PURPOSE: Auto-select the pay period when there's only one option
-  // WHY NEEDED: Better UX when only one period is available (like Mar-2026 only)
-  // HOW IT WORKS: Checks if mockPayPeriods has only one item and auto-selects it
-  // ============================================================================
-  useEffect(() => {
-    if (mockPayPeriods.length === 1 && !selectedPeriodId) {
-      setSelectedPeriodId(mockPayPeriods[0].id);
-    }
-  }, [selectedPeriodId]);
-
-  // ============================================================================
-  // FILTER AND SEARCH STATE
-  // ============================================================================
-  // PURPOSE: Allows HR to filter/search employees in the list
-  // WHY NEEDED: Large companies have many employees - need filtering
-  // KEEP: Essential for usability with large employee lists
-  // ============================================================================
   const [searchQuery, setSearchQuery] = useState("");
-  const [deptFilter, setDeptFilter] = useState("All");
-
-  // ============================================================================
-  // PAGINATION STATE
-  // ============================================================================
-  // PURPOSE: Shows employees in pages (10 per page) instead of all at once
-  // WHY NEEDED: Performance - prevents rendering 100+ employees at once
-  // KEEP: Essential for performance with large employee lists
-  // ============================================================================
+  const debouncedSearchQuery = useDebounce(searchQuery, 500);
+  const [deptFilterId, setDeptFilterId] = useState<string>("All");
   const [currentPage, setCurrentPage] = useState(1);
   const [itemsPerPage, setItemsPerPage] = useState(10);
+  const [location] = useLocation();
 
-  const departments = useMemo(() => {
-    // Only include departments from employees with salary assignments
-    const employeesWithAssignments = MOCK_EMPLOYEES.filter(emp => {
-      const assignment = getSalaryAssignment(emp.id);
-      return !!assignment;
+  const { data: payPeriodsData, refetch: refetchPeriods } = usePayPeriods();
+  /*
+  const { data: departmentsData, refetch: refetchDepts } = useDepartmentsDropdown();
+  const departments = (Array.isArray(departmentsData) ? departmentsData : departmentsData?.data?.records || departmentsData?.data || []) || [];
+  */
+  const departmentsFromStore = useCommonStore((state) => state.departments);
+  const departments = useMemo(
+    () =>
+      (departmentsFromStore || []).map((d: any) => ({
+        ...d,
+        name: d.name ?? d.value_name,
+        department_name: d.department_name ?? d.value_name ?? d.name,
+      })),
+    [departmentsFromStore]
+  );
+  const { data: commonEmployeesData } = useCommonEmployees();
+
+
+  // Mapping for employee code to ID
+  const employeeCodeToIdMap = useMemo(() => {
+    const map = new Map<string, number>();
+    const records = (commonEmployeesData?.data?.records || []) as any[];
+    records.forEach(emp => {
+      if (emp.code && emp.id) {
+        map.set(emp.code, emp.id);
+      }
     });
-    const uniqueDepts = new Set(employeesWithAssignments.map(emp => emp.department));
-    return ["All", ...Array.from(uniqueDepts)];
-  }, [refreshTrigger]);
+    return map;
+  }, [commonEmployeesData]);
+  const payPeriods = (Array.isArray(payPeriodsData) ? payPeriodsData : payPeriodsData?.data?.records || payPeriodsData?.data || []) || [];
 
-  // Get selected pay period
-  // ⚠️ SAFE GUARD: Using mock data to find selected period
-  const selectedPeriod = useMemo(() => {
-    return mockPayPeriods.find(p => p.id === selectedPeriodId);
-  }, [selectedPeriodId]);
-
-  // Calculate period days
-  const periodDays = useMemo(() => {
-    if (!selectedPeriod) return 0;
-    return calculatePeriodDays(selectedPeriod.startDate, selectedPeriod.endDate);
-  }, [selectedPeriod]);
-
-  // Get employee data with payroll status
-  // Only include employees with active salary assignments
-  const employeeData = useMemo(() => {
-    if (!selectedPeriodId) return [];
-
-    return MOCK_EMPLOYEES
-      .map(emp => {
-        const assignment = getSalaryAssignment(emp.id);
-        const payrollRun = getPayrollRun(emp.id, selectedPeriodId);
-
-        // Only include employees with valid salary assignments
-        if (!assignment) {
-          return null;
-        }
-
-        let status: PayrollStatus = "Pending";
-        if (payrollRun) {
-          status = payrollRun.status;
-        }
-
-        return {
-          ...emp,
-          hasAssignment: true,
-          structureName: assignment.structureName,
-          status
-        };
-      })
-      .filter(emp => emp !== null); // Remove employees without assignments
-  }, [selectedPeriodId, refreshTrigger]);
-
-  // Filter and sort employees
-  const filteredEmployees = useMemo(() => {
-    let filtered = employeeData;
-
-    if (deptFilter !== "All") {
-      filtered = filtered.filter(e => e.department === deptFilter);
-    }
-
-    if (searchQuery) {
-      const query = searchQuery.toLowerCase();
-      filtered = filtered.filter(e =>
-        e.code.toLowerCase().includes(query) ||
-        e.name.toLowerCase().includes(query)
-      );
-    }
-
-    // ✅ UPDATED: Sort by status priority: Warning → Pending → Draft → Locked
-    const statusPriority: Record<PayrollStatus, number> = {
-      Warning: 1,
-      Pending: 2,
-      Draft: 3,
-      Calculated: 4,
-      Locked: 5,
-    };
-
-    filtered.sort((a, b) => {
-      const priorityDiff = statusPriority[a.status] - statusPriority[b.status];
-      if (priorityDiff !== 0) return priorityDiff;
-      return a.name.localeCompare(b.name);
+  // Mapping for Pay Period Name to ID (MOVED BELOW payPeriods)
+  const payPeriodNameToIdMap = useMemo(() => {
+    const map = new Map<string, number>();
+    payPeriods.forEach((p: any) => {
+      const name = p.pay_period || p.period_name || p.name || p.period || p.pay_period_name;
+      if (name && p.id) {
+        map.set(name, p.id);
+      }
     });
+    return map;
+  }, [payPeriods]);
 
-    return filtered;
-  }, [employeeData, deptFilter, searchQuery]);
-
-  // Paginate
-  const paginatedEmployees = useMemo(() => {
-    const start = (currentPage - 1) * itemsPerPage;
-    const end = start + itemsPerPage;
-    return filteredEmployees.slice(start, end);
-  }, [filteredEmployees, currentPage]);
-
-  const totalPages = Math.ceil(filteredEmployees.length / itemsPerPage);
-
-  // Handlers
-  const handleOpenEmployee = (employeeId: string) => {
-    if (!selectedPeriodId) {
-      toast({
-        title: "Error",
-        description: "Please select a pay period first",
-        variant: "destructive",
-      });
-      return;
+  useEffect(() => {
+    if (Array.isArray(payPeriods) && payPeriods.length > 0 && !selectedPeriodId) {
+      setSelectedPeriodId(payPeriods[0].id.toString());
     }
-    // Fixed: Ensure the route navigation correctly routes inside the run-payroll tab space
-    setLocation(`/hrms/payroll-management/run-payroll/${employeeId}?periodId=${selectedPeriodId}`);
+  }, [payPeriods, selectedPeriodId]);
+
+  const { data: payrollListData, isLoading: isListLoading, isFetching: isListFetching, refetch } = useRunPayrollList({
+    page: currentPage,
+    limit: itemsPerPage,
+    search: debouncedSearchQuery,
+    payroll_period_id: selectedPeriodId && selectedPeriodId !== "All" ? parseInt(selectedPeriodId) : undefined,
+    department_id: deptFilterId && deptFilterId !== "All" ? parseInt(deptFilterId) : undefined,
+    refreshKey: location + refreshTrigger,
+  });
+
+  // Fresh data guarantee: 
+  // Relying on useQuery with refetchOnMount: 'always' and queryKey change (location + refreshTrigger) 
+  // to ensure data is never stale without manual duplicate calls on mount.
+  useEffect(() => {
+    // If we need manual force-refetch for dropdowns on trigger change:
+    if (refreshTrigger > 0) {
+      refetchPeriods();
+      // refetchDepts();
+    }
+  }, [refreshTrigger, refetchPeriods]);
+
+  // Reset pagination when search or filters change
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [debouncedSearchQuery, selectedPeriodId, deptFilterId]);
+
+  const rawRecords = (payrollListData?.data?.records || payrollListData?.records || []) as any[];
+  const pagination = (payrollListData?.data?.pagination || payrollListData?.pagination) || { totalCount: 0, totalPages: 1 };
+
+  // Map records to ensure IDs are present for navigation
+  const mappedRecords = useMemo(() => {
+    return rawRecords.map(r => {
+      // Priority for employee_id:
+      // 1. Explicit employee_id from record
+      // 2. Lookup from employee_code
+      const resolvedId = r.employee_id || (r.employee_code ? employeeCodeToIdMap.get(r.employee_code) : r.id);
+      
+      // Robust pay_period_id resolution:
+      const currentFilterId = selectedPeriodId && selectedPeriodId !== "All" ? parseInt(selectedPeriodId) : null;
+      const resolvedPeriodId = r.pay_period_id || r.payroll_period_id || r.period_id || 
+                               currentFilterId || 
+                               (r.pay_period || r.pay_period_name ? payPeriodNameToIdMap.get(r.pay_period || r.pay_period_name) : null);
+
+      return {
+        ...r,
+        employee_id: resolvedId,
+        pay_period_id: resolvedPeriodId,
+        // Combination key as requested: employee_code + period
+        unique_key: `${r.employee_code}-${r.pay_period || r.pay_period_name || resolvedPeriodId}-${r.id || r.payroll_run_id || Math.random()}`
+      };
+    });
+  }, [rawRecords, selectedPeriodId, employeeCodeToIdMap, payPeriodNameToIdMap]);
+
+  const handleOpenEmployee = (id: number, periodId?: number) => {
+    if (isTableLoading) return;
+    const finalPeriodId = periodId || (selectedPeriodId !== "All" ? parseInt(selectedPeriodId) : null);
+    setLocation(`/hrms/payroll-management/run-payroll/${id}?periodId=${finalPeriodId}`);
   };
 
-  const getStatusBadge = (status: PayrollStatus) => {
-    // ✅ UPDATED: Added Draft status styling
-    const styles: Record<PayrollStatus, string> = {
-      Warning: "bg-red-100 text-red-700 border-red-200",
-      Pending: "bg-gray-100 text-gray-700 border-gray-200",
-      Draft: "bg-blue-100 text-blue-700 border-blue-200",
-      Calculated: "bg-indigo-100 text-indigo-700 border-indigo-200",
-      Locked: "bg-green-100 text-green-700 border-green-200",
-    };
-
-    return (
-      <Badge variant="outline" className={styles[status]}>
-        {status}
-      </Badge>
-    );
-  };
+  const isTableLoading = isListLoading || isListFetching;
 
   return (
     <div className="space-y-6">
-      {/* Page Header */}
-      <div>
-      </div>
-
-      {/* Top Bar Controls */}
       <AppListToolbar
         search={{
           value: searchQuery,
-          onChange: setSearchQuery,
-          placeholder: "Search by code or name..."
+          onChange: (val) => {
+            setSearchQuery(val);
+            setCurrentPage(1);
+          },
+          placeholder: "Search employees..."
         }}
         filters={[
           {
             type: 'select',
             label: 'Pay Period',
-            value: selectedPeriod?.periodName ?? "",
-            options: mockPayPeriods.map(p => p.periodName),
-            onChange: (periodName) => {
-              const period = mockPayPeriods.find(p => p.periodName === periodName);
-              if (period) {
-                setSelectedPeriodId(period.id);
+            value: Array.isArray(payPeriods) ? (payPeriods.find((p: any) => p.id.toString() === selectedPeriodId)?.name || payPeriods.find((p: any) => p.id.toString() === selectedPeriodId)?.period || "All Pay Period") : "All Pay Period",
+            options: ["All Pay Period", ...(Array.isArray(payPeriods) ? payPeriods.map((p: any) => p?.name || p?.period).filter(Boolean) : [])],
+            onChange: (periodLabel) => {
+              setCurrentPage(1);
+              if (periodLabel === "All Pay Period") {
+                setSelectedPeriodId("All");
+              } else if (Array.isArray(payPeriods)) {
+                const period = payPeriods.find((p: any) => (p.name || p.period) === periodLabel);
+                if (period) setSelectedPeriodId(period.id.toString());
               }
             },
             searchable: true
@@ -383,15 +239,22 @@ function EmployeeListScreen({ refreshTrigger }: { refreshTrigger: number }) {
           {
             type: 'select',
             label: 'Department',
-            value: deptFilter,
-            options: departments,
-            onChange: setDeptFilter,
+            value: Array.isArray(departments) ? (departments.find((d: any) => d.id.toString() === deptFilterId)?.name || departments.find((d: any) => d.id.toString() === deptFilterId)?.department_name || "All Department") : "All Department",
+            options: ["All Department", ...(Array.isArray(departments) ? departments.map((d: any) => d?.name || d?.department_name).filter(Boolean) : [])],
+            onChange: (deptName) => {
+              setCurrentPage(1);
+              if (deptName === "All Department") {
+                setDeptFilterId("All");
+              } else if (Array.isArray(departments)) {
+                const dept = departments.find((d: any) => (d.name || d.department_name) === deptName);
+                if (dept) setDeptFilterId(dept.id.toString());
+              }
+            },
             searchable: true
           }
         ]}
       />
 
-      {/* Employee Table or Empty State Box */}
       {!selectedPeriodId ? (
         <Card className="shadow-sm">
           <CardContent className="flex flex-col items-center justify-center py-16">
@@ -413,39 +276,51 @@ function EmployeeListScreen({ refreshTrigger }: { refreshTrigger: number }) {
                   <TableRow className="bg-muted/50">
                     <TableHead>Employee Code</TableHead>
                     <TableHead>Employee Name</TableHead>
+                    <TableHead>Pay Period</TableHead>
                     <TableHead>Department / Plant</TableHead>
                     <TableHead>Salary Structure</TableHead>
                     <TableHead>Status</TableHead>
-                    <TableHead className="text-center">Actions</TableHead>
+                    <TableHead className="text-right">Actions</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {paginatedEmployees.length === 0 ? (
+                  {isTableLoading ? (
                     <TableRow>
-                      <TableCell colSpan={6} className="h-24 text-center text-muted-foreground">
-                        No employees found
+                      <TableCell colSpan={7} className="h-32 text-center">
+                        <div className="flex flex-col items-center justify-center gap-3">
+                          <Loader2 className="h-8 w-8 animate-spin text-primary" />
+                          <p className="text-sm text-muted-foreground">Loading...</p>
+                        </div>
+                      </TableCell>
+                    </TableRow>
+                  ) : mappedRecords.length === 0 ? (
+                    <TableRow>
+                      <TableCell colSpan={7} className="h-32 text-center text-muted-foreground">
+                        No data found
                       </TableCell>
                     </TableRow>
                   ) : (
-                    paginatedEmployees.map(emp => (
-                      <TableRow key={emp.id} className="hover:bg-muted/30 transition-colors">
-                        <TableCell className="font-medium">{emp.code}</TableCell>
-                        <TableCell>{emp.name}</TableCell>
-                        <TableCell>{emp.department}</TableCell>
+                    mappedRecords.map((emp: any) => (
+                      <TableRow key={emp.unique_key || emp.payroll_run_id || `${emp.employee_id}-${emp.pay_period_id}`} className="hover:bg-muted/30 transition-colors">
+                        <TableCell className="font-medium">{emp.employee_code}</TableCell>
+                        <TableCell>{emp.employee_name}</TableCell>
+                        <TableCell>{emp.pay_period || emp.pay_period_name || "N/A"}</TableCell>
+                        <TableCell>{emp.department_name}</TableCell>
                         <TableCell>
-                          {emp.hasAssignment ? emp.structureName : (
-                            <span className="text-red-500 text-sm">Not Assigned</span>
-                          )}
+                          {emp.salary_structure_name || <span className="text-red-500 text-sm">Not Assigned</span>}
                         </TableCell>
-                        <TableCell>{getStatusBadge(emp.status)}</TableCell>
+                        <TableCell>{getStatusBadge(emp.payroll_status)}</TableCell>
                         <TableCell className="text-right">
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            onClick={() => handleOpenEmployee(emp.id)}
-                          >
-                            Open
-                          </Button>
+                          {canOpen && (
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              disabled={isTableLoading}
+                              onClick={() => handleOpenEmployee(emp.employee_id || emp.id, emp.pay_period_id)}
+                            >
+                              Open
+                            </Button>
+                          )}
                         </TableCell>
                       </TableRow>
                     ))
@@ -454,11 +329,10 @@ function EmployeeListScreen({ refreshTrigger }: { refreshTrigger: number }) {
               </Table>
             </div>
 
-            {/* Pagination inside CardContent */}
             <DataTablePagination
               currentPage={currentPage}
-              totalPages={totalPages}
-              totalItems={filteredEmployees.length}
+              totalPages={pagination.totalPages}
+              totalItems={pagination.totalCount}
               itemsPerPage={itemsPerPage}
               onPageChange={setCurrentPage}
               onItemsPerPageChange={setItemsPerPage}
@@ -471,895 +345,527 @@ function EmployeeListScreen({ refreshTrigger }: { refreshTrigger: number }) {
 }
 
 // ============================================================================
-// SCREEN B: EMPLOYEE PAYROLL FORM (UPDATED VERSION)
+// SCREEN B: EMPLOYEE PAYROLL FORM
 // ============================================================================
 
-/**
- * Employee Payroll Form Component
- * 
- * PAGE STRUCTURE (Top to Bottom):
- * 1) Employee & Period Summary (Read-only)
- * 2) Salary Structure Preview (Read-only) - NEW
- * 3) Manual Entry Section (Simplified - only Paid Days, LWP Days, OT Hours)
- * 4) Action Buttons
- * 5) Calculation Preview (Modern cards)
- * 6) Lock Behavior
- */
 function EmployeePayrollForm({
   employeeId,
-  refreshTrigger,
   setRefreshTrigger
 }: {
   employeeId: string;
-  refreshTrigger: number;
   setRefreshTrigger: React.Dispatch<React.SetStateAction<number>>;
 }) {
   const [, setLocation] = useLocation();
   const { toast } = useToast();
 
-  // Get pay period ID from URL query params
   const searchParams = new URLSearchParams(window.location.search);
   const payPeriodId = searchParams.get("periodId") || "";
 
-  // ============================================================================
-  // MANUAL ENTRY FIELDS STATE
-  // ============================================================================
-  // PURPOSE: Stores user input for payroll calculation
-  // WHY STRING TYPE: Input fields return strings, converted to numbers during calculation
-  // KEEP: Essential for payroll data entry
-  // ============================================================================
+  // State
   const [paidDays, setPaidDays] = useState<string>("");
   const [lwpDays, setLwpDays] = useState<string>("");
   const [otHours, setOtHours] = useState<string>("0");
+  const [currentStatus, setCurrentStatus] = useState<string>("Pending");
+  // API Hooks
+  const { data: detailData, isLoading: isDetailLoading } = usePayrollDetail(parseInt(employeeId), parseInt(payPeriodId));
+  const { data: payPeriodsData } = usePayPeriods();
+  const updateMutation = useUpdatePayrollDetail();
+  const entityValues = useCommonStore(state => state.entityValues);
 
-  // ============================================================================
-  // PAYROLL STATUS STATE
-  // ============================================================================
-  // PURPOSE: Tracks payroll status (Pending → Draft → Locked)
-  // WHY NEEDED: Controls workflow - Locked payslips become available to employees
-  // KEEP: Essential for payroll workflow and payslip visibility
-  // ============================================================================
-  const [currentStatus, setCurrentStatus] = useState<PayrollStatus>("Pending");
+  const payrollData = detailData?.data || detailData;
+  // FIX: corrected typo from allPayPeriodsData to payPeriodsData to ensure correctly resolved names.
+  const allPayPeriods = (Array.isArray(payPeriodsData) ? payPeriodsData : payPeriodsData?.data?.records || payPeriodsData?.data || []) || [];
 
-  // ============================================================================
-  // FORM VALIDATION AND CHANGE TRACKING
-  // ============================================================================
-  // PURPOSE: 
-  // - formErrors: Shows validation errors to user
-  // - inputsChanged: Warns user to recalculate after editing
-  // - refreshTrigger: Forces re-fetch of payroll data after save
-  // KEEP: Essential for data integrity and user feedback
-  // ============================================================================
-  const [formErrors, setFormErrors] = useState<Record<string, string>>({});
-  const [inputsChanged, setInputsChanged] = useState(false);
+  /**
+   * Resolves a numeric pay_period_id to its human-readable month-year name.
+   * Checks multiple field variants (period_name, period, name) across the periods list.
+   */
+  const resolvePeriodName = (id: any, periods: any[]) => {
+    if (!id || !periods) return "N/A";
+    const found = periods.find(p => 
+      String(p.id) === String(id) || 
+      String(p.period_id) === String(id) ||
+      String(p.pay_period_id) === String(id)
+    );
+    return found?.period_name || found?.period || found?.name || id;
+  };
+  const currentPayPeriodName = resolvePeriodName(payPeriodId, allPayPeriods);
 
-  // ============================================================================
-  // DERIVED DATA - COMPUTED FROM PROPS/STATE
-  // ============================================================================
-  // PURPOSE: These are NOT stored in state - they're calculated on every render
-  // WHY USEMEMO: Prevents expensive recalculations unless dependencies change
-  // KEEP: Essential for performance optimization
-  // ============================================================================
+  // Map flat backend response to expected UI structures
+  const employee = useMemo(() => payrollData ? {
+    name: payrollData.employee_name,
+    employee_code: payrollData.employee_code,
+    department: payrollData.department_name
+  } : null, [payrollData]);
 
-  // Find employee data
-  // ⚠️ SAFE GUARD: Using mock data to find employee
-  const employee = useMemo(() => {
-    return MOCK_EMPLOYEES.find(emp => emp.id === employeeId);
-  }, [employeeId]);
+  const payPeriod = useMemo(() => ({
+    period: currentPayPeriodName,
+    period_days: payrollData?.period_days || 0
+  }), [currentPayPeriodName, payrollData]);
 
-  // Find pay period data
-  // ⚠️ SAFE GUARD: Using mock data to find pay period
-  const payPeriod = useMemo(() => {
-    return mockPayPeriods.find(period => period.id === payPeriodId);
-  }, [payPeriodId]);
+  const salaryAssignment = useMemo(() => payrollData ? {
+    structure_name: payrollData.salary_structure_name,
+    earnings: payrollData.earnings,
+    deductions: (payrollData.deductions || []).filter((d: any) => !d.component_name.toUpperCase().includes("LWP"))
+  } : null, [payrollData]);
 
-  // Find employee's salary assignment (structure + amounts)
-  const salaryAssignment = useMemo(() => {
-    return getSalaryAssignment(employeeId);
-  }, [employeeId]);
+  const existingRun = payrollData; // The flat object contains the run fields
 
-  // Calculate number of days in the pay period
-  const periodDays = useMemo(() => {
-    if (!payPeriod) return 0;
-    return calculatePeriodDays(payPeriod.startDate, payPeriod.endDate);
-  }, [payPeriod]);
-
-  // ============================================================================
-  // LOAD EXISTING PAYROLL RUN
-  // ============================================================================
-  // PURPOSE: Fetches previously saved payroll data for this employee+period
-  // WHY REFRESHTRIGGER: Dependency forces reload after Calculate/Save operations
-  // KEEP: Essential for loading and displaying saved payroll data
-  // ============================================================================
-  const existingRun = useMemo(() => {
-    return getPayrollRun(employeeId, payPeriodId);
-  }, [employeeId, payPeriodId, refreshTrigger]);
-
-  // ============================================================================
-  // EDIT LOCK STATUS
-  // ============================================================================
-  // PURPOSE: Determines if form fields should be disabled
-  // CURRENT: Always false (always editable) - HR can edit even locked payroll
-  // WHY: Business requirement - HR needs ability to fix errors even after locking
-  // KEEP: Essential for business workflow flexibility
-  // ============================================================================
-  const isLocked = false; // Always allow editing
-
-  // Check if employee has no salary assignment (warning state)
-  const hasMissingAssignment = !salaryAssignment;
-
-  // ============================================================================
-  // LOAD EXISTING PAYROLL DATA INTO FORM
-  // ============================================================================
-  // PURPOSE: When opening an employee's payroll, populate form with saved data
-  // WHY NEEDED: Allows editing previously calculated payroll
-  // KEEP: Essential for edit functionality
-  // ============================================================================
   useEffect(() => {
     if (existingRun) {
-      setPaidDays(existingRun.paidDays.toString());
-      setLwpDays(existingRun.lwpDays.toString());
-      setOtHours(existingRun.otHours.toString());
-      setCurrentStatus(existingRun.status);
-    } else {
-      // No existing data - default to Pending status
-      setCurrentStatus("Pending");
+      setPaidDays(existingRun.paid_days?.toString() || "0");
+      setLwpDays(existingRun.lwp_days?.toString() || "0");
+      setOtHours(existingRun.ot_hours?.toString() || "0");
+      setCurrentStatus(existingRun.payroll_status || "Pending");
     }
-  }, [existingRun]);
+  }, [payrollData, existingRun]);
 
-  // ========== VALIDATION ==========
+  const periodDays = payPeriod?.period_days || 0;
 
-  const validateForm = (): boolean => {
-    const errors: Record<string, string> = {};
+  // Derived Values
+  // Base Calculations for Payroll
+  const totalMonthlyGross = useMemo(() => {
+    return (salaryAssignment?.earnings || []).reduce((sum: number, c: any) => sum + (c.monthly_amount || 0), 0);
+  }, [salaryAssignment]);
 
-    const paid = parseFloat(paidDays);
-    const lwp = parseFloat(lwpDays);
-    const ot = parseFloat(otHours);
+  const perDaySalary = periodDays > 0 ? totalMonthlyGross / periodDays : 0;
 
-    // Required fields
-    if (!paidDays || isNaN(paid)) {
-      errors.paidDays = "Paid Days is required";
-    } else if (paid < 0) {
-      errors.paidDays = "Paid Days must be ≥ 0";
+  const proratedSalary = useMemo(() => {
+    const pDays = parseFloat(paidDays || "0");
+    return perDaySalary * pDays;
+  }, [perDaySalary, paidDays]);
+
+  const lwpAmount = useMemo(() => {
+    const lDays = parseFloat(lwpDays || "0");
+    return perDaySalary * lDays;
+  }, [perDaySalary, lwpDays]);
+
+  const otAmount = parseFloat(otHours || "0") * OT_RATE_PER_HOUR;
+
+  const grossPay = useMemo(() => {
+    return proratedSalary + otAmount;
+  }, [proratedSalary, otAmount]);
+
+  // Validation Logic
+  const isAttendanceInvalid = useMemo(() => {
+    const pDays = parseFloat(paidDays || "0");
+    const lDays = parseFloat(lwpDays || "0");
+    return (pDays + lDays) !== periodDays;
+  }, [paidDays, lwpDays, periodDays]);
+
+  const handlePaidDaysChange = (val: string) => {
+    if (val === "") {
+      setPaidDays("");
+      setLwpDays(periodDays.toString());
+      return;
+    }
+    
+    let numPaid = parseFloat(val);
+    if (isNaN(numPaid) || numPaid < 0) return;
+
+    // Boundary check: Paid Days cannot exceed Period Days
+    if (numPaid > periodDays) {
+      numPaid = periodDays;
     }
 
-    if (!lwpDays || isNaN(lwp)) {
-      errors.lwpDays = "LWP Days is required";
-    } else if (lwp < 0) {
-      errors.lwpDays = "LWP Days must be ≥ 0";
-    }
-
-    if (isNaN(ot) || ot < 0) {
-      errors.otHours = "OT Hours must be ≥ 0";
-    }
-
-    // Paid Days + LWP Days <= Period Days
-    if (!isNaN(paid) && !isNaN(lwp) && (paid + lwp) > periodDays) {
-      errors.paidDays = `Paid Days + LWP Days cannot exceed ${periodDays}`;
-    }
-
-    setFormErrors(errors);
-    return Object.keys(errors).length === 0;
+    const calculatedLwp = periodDays - numPaid;
+    
+    setPaidDays(numPaid.toString());
+    setLwpDays(calculatedLwp.toString());
   };
 
-  // ========== CALCULATION LOGIC (PAID DAYS PRORATION - SINGLE SOURCE OF TRUTH) ==========
-
-  /**
-   * ✅ CALCULATION FORMULA (SINGLE SOURCE OF TRUTH):
-   * 
-   * METHOD: Use Paid Days proration ONLY. DO NOT deduct LWP separately as money.
-   * LWP Days is for validation & information only.
-   * 
-   * Inputs:
-   * - monthlyGross = Total Monthly Gross (from structure)
-   * - periodDays = Days in pay period
-   * - paidDays = Manual Entry (used for proration)
-   * - lwpDays = Manual Entry (validation only - NOT deducted as money)
-   * - otHours = Overtime hours
-   * - OT_RATE = USh100/hour
-   * - structureDeductionTotal = Sum of PF + ESI + PT (monthly)
-   * 
-   * Formulas:
-   * 1. factor = paidDays / periodDays (salary proration)
-   * 2. proratedSalary = monthlyGross × factor
-   * 3. otAmount = otHours × OT_RATE
-   * 4. grossPay = proratedSalary + otAmount
-   * 5. netPay = grossPay - structureDeductionTotal
-   * 
-   * Rounding: Round to nearest rupee using Math.round
-   */
-  const handleCalculate = () => {
-    if (!validateForm()) {
-      toast({
-        title: "Validation Error",
-        description: "Please fix the errors before calculating",
-        variant: "destructive",
-      });
-      return;
-    }
-
-    if (!salaryAssignment) {
-      toast({
-        title: "Error",
-        description: "Salary assignment missing",
-        variant: "destructive",
-      });
-      return;
-    }
-
-    // ============================================================================
-    // PARSE INPUT VALUES
-    // ============================================================================
-    const paid = parseFloat(paidDays);
-    const lwp = parseFloat(lwpDays);
-    const ot = parseFloat(otHours);
-
-    // ============================================================================
-    // CALCULATE STRUCTURE DEDUCTION TOTAL
-    // Sum of all monthly deduction amounts from salary structure
-    // ⚠️ SAFE GUARD: Using optional chaining and nullish coalescing to prevent crashes
-    // ============================================================================
-    const structureDeductionTotal = (salaryAssignment?.deductions ?? []).reduce(
-      (sum, deduction) => sum + (deduction?.monthlyAmount ?? 0),
-      0
-    );
-
-    // ============================================================================
-    // STEP 1: Monthly Gross (from structure)
-    // ============================================================================
-    const monthlyGross = salaryAssignment.monthlyCTC;
-    console.log('💰 Monthly Gross:', monthlyGross);
-
-    // ============================================================================
-    // STEP 2: Proration Factor
-    // Formula: paidDays / periodDays
-    // ============================================================================
-    const factor = paid / periodDays;
-    console.log('📊 Proration Factor:', factor, `(${paid} / ${periodDays})`);
-
-    // ============================================================================
-    // STEP 3: Prorated Salary
-    // Formula: monthlyGross × factor
-    // ============================================================================
-    const proratedSalary = Math.round(monthlyGross * factor);
-    console.log('💵 Prorated Salary:', proratedSalary);
-    console.log('   Formula: monthlyGross × factor =', monthlyGross, '×', factor);
-
-    // ============================================================================
-    // STEP 4: OT Amount
-    // Formula: otHours × OT_RATE
-    // ============================================================================
-    const otAmount = Math.round(ot * OT_RATE_PER_HOUR);
-    console.log('⏰ OT Amount:', otAmount);
-
-    // ============================================================================
-    // STEP 5: Gross Pay
-    // Formula: proratedSalary + otAmount
-    // ============================================================================
-    const grossPay = proratedSalary + otAmount;
-    console.log('💰 Gross Pay:', grossPay);
-
-    // ============================================================================
-    // STEP 6: Net Pay
-    // Formula: grossPay - structureDeductionTotal
-    // ⚠️ IMPORTANT: LWP is NOT deducted here - already in proration!
-    // ============================================================================
-    const netPay = grossPay - structureDeductionTotal;
-    console.log('✅ Net Pay:', netPay);
-    console.log('   Structure Deductions:', structureDeductionTotal);
-    console.log('   ⚠️ LWP Days:', lwp, '(info only - already in proration)');
-
-    console.log('📊 Final Summary:');
-    console.log('   Monthly Gross: USh', monthlyGross.toLocaleString());
-    console.log('   Prorated Salary: USh', proratedSalary.toLocaleString());
-    console.log('   OT Amount: USh', otAmount.toLocaleString());
-    console.log('   Gross Pay: USh', grossPay.toLocaleString());
-    console.log('   Structure Deductions: -USh', structureDeductionTotal.toLocaleString());
-    console.log('   Net Pay: USh', netPay.toLocaleString());
-
-    // ============================================================================
-    // CREATE/UPDATE PAYROLL RUN RECORD
-    // ⚠️ SAFE GUARD: Using mock data array instead of localStorage functions
-    // ============================================================================
-    const existingIndex = MOCK_PAYROLL_RUNS.findIndex(r => r.employeeId === employeeId && r.payPeriodId === payPeriodId);
-
-    // ✅ CHANGED: Store proration-based calculation values and components
-    const payrollRun: PayrollRun = {
-      id: existingIndex >= 0 ? MOCK_PAYROLL_RUNS[existingIndex].id : `PR-${Date.now()}`,
-      employeeId,
-      payPeriodId,
-      paidDays: paid,
-      lwpDays: lwp, // Stored for info only
-      otHours: ot,
-      perDaySalary: Math.round(monthlyGross / periodDays), // For reference
-      proratedSalary, // ✅ CHANGED: Now stores prorated salary
-      otAmount,
-      lwpDeduction: 0, // ✅ CHANGED: Set to 0 (not deducted separately)
-      grossPay,
-      totalDeductions: structureDeductionTotal,
-      netPay,
-      status: currentStatus, // ✅ CHANGED: Use current status from dropdown
-      warningMessages: [],
-      calculatedAt: format(new Date(), 'yyyy-MM-dd'),
-      // ✅ ADDED: Capture individual components for Payslip
-      earnings: [
-        ...(salaryAssignment?.earnings ?? []).map(e => ({
-          name: e.name,
-          amount: Math.round(e.monthlyAmount * factor)
-        })),
-        ...(otAmount > 0 ? [{ name: "Overtime", amount: otAmount }] : [])
-      ],
-      deductions: (salaryAssignment?.deductions ?? []).map(d => ({
-        name: d.name,
-        amount: d.monthlyAmount
-      }))
-    };
-
-    if (existingIndex >= 0) {
-      MOCK_PAYROLL_RUNS[existingIndex] = payrollRun;
-    } else {
-      MOCK_PAYROLL_RUNS.push(payrollRun);
-    }
-
-    setInputsChanged(false);
-    setRefreshTrigger(prev => prev + 1);
-
-    toast({
-      title: "Success",
-      description: "Payroll calculated successfully",
-      className: "bg-green-50 border-green-200 text-green-900",
-    });
+  const handleLwpDaysChange = (val: string) => {
+      // Logic removed as field is now read-only and auto-calculated
   };
 
-  // ========== STATUS CHANGE HANDLER ==========
+  const handleOtHoursChange = (val: string) => {
+    if (val === "") { setOtHours(""); return; }
+    if (parseFloat(val) < 0) return;
+    if (val.replace(".", "").length > 3) return;
+    setOtHours(val);
+  };
 
-  /**
-   * ✅ UPDATED: Handle status dropdown changes with validation
-   * Status meanings:
-   * - Draft: editable, not finalized
-   * - Calculated: editable, calculated but not finalized
-   * - Locked: EDITABLE (finalized logically, but HR can still edit if needed)
-   */
-  const handleStatusChange = (newStatus: PayrollStatus) => {
-    // ✅ FIXED: Check if payroll has been calculated (existingRun exists)
-    if (newStatus === "Locked" && !existingRun) {
-      toast({
-        title: "Error",
-        description: "Please calculate payroll before locking.",
-        variant: "destructive",
-      });
-      return;
+  const fixedDeductions = useMemo(() => {
+    return (salaryAssignment?.deductions || []).reduce((sum: number, c: any) => sum + (c.monthly_amount || 0), 0);
+  }, [salaryAssignment]);
+
+  const totalDeductions = useMemo(() => {
+    return lwpAmount + fixedDeductions;
+  }, [lwpAmount, fixedDeductions]);
+
+  const netSalary = useMemo(() => {
+    // Net Pay = Monthly CTC + Overtime - Total Deductions (Fixed + LWP)
+    return (payrollData?.monthly_ctc || 0) + otAmount - totalDeductions;
+  }, [payrollData?.monthly_ctc, otAmount, totalDeductions]);
+
+  const deductionsBreakdown = useMemo(() => {
+    const otherDeductions = (salaryAssignment?.deductions || []).map((c: any) => (c.monthly_amount || 0).toFixed(2));
+    if (otherDeductions.length > 0) {
+      return `(${lwpAmount.toFixed(2)} + ${otherDeductions.join(" + ")})`;
     }
+    return `(${lwpAmount.toFixed(2)})`;
+  }, [lwpAmount, salaryAssignment]);
 
-    // Update status in state
-    setCurrentStatus(newStatus);
+  const handleSave = async (status: string) => {
+    if (updateMutation.isPending) return;
+    try {
+      // Dynamically resolve status ID from entity_values using value_code as requested.
+      // DRAFT UI maps to DRAFT value_code, LOCKED UI maps to LOCKED value_code.
+      const targetCode = status === "Locked" ? "LOCKED" : "DRAFT";
+      const statusRecord = entityValues.find((v: any) => 
+        (v.value_code || v.code || "").toUpperCase() === targetCode
+      );
 
-    // ⚠️ SAFE GUARD: Update mock data array instead of localStorage
-    const existingIndex = MOCK_PAYROLL_RUNS.findIndex(r => r.employeeId === employeeId && r.payPeriodId === payPeriodId);
-
-    if (existingIndex >= 0) {
-      // Update existing run with new status
-      MOCK_PAYROLL_RUNS[existingIndex].status = newStatus;
-      if (newStatus === "Locked") {
-        MOCK_PAYROLL_RUNS[existingIndex].lockedAt = format(new Date(), 'yyyy-MM-dd');
+      if (!statusRecord) {
+        console.warn(`Payroll status code '${targetCode}' not found in entity_values. Using safety fallback.`);
       }
-      setRefreshTrigger(prev => prev + 1);
+
+      const statusId = statusRecord?.id || (status === "Locked" ? 154 : 153);
+
+      const pDays = parseFloat(paidDays || "0") || 0;
+      const lDays = parseFloat(lwpDays || "0") || 0;
+      const oHours = parseFloat(otHours || "0") || 0;
+
+      await updateMutation.mutateAsync({
+        employeeId: parseInt(employeeId),
+        payrollPeriodId: parseInt(payPeriodId),
+        data: {
+          paid_days: pDays,
+          lwp_days: lDays,
+          ot_hours: oHours,
+          prorated_salary: proratedSalary,
+          gross_pay: grossPay,
+          total_deductions: totalDeductions,
+          net_pay: netSalary,
+          payroll_status_id: statusId
+        }
+      });
 
       toast({
         title: "Success",
-        description: newStatus === "Draft"
-          ? "Status changed to Draft"
-          : newStatus === "Locked"
-            ? "Payroll locked successfully. Payslip is now available to employee."
-            : "Status updated",
-        className: "bg-green-50 border-green-200 text-green-900",
+        description: `Payroll ${status === "Locked" ? "finalized" : "saved as draft"} successfully`,
+        variant: "success",
       });
-    } else {
-      // No calculation exists yet
-      if (newStatus === "Draft" || newStatus === "Locked") {
-        toast({
-          title: "Info",
-          description: "Please calculate payroll first",
-        });
-        // Reset status back to Pending
-        setCurrentStatus("Pending");
-      }
-    }
-  };
 
-  // ========== SAVE BUTTON HANDLER (NEW) ==========
-
-  /**
-   * ✅ NEW: Save button logic
-   * - Validates required fields
-   * - Persists data to localStorage
-   * - Navigates back to listing page
-   * - Works in ALL statuses including Locked
-   */
-  const handleSave = () => {
-    // Step 1: Validate required fields
-    if (!validateForm()) {
-      toast({
-        title: "Validation Error",
-        description: "Please fix the errors before saving",
-        variant: "destructive",
-      });
-      return;
-    }
-
-    if (!salaryAssignment) {
+      setRefreshTrigger(prev => prev + 1);
+      setLocation("/hrms/payroll-management/run-payroll");
+    } catch (error) {
       toast({
         title: "Error",
-        description: "Salary assignment missing. Cannot save payroll.",
-        variant: "destructive",
-      });
-      return;
-    }
-
-    // Step 2: Check if calculation exists
-    if (!existingRun) {
-      toast({
-        title: "Error",
-        description: "Please calculate payroll before saving.",
-        variant: "destructive",
-      });
-      return;
-    }
-
-    // Step 3: Persist data
-    // ⚠️ SAFE GUARD: Update mock data array instead of localStorage
-    const existingIndex = MOCK_PAYROLL_RUNS.findIndex(r => r.employeeId === employeeId && r.payPeriodId === payPeriodId);
-
-    if (existingIndex >= 0) {
-      // Update existing run with current values
-      MOCK_PAYROLL_RUNS[existingIndex] = {
-        ...MOCK_PAYROLL_RUNS[existingIndex],
-        paidDays: parseFloat(paidDays),
-        lwpDays: parseFloat(lwpDays),
-        otHours: parseFloat(otHours),
-        status: currentStatus,
-      };
-
-      // Step 4: Show success toast
-      toast({
-        title: "Payroll Saved",
-        description: "Payroll saved successfully",
-        className: "bg-green-50 border-green-200 text-green-900",
-      });
-
-      // Step 5: Navigate back to listing page
-      setTimeout(() => {
-        setLocation("/hrms/payroll-management/run-payroll");
-      }, 500);
-    } else {
-      toast({
-        title: "Error",
-        description: "Payroll run not found. Please calculate first.",
+        description: "Failed to save payroll detail",
         variant: "destructive",
       });
     }
   };
 
-  const handleBackToList = () => {
-    // ✅ Pay period will be auto-restored from localStorage
-    setLocation("/hrms/payroll-management/run-payroll");
-  };
-
-  // ========== RENDER ==========
-
-  if (!employee || !payPeriod) {
+  if (isDetailLoading) {
     return (
-      <div className="space-y-6">
-        <Card>
-          <CardContent className="flex flex-col items-center justify-center py-16">
-            <AlertCircle className="h-12 w-12 text-red-500 mb-4" />
-            <h3 className="text-lg font-semibold mb-2">Invalid Employee or Pay Period</h3>
-            <Button onClick={handleBackToList} className="mt-4">
-              <ArrowLeft className="mr-2 h-4 w-4" />
-              Back to List
-            </Button>
-          </CardContent>
-        </Card>
+      <div className="flex flex-col items-center justify-center py-20 gap-3">
+        <Loader2 className="h-8 w-8 animate-spin text-primary" />
+        <p className="text-sm text-muted-foreground">Loading payroll details...</p>
       </div>
     );
   }
 
+  if (!payrollData) {
+    return <div className="py-20 text-center text-red-500 font-medium">Payroll data not found</div>;
+  }
+
   return (
     <div className="space-y-6">
-      {/* Header */}
-      <div className="flex items-center justify-between">
+      {/* Header Section */}
+      <div className="flex items-start justify-between border-b border-gray-100 pb-3 -mx-6 px-6">
         <div>
-          <h1 className="text-3xl font-bold tracking-tight">Run Payroll</h1>
-          <p className="text-muted-foreground">
-            {employee.name} - {payPeriod.periodName}
+          <h1 className="text-xl font-bold tracking-tight text-[#111827]">Run Payroll</h1>
+          <p className="text-[11px] font-semibold text-[#6b7280] mt-0.5 tracking-normal">
+            {employee?.name} - {payPeriod?.period}
           </p>
         </div>
-        <Button variant="outline" onClick={handleBackToList}>
-          <ArrowLeft className="mr-2 h-4 w-4" />
+        <Button
+          variant="outline"
+          size="sm"
+          disabled={updateMutation.isPending}
+          onClick={() => setLocation("/hrms/payroll-management/run-payroll")}
+          className="h-7 text-[10px] font-bold border-gray-200 text-[#111827] hover:bg-gray-50 bg-white shadow-sm flex items-center gap-1.5 px-2.5 rounded-md mr-10"
+        >
+          <ChevronLeft className="w-3.5 h-3.5 text-gray-400" />
           Back to List
         </Button>
       </div>
 
-      {/* SECTION 1: Employee & Period Summary (Read-only) */}
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base">Employee & Period Summary</CardTitle>
+      {/* Employee & Period Summary Section */}
+      <Card className="shadow-none border border-gray-100 overflow-hidden">
+        <CardHeader className="py-2.5 bg-white border-b border-gray-50">
+          <CardTitle className="text-[14px] font-semibold text-[#111827]">Employee & Period Summary</CardTitle>
         </CardHeader>
-        <CardContent>
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+        <CardContent className="p-4 px-6">
+          <div className="grid grid-cols-4 gap-y-5 gap-x-10">
             <div>
-              <Label className="text-xs text-muted-foreground">Employee Name</Label>
-              <p className="font-semibold">{employee.name}</p>
+              <Label className="text-[11px] text-[#6b7280] font-medium tracking-tight mb-1 block">Employee Name</Label>
+              <div className="text-[13px] font-bold text-[#111827]">{employee?.name}</div>
             </div>
             <div>
-              <Label className="text-xs text-muted-foreground">Employee Code</Label>
-              <p className="font-semibold">{employee.code}</p>
+              <Label className="text-[11px] text-[#6b7280] font-medium tracking-tight mb-1 block">Employee Code</Label>
+              <div className="text-[13px] font-bold text-[#111827]">{employee?.employee_code}</div>
             </div>
             <div>
-              <Label className="text-xs text-muted-foreground">Pay Period</Label>
-              <p className="font-semibold">{payPeriod.periodName}</p>
+              <Label className="text-[11px] text-[#6b7280] font-medium tracking-tight mb-1 block">Pay Period</Label>
+              <div className="text-[13px] font-bold text-[#111827]">{payPeriod?.period}</div>
             </div>
             <div>
-              <Label className="text-xs text-muted-foreground">Department / Plant</Label>
-              <p className="font-semibold">{employee.department}</p>
+              <Label className="text-[11px] text-[#6b7280] font-medium tracking-tight mb-1 block">Department / Plant</Label>
+              <div className="text-[13px] font-bold text-[#111827]">{employee?.department}</div>
             </div>
             <div>
-              <Label className="text-xs text-muted-foreground">Salary Structure Name</Label>
-              <p className="font-semibold">
-                {salaryAssignment ? salaryAssignment.structureName : (
-                  <span className="text-red-500">Not Assigned</span>
-                )}
-              </p>
+              <Label className="text-[11px] text-[#6b7280] font-medium tracking-tight mb-1 block">Salary Structure Name</Label>
+              <div className="text-[13px] font-bold text-[#111827]">{salaryAssignment?.structure_name}</div>
             </div>
             <div>
-              <Label className="text-xs text-muted-foreground">Monthly Gross / CTC</Label>
-              <p className="font-semibold">
-                {salaryAssignment ? `USh${salaryAssignment.monthlyCTC.toLocaleString()}` : "-"}
-              </p>
+              <Label className="text-[11px] text-[#6b7280] font-medium tracking-tight mb-1 block">Monthly Gross / CTC</Label>
+              <div className="text-[13px] font-bold text-[#111827]">{CURRENCY_SYMBOL}{payrollData?.monthly_ctc?.toFixed(2)}</div>
             </div>
             <div>
-              <Label className="text-xs text-muted-foreground">Period Days</Label>
-              <p className="font-semibold">{periodDays} days</p>
+              <Label className="text-[11px] text-[#6b7280] font-medium tracking-tight mb-1 block">Period Days</Label>
+              <div className="text-[13px] font-bold text-[#111827]">{periodDays} days</div>
             </div>
             <div>
-              <Label className="text-xs text-muted-foreground">Status</Label>
-              <div className="mt-1">
-                {existingRun ? (
-                  <Badge variant="outline" className={cn(
-                    existingRun.status === "Warning" && "bg-red-100 text-red-700 border-red-200",
-                    existingRun.status === "Pending" && "bg-gray-100 text-gray-700 border-gray-200",
-                    existingRun.status === "Draft" && "bg-blue-100 text-blue-700 border-blue-200",
-                    existingRun.status === "Locked" && "bg-green-100 text-green-700 border-green-200"
-                  )}>
-                    {existingRun.status}
-                  </Badge>
-                ) : (
-                  <Badge variant="outline" className="bg-gray-100 text-gray-700 border-gray-200">
-                    Pending
-                  </Badge>
-                )}
-              </div>
+              <Label className="text-[11px] text-[#6b7280] font-medium tracking-tight mb-1 block">Status</Label>
+              <div>{getStatusBadge(currentStatus)}</div>
             </div>
           </div>
         </CardContent>
       </Card>
 
-      {/* SECTION 2: Salary Structure Preview (Read-only) - NEW */}
-      {salaryAssignment && (
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-base">Monthly Salary Structure</CardTitle>
-          </CardHeader>
-          <CardContent>
+      {/* Monthly Salary Structure Section */}
+      <Card className="shadow-none border border-gray-100">
+        <CardHeader className="py-2.5 bg-white border-b border-gray-50">
+          <CardTitle className="text-[14px] font-semibold text-[#111827]">Monthly Salary Structure</CardTitle>
+        </CardHeader>
+        <CardContent className="p-0">
+          <div className="space-y-0">
             {/* Earnings Table */}
-            {salaryAssignment.earnings.length > 0 && (
-              <div className="mb-6">
-                <h4 className="font-semibold mb-3 text-sm">Earnings</h4>
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead>Component Name</TableHead>
-                      <TableHead>Rule Type</TableHead>
-                      <TableHead className="text-right">Monthly Amount</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {/* ⚠️ SAFE GUARD: Using optional chaining and nullish coalescing to prevent crashes */}
-                    {(salaryAssignment?.earnings ?? []).map((comp) => (
-                      <TableRow key={comp?.code ?? Math.random()}>
-                        <TableCell className="font-medium">{comp?.name ?? '-'}</TableCell>
-                        <TableCell>
-                          <Badge variant="outline" className="bg-blue-50 text-blue-700 border-blue-200">
-                            {comp?.ruleType ?? '-'}
-                          </Badge>
-                        </TableCell>
-                        <TableCell className="text-right font-semibold">
-                          USh{(comp?.monthlyAmount ?? 0).toLocaleString()}
-                        </TableCell>
-                      </TableRow>
-                    ))}
-                    <TableRow className="bg-blue-50 font-semibold">
-                      <TableCell colSpan={2}>Total Monthly Gross</TableCell>
-                      <TableCell className="text-right">
-                        USh{salaryAssignment.monthlyCTC.toLocaleString()}
-                      </TableCell>
-                    </TableRow>
-                  </TableBody>
-                </Table>
-              </div>
-            )}
+            <div className="px-6 py-2.5 text-[13px] font-bold text-[#111827] tracking-tight bg-gray-50/10">Earnings</div>
+            <Table className="border-collapse">
+              <TableHeader className="bg-white border-b border-gray-100">
+                <TableRow className="hover:bg-transparent border-b">
+                  <TableHead className="h-8 px-6 text-[11px] font-medium text-[#6b7280] w-[45%]">Component Name</TableHead>
+                  <TableHead className="h-8 text-[11px] font-medium text-center text-[#6b7280] w-[25%]">Rule Type</TableHead>
+                  <TableHead className="h-8 px-6 text-[11px] font-medium text-right text-[#6b7280] w-[30%]">Monthly Amount</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {salaryAssignment?.earnings?.map((comp: any, idx: number) => (
+                  <TableRow
+                    key={`${comp.component_name}-${idx}`}
+                    className="h-8 hover:bg-gray-50/30 border-b border-[#e5e7eb]"
+                  >
+                    <TableCell className="py-1 px-6 text-[12px] font-semibold text-[#111827] w-[45%]">{comp.component_name}</TableCell>
+                    <TableCell className="py-1 text-center w-[25%]">
+                      <Badge variant="secondary" className="text-[10px] px-1.5 py-0 font-bold text-[#2563eb] bg-[#e6f0ff] rounded-md hover:bg-[#e6f0ff] border-none">
+                        {comp.rule_type || "Fixed"}
+                      </Badge>
+                    </TableCell>
+                    <TableCell className="py-1 px-6 text-right text-[12px] font-bold text-[#111827] w-[30%]">{CURRENCY_SYMBOL}{comp.monthly_amount?.toFixed(2)}</TableCell>
+                  </TableRow>
+                ))}
+                <TableRow className="bg-[#e6edf5] font-bold border-t border-gray-200 h-9">
+                  <TableCell className="py-1.5 px-6 text-[12px] text-[#111827] w-[45%]">Total Monthly Gross</TableCell>
+                  <TableCell className="w-[25%]" />
+                  <TableCell className="py-1.5 px-6 text-right text-[13px] text-[#111827] font-bold w-[30%]">{CURRENCY_SYMBOL}{payrollData?.total_monthly_gross?.toFixed(2)}</TableCell>
+                </TableRow>
+              </TableBody>
+            </Table>
 
             {/* Deductions Table */}
-            {salaryAssignment.deductions.length > 0 && (
-              <div>
-                <h4 className="font-semibold mb-3 text-sm">Deductions</h4>
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead>Component Name</TableHead>
-                      <TableHead>Rule Type</TableHead>
-                      <TableHead className="text-right">Monthly Amount</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {/* ⚠️ SAFE GUARD: Using optional chaining and nullish coalescing to prevent crashes */}
-                    {(salaryAssignment?.deductions ?? []).map((comp) => (
-                      <TableRow key={comp?.code ?? Math.random()}>
-                        <TableCell className="font-medium">{comp?.name ?? '-'}</TableCell>
-                        <TableCell>
-                          <Badge variant="outline" className="bg-red-50 text-red-700 border-red-200">
-                            {comp?.ruleType ?? '-'}
-                          </Badge>
-                        </TableCell>
-                        <TableCell className="text-right font-semibold">
-                          USh{(comp?.monthlyAmount ?? 0).toLocaleString()}
-                        </TableCell>
-                      </TableRow>
-                    ))}
-                    {/* ✅ ADDED: Total Monthly Deductions Row */}
-                    <TableRow className="bg-red-50 font-semibold border-t-2 border-red-200">
-                      <TableCell colSpan={2}>Total Monthly Deductions</TableCell>
-                      <TableCell className="text-right">
-                        USh{salaryAssignment.deductions.reduce((sum, d) => sum + d.monthlyAmount, 0).toLocaleString()}
-                      </TableCell>
-                    </TableRow>
-                  </TableBody>
-                </Table>
-              </div>
-            )}
-
-            {salaryAssignment.deductions.length === 0 && (
-              <p className="text-sm text-muted-foreground">No deductions in structure</p>
-            )}
-          </CardContent>
-        </Card>
-      )}
-
-      {/* Validation Banner (if salary assignment missing) */}
-      {hasMissingAssignment && (
-        <div className="p-4 rounded-md bg-red-50 border border-red-200 flex items-start gap-3">
-          <AlertCircle className="h-5 w-5 text-red-600 mt-0.5" />
-          <div>
-            <h4 className="font-semibold text-red-900">Salary assignment missing</h4>
-            <p className="text-sm text-red-700 mt-1">
-              Please assign salary before running payroll.
-            </p>
+            <div className="px-6 py-2.5 text-[13px] font-bold text-[#111827] tracking-tight border-t border-gray-100 bg-gray-50/10">Deductions</div>
+            <Table className="border-collapse">
+              <TableHeader className="bg-white border-b border-gray-100">
+                <TableRow className="hover:bg-transparent border-b">
+                  <TableHead className="h-8 px-6 text-[11px] font-medium text-[#6b7280] w-[45%]">Component Name</TableHead>
+                  <TableHead className="h-8 text-[11px] font-medium text-center text-[#6b7280] w-[25%]">Rule Type</TableHead>
+                  <TableHead className="h-8 px-6 text-[11px] font-medium text-right text-[#6b7280] w-[30%]">Monthly Amount</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {salaryAssignment?.deductions?.map((comp: any, idx: number) => (
+                  <TableRow
+                    key={`${comp.component_name}-${idx}`}
+                    className="h-8 hover:bg-gray-50/30 border-b border-[#e5e7eb]"
+                  >
+                    <TableCell className="py-1 px-6 text-[12px] font-semibold text-[#111827] w-[45%]">{comp.component_name}</TableCell>
+                    <TableCell className="py-1 text-center w-[25%]">
+                      <Badge variant="secondary" className="text-[10px] px-1.5 py-0 font-bold text-[#dc2626] bg-[#fde8e8] rounded-md hover:bg-[#fde8e8] border-none">
+                        {comp.rule_type || "Fixed"}
+                      </Badge>
+                    </TableCell>
+                    <TableCell className="py-1 px-6 text-right text-[12px] font-bold text-[#111827] w-[30%]">{CURRENCY_SYMBOL}{comp.monthly_amount?.toFixed(2)}</TableCell>
+                  </TableRow>
+                ))}
+                <TableRow className="bg-[#f6e6e6] font-bold border-t border-gray-200 h-9">
+                  <TableCell className="py-1.5 px-6 text-[12px] text-[#111827] w-[45%]">Total Monthly Deductions</TableCell>
+                  <TableCell className="w-[25%]" />
+                  <TableCell className="py-1.5 px-6 text-right text-[13px] text-[#111827] font-bold w-[30%]">{CURRENCY_SYMBOL}{payrollData?.total_monthly_deductions?.toFixed(2)}</TableCell>
+                </TableRow>
+              </TableBody>
+            </Table>
           </div>
-        </div>
-      )}
+        </CardContent>
+      </Card>
 
-      {/* SECTION 3: Manual Entry Section (SIMPLIFIED) */}
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base">Attendance & OT</CardTitle>
+      {/* Attendance & OT Section */}
+      <Card className="shadow-none border border-gray-100">
+        <CardHeader className="py-2.5 bg-white border-b border-gray-50">
+          <CardTitle className="text-[14px] font-semibold text-[#111827]">Attendance & OT</CardTitle>
         </CardHeader>
-        <CardContent>
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-            {/* Paid Days */}
-            <div className="space-y-2">
-              <Label>
-                Paid Days <span className="text-red-500">*</span>
+        <CardContent className="p-4 px-6 pt-6">
+          <div className="grid grid-cols-3 gap-10">
+            <div className="space-y-1.5">
+              <Label className="text-[11px] text-[#6b7280] font-medium tracking-tight">
+                Paid Days <span className="text-red-500 ml-0.5">*</span>
               </Label>
               <Input
                 type="number"
-                min="0"
-                step="0.5"
                 value={paidDays}
-                onChange={(e) => {
-                  setPaidDays(e.target.value);
-                  if (existingRun && existingRun.status === "Draft") setInputsChanged(true);
-                }}
-                disabled={isLocked}
-                className={formErrors.paidDays ? "border-red-500" : ""}
+                onChange={(e) => handlePaidDaysChange(e.target.value)}
+                className={cn(
+                  "h-9 text-[13px] font-semibold border-[#e5e7eb] bg-gray-50/10 focus:bg-white focus:border-blue-400 focus:ring-1 focus:ring-blue-400/20 transition-all rounded-md px-3 text-gray-700",
+                  isAttendanceInvalid && "border-red-500 focus:border-red-500 focus:ring-red-500/20"
+                )}
+                placeholder="0"
               />
-              {formErrors.paidDays && (
-                <p className="text-xs text-red-500">{formErrors.paidDays}</p>
-              )}
             </div>
-
-            {/* LWP Days */}
-            <div className="space-y-2">
-              <Label>
-                LWP Days <span className="text-red-500">*</span>
+            <div className="space-y-1.5">
+              <Label className="text-[11px] text-[#6b7280] font-medium tracking-tight">
+                LWP Days <span className="text-red-500 ml-0.5">*</span>
               </Label>
               <Input
                 type="number"
-                min="0"
-                step="0.5"
                 value={lwpDays}
-                onChange={(e) => {
-                  setLwpDays(e.target.value);
-                  if (existingRun && existingRun.status === "Draft") setInputsChanged(true);
-                }}
-                disabled={isLocked}
-                className={formErrors.lwpDays ? "border-red-500" : ""}
+                readOnly
+                className={cn(
+                  "h-9 text-[13px] font-semibold border-[#e5e7eb] bg-muted/30 transition-all rounded-md px-3 text-gray-500 cursor-not-allowed",
+                  isAttendanceInvalid && "border-red-500"
+                )}
+                placeholder="0"
               />
-              {formErrors.lwpDays && (
-                <p className="text-xs text-red-500">{formErrors.lwpDays}</p>
-              )}
-              {!formErrors.lwpDays && (
-                <p className="text-xs text-muted-foreground">For validation only (not deducted separately)</p>
-              )}
             </div>
-
-            {/* OT Hours */}
-            <div className="space-y-2">
-              <Label>OT Hours</Label>
+            <div className="space-y-1.5">
+              <Label className="text-[11px] text-[#6b7280] font-medium tracking-tight">OT Hours</Label>
               <Input
                 type="number"
-                min="0"
-                step="0.5"
                 value={otHours}
-                onChange={(e) => {
-                  setOtHours(e.target.value);
-                  if (existingRun && existingRun.status === "Draft") setInputsChanged(true);
-                }}
-                disabled={isLocked}
-                className={formErrors.otHours ? "border-red-500" : ""}
+                onChange={(e) => handleOtHoursChange(e.target.value)}
+                className="h-9 text-[13px] font-semibold border-[#e5e7eb] bg-gray-50/10 focus:bg-white focus:border-blue-400 focus:ring-1 focus:ring-blue-400/20 transition-all rounded-md px-3 text-gray-700"
+                placeholder="0"
               />
-              {formErrors.otHours && (
-                <p className="text-xs text-red-500">{formErrors.otHours}</p>
-              )}
-              <p className="text-xs text-muted-foreground">Rate: USh{OT_RATE_PER_HOUR}/hour</p>
+              <p className="text-[10px] text-[#6b7280] mt-1 opacity-70">Rate: {CURRENCY_SYMBOL}{OT_RATE_PER_HOUR}/hour</p>
+            </div>
+          </div>
+          {isAttendanceInvalid && (
+            <p className={cn(
+              "text-[11px] mt-4 font-semibold px-1 flex items-center gap-1.5",
+              (parseFloat(paidDays || "0") + parseFloat(lwpDays || "0")) > periodDays ? "text-red-500" : "text-amber-600"
+            )}>
+              <AlertCircle className="w-3.5 h-3.5" />
+              {(parseFloat(paidDays || "0") + parseFloat(lwpDays || "0")) > periodDays 
+                ? `Total of Paid Days and LWP Days cannot exceed Period Days (${periodDays} Days)`
+                : `Total accounted days (${parseFloat(paidDays || "0") + parseFloat(lwpDays || "0")}) are less than period days (${periodDays}). Please account for all days.`
+              }
+            </p>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* Calculation Summary Section */}
+      <Card className="shadow-none border border-gray-100">
+        <CardHeader className="py-2.5 bg-white border-b border-gray-50">
+          <CardTitle className="text-[14px] font-semibold text-[#111827]">Calculation Summary</CardTitle>
+        </CardHeader>
+        <CardContent className="p-0">
+          <div className="divide-y divide-gray-100">
+            <div className="flex justify-between items-center px-6 py-2.5">
+              <div>
+                <Label className="text-[13px] font-semibold text-[#111827]">Prorated Salary</Label>
+                <p className="text-[10px] text-[#6b7280]">Monthly Salary x ({paidDays} Paid Days / {periodDays} Period Days)</p>
+              </div>
+              <div className="text-[14px] font-bold text-[#111827] text-right">
+                <div>{CURRENCY_SYMBOL}{proratedSalary?.toFixed(2)}</div>
+                <p className="text-[11px] text-[#6b7280] font-normal">({proratedSalary.toFixed(2)})</p>
+              </div>
+            </div>
+            <div className="flex justify-between items-center px-6 py-2.5">
+              <div>
+                <Label className="text-[13px] font-semibold text-[#111827]">Gross Pay</Label>
+                <p className="text-[10px] text-[#6b7280]">Prorated Salary + OT</p>
+              </div>
+              <div className="text-[14px] font-bold text-[#111827] text-right">
+                <div>{CURRENCY_SYMBOL}{grossPay?.toFixed(2)}</div>
+                <p className="text-[11px] text-[#6b7280] font-normal">({proratedSalary.toFixed(2)} + {otAmount.toFixed(2)})</p>
+              </div>
+            </div>
+            <div className="flex justify-between items-center px-6 py-2.5">
+              <div>
+                <Label className="text-[13px] font-semibold text-[#111827]">Salary Structure Deductions (Total)</Label>
+                <p className="text-[10px] text-[#6b7280]">Total Monthly Deductions + LWP</p>
+              </div>
+              <div className="text-[14px] font-bold text-red-600 text-right">
+                <div>-{CURRENCY_SYMBOL}{totalDeductions?.toFixed(2)}</div>
+                <p className="text-[11px] text-[#6b7280] font-normal">{deductionsBreakdown}</p>
+              </div>
+            </div>
+            <div className={cn(
+              "flex justify-between items-center px-6 py-3 rounded-b-[6px]",
+              netSalary < 0 ? "bg-red-50" : "bg-[#eaf7ef]"
+            )}>
+              <div>
+                <Label className={cn(
+                  "text-[14px] font-bold",
+                  netSalary < 0 ? "text-red-700" : "text-green-700"
+                )}>Net Pay</Label>
+                <p className={cn(
+                  "text-[10px] font-medium",
+                  netSalary < 0 ? "text-red-600/70" : "text-green-600/70"
+                )}>(Monthly Gross / CTC + OT) - Total Deductions</p>
+              </div>
+              <div className={cn(
+                "text-[18px] font-black",
+                netSalary < 0 ? "text-red-700" : "text-green-700"
+              )}>
+                {CURRENCY_SYMBOL}{netSalary?.toFixed(2)}
+              </div>
             </div>
           </div>
         </CardContent>
       </Card>
 
-      {/* ✅ UPDATED: CALCULATION SUMMARY TABLE (Shows after Calculate is clicked) */}
-      {/* SECTION 5: Calculation Summary (Clean Table Format) */}
-      {existingRun && (
-        <div className="space-y-4">
-          {/* Inputs Changed Warning */}
-          {inputsChanged && (
-            <div className="p-3 rounded-md bg-amber-50 border border-amber-200 flex items-center gap-2">
-              <AlertCircle className="h-4 w-4 text-amber-600" />
-              <span className="text-sm text-amber-800">
-                Inputs changed. Click Calculate to refresh summary.
-              </span>
-            </div>
-          )}
-
-          {/* Calculation Summary Table */}
-          <Card>
-            <CardHeader>
-              <CardTitle className="text-base">Calculation Summary</CardTitle>
-            </CardHeader>
-            <CardContent>
-              <Table>
-                <TableBody>
-                  {/* Prorated Salary */}
-                  <TableRow>
-                    <TableCell>
-                      <div>
-                        <p className="font-medium">Prorated Salary</p>
-                        <p className="text-xs text-muted-foreground">
-                          Monthly Salary × ({existingRun.paidDays} Paid Days / {periodDays} Period Days)
-                        </p>
-                      </div>
-                    </TableCell>
-                    <TableCell className="text-right font-semibold">
-                      USh{(existingRun.proratedSalary || 0).toLocaleString()}
-                    </TableCell>
-                  </TableRow>
-
-
-                  {/* Gross Pay */}
-                  <TableRow>
-                    <TableCell>
-                      <div>
-                        <p className="font-medium">Gross Pay</p>
-                        <p className="text-xs text-muted-foreground">Prorated Salary + OT</p>
-                      </div>
-                    </TableCell>
-                    <TableCell className="text-right font-semibold">
-                      USh{(existingRun.grossPay || 0).toLocaleString()}
-                    </TableCell>
-                  </TableRow>
-
-                  {/* Salary Structure Deductions (Total) */}
-                  {existingRun.totalDeductions > 0 && (
-                    <TableRow>
-                      <TableCell>
-                        <div>
-                          <p className="font-medium">Salary Structure Deductions (Total)</p>
-                          <p className="text-xs text-muted-foreground">
-                            PF + ESI + PT
-                          </p>
-                        </div>
-                      </TableCell>
-                      <TableCell className="text-right font-semibold text-red-600">
-                        -USh{(existingRun.totalDeductions || 0).toLocaleString()}
-                      </TableCell>
-                    </TableRow>
-                  )}
-
-
-
-                  {/* Net Pay (Highlighted) */}
-                  <TableRow className="bg-green-50 border-t-2 border-green-200">
-                    <TableCell>
-                      <div>
-                        <p className="font-semibold text-green-900">Net Pay</p>
-                        <p className="text-xs text-green-700">
-                          Gross Pay − Structure Deductions
-                        </p>
-                      </div>
-                    </TableCell>
-                    <TableCell className="text-right font-bold text-green-900 text-lg">
-                      USh{(existingRun.netPay || 0).toLocaleString()}
-                    </TableCell>
-                  </TableRow>
-                </TableBody>
-              </Table>
-            </CardContent>
-          </Card>
+      {/* Footer Controls */}
+      <div className="flex items-center justify-end gap-3 pt-6 border-t border-gray-100 mt-6 pb-2">
+        <div className="flex items-center gap-2 mr-2">
+          <span className="text-[11px] font-medium text-gray-500">Status:</span>
+          <Select value={currentStatus} onValueChange={setCurrentStatus} disabled={updateMutation.isPending}>
+            <SelectTrigger className="h-8 w-[100px] text-[11px] font-semibold border-gray-200 bg-white ring-offset-0 focus:ring-1 focus:ring-blue-500 shadow-none">
+              <SelectValue placeholder="Select Status" />
+            </SelectTrigger>
+            <SelectContent className="border-gray-100 shadow-xl min-w-[120px]">
+              {/* Dynamic styling: Using enterprise theme accent color (#FFB800) for check background 
+                  to maintain consistency with the main list's filter dropdowns. */}
+              <SelectItem value="Draft" className="text-[11px] font-bold py-1.5 data-[state=checked]:bg-accent data-[state=checked]:text-accent-foreground focus:bg-accent focus:text-accent-foreground">Draft</SelectItem>
+              <SelectItem value="Locked" className="text-[11px] font-bold py-1.5 data-[state=checked]:bg-accent data-[state=checked]:text-accent-foreground focus:bg-accent focus:text-accent-foreground">Locked</SelectItem>
+            </SelectContent>
+          </Select>
         </div>
-      )}
 
-      {/* ✅ UPDATED: Sticky Action Bar at Bottom */}
-      <div className="sticky bottom-0 bg-white border-t shadow-lg p-4 -mx-6 -mb-6 mt-8">
-        <div className="flex justify-end items-center gap-3">
-          {/* Status Dropdown */}
-          <div className="flex items-center gap-2">
-            <Label className="text-sm font-medium">Status:</Label>
-            <Select
-              value={currentStatus}
-              onValueChange={(value) => handleStatusChange(value as PayrollStatus)}
-            >
-              <SelectTrigger className="w-[140px]">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="Pending">Pending</SelectItem>
-                <SelectItem value="Draft">Draft</SelectItem>
-                <SelectItem value="Locked">Locked</SelectItem>
-              </SelectContent>
-            </Select>
-          </div>
 
-          {/* Calculate Button */}
-          <Button
-            onClick={handleCalculate}
-            disabled={hasMissingAssignment}
-            variant="outline"
-            className="gap-2"
-          >
-            <Calculator className="h-4 w-4" />
-            Calculate
-          </Button>
 
-          {/* Save Button */}
-          <Button
-            onClick={handleSave}
-            disabled={hasMissingAssignment || !existingRun || inputsChanged}
-            className="gap-2"
-          >
-            Save
-          </Button>
-        </div>
+        <Button
+          onClick={() => handleSave(currentStatus)}
+          loading={updateMutation.isPending}
+          className="h-8 px-8 bg-[#2266dd] hover:bg-[#1155cc] disabled:bg-gray-300 disabled:text-gray-500 disabled:cursor-not-allowed text-white font-bold text-[12px] rounded-md shadow-sm transition-all active:scale-95"
+          disabled={updateMutation.isPending || !employee || isAttendanceInvalid || netSalary < 0}
+        >
+          Save
+        </Button>
       </div>
     </div>
   );
 }
-

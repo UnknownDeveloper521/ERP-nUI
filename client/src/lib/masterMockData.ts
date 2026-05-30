@@ -197,6 +197,7 @@ export interface BaseMasterItem {
     updated_at?: string;
     updated_by?: string;
     country?: string;
+    country_id?: number;
     state?: string;
     city_name?: string;
 }

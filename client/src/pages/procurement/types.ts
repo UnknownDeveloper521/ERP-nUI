@@ -27,7 +27,7 @@ export interface PurchaseOrder {
 
 export type MRStatus = 'Draft' | 'Submitted' | 'Approved' | 'Processing' | 'Partially Fulfilled' | 'Fulfilled' | 'Closed' | 'Cancelled' | 'Rejected';
 export type MRPriority = 'Normal' | 'Urgent';
-export type Department = 'Production' | 'Maintenance' | 'Stores' | 'Admin' | 'Quality';
+export type Department = 'Production' | 'Maintenance' | 'Stores' | 'Admin' | 'Quality' | 'Operations' | 'Facilities' | 'Engineering' | 'IT Department' | 'Warehouse' | 'R&D Lab' | 'Manufacturing';
 export type SuggestedAction = 'Issue from Stock' | 'Purchase Required';
 
 export type MRRole = 'Requester' | 'Department Head' | 'Procurement' | 'Stores' | 'Admin';
@@ -50,7 +50,7 @@ export interface MRItem {
     issuedQty?: number;
     orderedQty?: number;
     pendingQty?: number; // Computed: quantity - (issuedQty + orderedQty)
-    lineStatus?: 'Pending' | 'Issued' | 'Ordered' | 'Fulfilled';
+    lineStatus?: 'Pending' | 'Issued' | 'Ordered' | 'Fulfilled' | 'Partial' | 'Completed';
 }
 
 export interface MaterialRequisition {
@@ -84,7 +84,7 @@ export interface MaterialRequisition {
     returnReason?: string; // ADDED: Reason for returning MR
     approvalRemarks?: string; // ADDED: Remarks from approver
     lastUpdated?: string; // ADDED: Last update timestamp for approval tracking
-    procurementStatus?: "Not Started" | "Processing" | "Waiting Vendor" | "PO Created";
+    procurementStatus?: "Not Started" | "Processing" | "Waiting Vendor" | "PO Created" | "In Progress" | "Completed";
     assignedBuyer?: string;
     internalNotes?: string;
     
@@ -225,7 +225,7 @@ export interface FulfillmentTrackerDetail {
 // Read-only. No edits, no create, view-only.
 
 export type MRHistoryStatus = 'FULFILLED' | 'CLOSED' | 'REJECTED' | 'CANCELLED';
-export type MRHistoryLineStatus = 'COMPLETED' | 'NOT_COMPLETED';
+export type MRHistoryLineStatus = 'COMPLETED' | 'NOT_COMPLETED' | 'Completed';
 
 export interface MRAuditEvent {
     label: string;

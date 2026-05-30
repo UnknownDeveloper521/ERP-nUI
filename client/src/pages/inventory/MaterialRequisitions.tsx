@@ -5,7 +5,9 @@
 // ============================================================================
 
 import React, { useState } from "react";
+import { useCommonStore } from "@/store/commonStore";
 import { format, parse } from "date-fns";
+import { inventoryApi } from "@/lib/api";
 import { Card, CardContent } from "@/components/ui/card";
 import {
     Search,
@@ -14,6 +16,9 @@ import {
     ChevronRight,
     ChevronDown,
     Calendar as CalendarIcon,
+    Pencil,
+    Edit,
+    Eye,
 } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
@@ -51,6 +56,8 @@ import {
     PopoverTrigger,
 } from "@/components/ui/popover";
 import { useToast } from "@/hooks/use-toast";
+import { useHasPermission } from "@/hooks/usePermissions";
+import Unauthorized from "../Unauthorized";
 import { cn } from "@/lib/utils";
 import { AppListToolbar } from "@/components/shared/AppListToolbar";
 import { SearchableSelect } from "@/components/shared/SearchableSelect";
@@ -76,17 +83,19 @@ const mockDepartments = ["Production", "Maintenance", "Quality", "Operations"];
  * @param status - The SMR status
  * @returns Badge component with appropriate styling
  */
-const getStatusBadge = (status: SMRStatus) => {
-    switch (status) {
-        case "Requested Req.":
-            return <Badge className="bg-blue-500 hover:bg-blue-600">Requested Req.</Badge>;
-        case "Issued Req. by WH":
-            return <Badge className="bg-orange-500 hover:bg-orange-600">Issued Req. by WH</Badge>;
-        case "Received Req. by SC":
-            return <Badge className="bg-green-500 hover:bg-green-600">Received Req. by SC</Badge>;
-        default:
-            return <Badge variant="outline">{status}</Badge>;
+const getStatusBadge = (statusStr: string) => {
+    const status = (statusStr || "").toLowerCase();
+    
+    if (status.includes("requested")) {
+        return <Badge className="bg-blue-600 hover:bg-blue-700 text-white border-none px-3 font-bold">Requested Req.</Badge>;
     }
+    if (status.includes("issued")) {
+        return <Badge className="bg-orange-600 hover:bg-orange-700 text-white border-none px-3 font-bold">Issued Req. by WH</Badge>;
+    }
+    if (status.includes("received")) {
+        return <Badge className="bg-green-600 hover:bg-green-700 text-white border-none px-3 font-bold">Received Req. by SC</Badge>;
+    }
+    return <Badge variant="outline" className="font-bold">{statusStr}</Badge>;
 };
 
 
@@ -99,21 +108,30 @@ const getStatusBadge = (status: SMRStatus) => {
  * Inventory SMR Requests Component
  * Displays and manages Service Material Requests in the Inventory module
  */
+
+const INVENTORY_SMR_MODULE = "Inventory:Material Requisitions";
+
 export default function InventorySMRRequests() {
     const { toast } = useToast();
+    const { isMenuVisible, canView, canEdit } = useHasPermission();
+    const hasModuleAccess = isMenuVisible(INVENTORY_SMR_MODULE);
 
     // ========================================================================
     // STATE MANAGEMENT
     // ========================================================================
 
-    // State for listing - sync with shared data on mount
+    const smrStatuses = useCommonStore(state => state.smrStatuses);
     const [smrRequests, setSmrRequests] = useState<SMRRequest[]>([]);
     const [searchTerm, setSearchTerm] = useState("");
-    // Default filter status: "Requested Req." - shows only requests that need to be issued
-    const [filterStatus, setFilterStatus] = useState<string>("Requested Req.");
+    
+    // Default filter status: "Requested Req." or similar from store
+    const [filterStatus, setFilterStatus] = useState<string>("all");
     const [dateFilter, setDateFilter] = useState<Date | undefined>(undefined);
     const [currentPage, setCurrentPage] = useState(1);
     const [itemsPerPage, setItemsPerPage] = useState(10);
+    const [totalRecords, setTotalRecords] = useState(0);
+    const [isListLoading, setIsListLoading] = useState(false);
+    const [actionLoading, setActionLoading] = useState<"view" | "edit" | "issue" | null>(null);
 
     // QR Scanning state: Map of ItemID -> Array of SerialNumbers
     const [scannedSerialsPerItem, setScannedSerialsPerItem] = useState<Record<string | number, string[]>>({});
@@ -123,37 +141,192 @@ export default function InventorySMRRequests() {
     // Modal states
     const [isViewModalOpen, setIsViewModalOpen] = useState(false);
     const [viewingRequest, setViewingRequest] = useState<SMRRequest | null>(null);
+    const [isReadOnly, setIsReadOnly] = useState(true);
+    const [scanError, setScanError] = useState<string | null>(null);
+    const [hasSetDefault, setHasSetDefault] = useState(false);
 
-    // Sync with shared data on component mount
+    // Fetch SMR requests from API
+    const fetchSMRRequests = async (page: number) => {
+        try {
+            setIsListLoading(true);
+            const params = {
+                page,
+                limit: itemsPerPage,
+                text_search: searchTerm,
+                date: dateFilter ? format(dateFilter, "yyyy-MM-dd") : undefined,
+                status: filterStatus === "all" ? undefined : filterStatus
+            };
+
+            const response = await inventoryApi.getInventorySMRList(params);
+            if (response.isSuccessful && response.data) {
+                // Map API records to SMRRequest interface
+                const mappedData: SMRRequest[] = response.data.records
+                    .filter((rec: any) => !(rec.status_name || "").toLowerCase().includes("draft"))
+                    .map((rec: any) => ({
+                        id: rec.id,
+                        smrNo: rec.requisition_code,
+                        smrRequestDate: format(parse(rec.request_date, "yyyy-MM-dd", new Date()), "dd-MM-yyyy"),
+                        location: rec.location_name || "",
+                        workCenter: rec.workcenter_name || "",
+                        department: rec.department_name || "",
+                        status: rec.status_name,
+                        items: [] // Items will be fetched by ID when editing/viewing
+                    }));
+
+                setSmrRequests(mappedData);
+                setTotalRecords(response.data.pagination["total records"] || response.data.pagination.total_records || 0);
+            }
+        } catch (error) {
+            console.error("Error fetching inventory SMR list:", error);
+            toast({ variant: "destructive", title: "Error", description: "Failed to load requisitions." });
+        } finally {
+            setIsListLoading(false);
+        }
+    };
+
+    // Consolidated fetch effect with debounce
     React.useEffect(() => {
-        setSmrRequests([...mockSMRRequests]);
-    }, []);
+        const timer = setTimeout(() => {
+            fetchSMRRequests(currentPage);
+        }, 500);
+        return () => clearTimeout(timer);
+    }, [currentPage, itemsPerPage, filterStatus, dateFilter, searchTerm]);
+
+    // Set default filter status to "Requested Req." when statuses are loaded from store (only once)
+    React.useEffect(() => {
+        if (!hasSetDefault && smrStatuses && smrStatuses.length > 0) {
+            const requestedStatus = smrStatuses.find(s => 
+                (s.name || "").toLowerCase().includes("requested") || 
+                s.code === "REQUESTED_REQ" ||
+                s.value_code === "REQUESTED_REQ"
+            );
+            if (requestedStatus) {
+                setFilterStatus(String(requestedStatus.id));
+            }
+            setHasSetDefault(true);
+        }
+    }, [smrStatuses, hasSetDefault]);
+
+    // Pagination calculations
+    const totalPages = Math.ceil(totalRecords / itemsPerPage);
+    const paginatedData = smrRequests;
+
+    // Reset to page 1 when filters change
+    React.useEffect(() => {
+        setCurrentPage(1);
+    }, [searchTerm, filterStatus, dateFilter]);
 
     // ========================================================================
     // EVENT HANDLERS
     // ========================================================================
 
     /**
-     * Handler for viewing SMR request details
-     * Opens the detail popup with issue/view functionality based on status
-     * @param request - The SMR request to view
+     * Handler for viewing SMR request details (Read-only)
      */
-    const handleView = (request: SMRRequest) => {
-        // For "Requested Req." status, autofill issueQty with requestedQty or qtyNeeded
-        if (request.status === "Requested Req.") {
-            setViewingRequest({
-                ...request,
-                items: request.items.map(item => ({
-                    ...item,
-                    issueQty: item.requestedQty || item.qtyNeeded || 0
-                }))
-            });
-            // Clear scanned serials when opening a new request
-            setScannedSerialsPerItem({});
-        } else {
-            setViewingRequest(request);
+    const handleView = async (request: SMRRequest) => {
+        setIsReadOnly(true);
+        try {
+            setActionLoading("view");
+            const [reqRes, itemsRes] = await Promise.all([
+                inventoryApi.getMaterialRequisitionById(request.id),
+                inventoryApi.getItemsForSMR(request.id)
+            ]);
+
+            if (reqRes.isSuccessful && reqRes.data) {
+                const data = reqRes.data;
+                const itemsData = itemsRes.isSuccessful && itemsRes.data ? itemsRes.data.records : (data.items || []);
+                
+                const mappedRequest: SMRRequest = {
+                    ...request,
+                    smrNo: data.requisition_code || data.smr_no || request.smrNo,
+                    workCenter: data.workcenter_name || data.work_center_name || request.workCenter,
+                    department: data.department_name || data.dept_name || request.department,
+                    requestedBy: data.requested_by || data.requested_by_name,
+                    status: data.status_name || data.status || request.status,
+                    items: (itemsData || []).map((item: any) => ({
+                        id: item.service_material_requisition_item_id || item.item_id || item.id,
+                        service_material_requisition_item_id: item.service_material_requisition_item_id || item.item_id || item.id,
+                        item_id: item.item_id,
+                        itemCode: item.item_code || item.item_no,
+                        itemName: item.item_name || item.name,
+                        uom: item.uom || "NOS",
+                        availableStock: item.avail_qty || item.available_qty || item.stock || 0,
+                        qtyNeeded: item.req_qty || item.requested_qty || item.quantity || item.required_qty || 0,
+                        requestedQty: item.req_qty || item.requested_qty || item.quantity || item.required_qty || 0,
+                        issueQty: item.issue_qty || item.issued_qty || 0,
+                        type: "SFG",
+                        serialNumbers: item.serials ? item.serials.map((s: any) => s.serial_number || s) : []
+                    }))
+                };
+                
+                setViewingRequest(mappedRequest);
+                
+                const initialSerials: Record<string | number, string[]> = {};
+                mappedRequest.items.forEach(item => {
+                    if (item.serialNumbers && item.serialNumbers.length > 0) {
+                        initialSerials[item.id] = item.serialNumbers;
+                    }
+                });
+                setScannedSerialsPerItem(initialSerials);
+                setIsViewModalOpen(true);
+            }
+        } catch (error) {
+            console.error("Error fetching requisition details:", error);
+            toast({ variant: "destructive", title: "Error", description: "Failed to load requisition details." });
+        } finally {
+            setActionLoading(null);
         }
-        setIsViewModalOpen(true);
+    };
+
+    /**
+     * Handler for editing SMR request details (Processing/Issuing)
+     */
+    const handleEdit = async (request: SMRRequest) => {
+        setIsReadOnly(false);
+        try {
+            setActionLoading("edit");
+            const [reqRes, itemsRes] = await Promise.all([
+                inventoryApi.getMaterialRequisitionById(request.id),
+                inventoryApi.getItemsForSMR(request.id)
+            ]);
+
+            if (reqRes.isSuccessful && reqRes.data) {
+                const data = reqRes.data;
+                const itemsData = itemsRes.isSuccessful && itemsRes.data ? itemsRes.data.records : (data.items || []);
+
+                const mappedRequest: SMRRequest = {
+                    ...request,
+                    smrNo: data.requisition_code || data.smr_no || request.smrNo,
+                    workCenter: data.workcenter_name || data.work_center_name || request.workCenter,
+                    department: data.department_name || data.dept_name || request.department,
+                    requestedBy: data.requested_by || data.requested_by_name,
+                    status: data.status_name || data.status || request.status,
+                    items: (itemsData || []).map((item: any) => ({
+                        id: item.service_material_requisition_item_id || item.item_id || item.id,
+                        service_material_requisition_item_id: item.service_material_requisition_item_id || item.item_id || item.id,
+                        item_id: item.item_id,
+                        itemCode: item.item_code || item.item_no,
+                        itemName: item.item_name || item.name,
+                        uom: item.uom || "NOS",
+                        availableStock: item.avail_qty || item.available_qty || item.stock || 0,
+                        qtyNeeded: item.req_qty || item.requested_qty || item.quantity || item.required_qty || 0,
+                        requestedQty: item.req_qty || item.requested_qty || item.quantity || item.required_qty || 0,
+                        issueQty: item.issue_qty || item.issued_qty || item.req_qty || item.requested_qty || item.quantity || item.required_qty || 0,
+                        type: "SFG",
+                        serialNumbers: []
+                    }))
+                };
+
+                setViewingRequest(mappedRequest);
+                setScannedSerialsPerItem({});
+                setIsViewModalOpen(true);
+            }
+        } catch (error) {
+            console.error("Error fetching requisition details for edit:", error);
+            toast({ variant: "destructive", title: "Error", description: "Failed to load requisition details." });
+        } finally {
+            setActionLoading(null);
+        }
     };
 
     /**
@@ -187,7 +360,7 @@ export default function InventorySMRRequests() {
      * Handler for issuing items
      * Validates issue quantities and updates status to "Issued SMR by WH"
      */
-    const handleIssueItems = () => {
+    const handleIssueItems = async () => {
         if (!viewingRequest) return;
 
         // Validation: Ensure scanned serials match issue quantity for FG items
@@ -197,8 +370,6 @@ export default function InventorySMRRequests() {
             const serialsCount = scannedSerialsPerItem[item.id]?.length || 0;
 
             // If scanning is done, it should match the issue quantity
-            // For now, let's just warn if serials are missing but allow optional
-            // But if serials are present, they shouldn't exceed issue qty
             if (serialsCount > issueQty) {
                 scanErrors.push(`${item.itemName}: Scanned serials (${serialsCount}) exceed issue quantity (${issueQty})`);
             }
@@ -241,78 +412,52 @@ export default function InventorySMRRequests() {
             return;
         }
 
-        // Update the request using shared update function
-        const updatedItems = viewingRequest.items.map(item => ({
-            ...item,
-            issueQty: item.issueQty || 0,
-            requestedQty: item.requestedQty || item.qtyNeeded,
-            serialNumbers: scannedSerialsPerItem[item.id] || []
-        }));
+        try {
+            setActionLoading("issue");
+            
+            // Prepare payload according to backend requirement
+            const payload = {
+                service_material_requisition_id: viewingRequest.id,
+                status_code: "ISSUE REQ",
+                items: viewingRequest.items.map(item => ({
+                    service_material_requisition_item_id: item.service_material_requisition_item_id,
+                    item_id: item.item_id,
+                    issued_qty: item.issueQty || 0,
+                    serial_numbers: (scannedSerialsPerItem[item.id] || []).map(s => ({
+                        serial_number: s
+                    }))
+                }))
+            };
 
-        const updatedData = updateSMRRequest(viewingRequest.id, {
-            status: "Issued Req. by WH",
-            issuedDate: format(new Date(), "yyyy-MM-dd"),
-            issuedBy: "Warehouse Manager", // In real app, get from auth context
-            items: updatedItems
-        });
+            const response = await inventoryApi.updateMaterialRequisition(payload);
 
-        setSmrRequests(updatedData);
-
-        toast({
-            title: "Success",
-            description: `Items for ${viewingRequest.smrNo} have been issued successfully.`,
-        });
-
-        setIsViewModalOpen(false);
-        setViewingRequest(null);
-    };
-
-    // ========================================================================
-    // FILTERING AND PAGINATION
-    // ========================================================================
-
-    /**
-     * Filter SMR requests based on search term and status filter
-     */
-    const filteredRequests = smrRequests.filter(request => {
-        const matchesSearch =
-            request.smrNo.toLowerCase().includes(searchTerm.toLowerCase()) ||
-            request.workCenter.toLowerCase().includes(searchTerm.toLowerCase());
-
-        const matchesStatus = filterStatus === "all" ? true : request.status === filterStatus;
-
-        const matchesDate = !dateFilter || (() => {
-            const requestDateObj = parse(request.smrRequestDate, 'dd-MM-yyyy', new Date());
-            requestDateObj.setHours(0, 0, 0, 0);
-            const filterDate = new Date(dateFilter);
-            filterDate.setHours(0, 0, 0, 0);
-            return requestDateObj.getTime() === filterDate.getTime();
-        })();
-
-        // Exclude Draft status from Inventory module listing
-        const isNotDraft = request.status !== "Draft Req.";
-
-        return matchesSearch && matchesStatus && matchesDate && isNotDraft;
-    });
-
-    // Pagination calculations
-    const totalPages = Math.ceil(filteredRequests.length / itemsPerPage);
-    const paginatedData = filteredRequests.slice(
-        (currentPage - 1) * itemsPerPage,
-        currentPage * itemsPerPage
-    );
-
-    // Auto-adjust page when data changes
-    React.useEffect(() => {
-        if (currentPage > totalPages && totalPages > 0) {
-            setCurrentPage(totalPages);
+            if (response.isSuccessful) {
+                toast({
+                    variant: "success",
+                    title: "Success",
+                    description: response.message || `Items for ${viewingRequest.smrNo} have been issued successfully.`,
+                });
+                setIsViewModalOpen(false);
+                setViewingRequest(null);
+                fetchSMRRequests(currentPage);
+            } else {
+                toast({
+                    variant: "destructive",
+                    title: "Error",
+                    description: response.message || "Failed to issue items."
+                });
+            }
+        } catch (error: any) {
+            console.error("Error issuing items:", error);
+            toast({
+                variant: "destructive",
+                title: "Error",
+                description: error.message || "An unexpected error occurred."
+            });
+        } finally {
+            setActionLoading(null);
         }
-    }, [filteredRequests.length, currentPage, totalPages]);
-
-    // Reset to page 1 when filters change
-    React.useEffect(() => {
-        setCurrentPage(1);
-    }, [searchTerm, filterStatus, dateFilter]);
+    };
 
     // ========================================================================
     // RENDER: DETAIL POPUP
@@ -327,8 +472,8 @@ export default function InventorySMRRequests() {
     const renderDetailPopup = () => {
         if (!viewingRequest) return null;
 
-        const isRequestedStatus = viewingRequest.status === "Requested Req.";
-        const isIssuedStatus = viewingRequest.status === "Issued Req. by WH";
+        const isRequestedStatus = ((viewingRequest.status || "").toLowerCase().includes("requested")) && !isReadOnly;
+        const isIssuedStatus = (viewingRequest.status || "").toLowerCase().includes("issued");
 
         const handleScanKeyDown = (itemId: string | number, e: React.KeyboardEvent) => {
             if (e.key === "Enter" && scanInputValue.trim()) {
@@ -336,8 +481,15 @@ export default function InventorySMRRequests() {
                 const serial = scanInputValue.trim();
                 const currentSerials = scannedSerialsPerItem[itemId] || [];
 
+                const targetItem = viewingRequest.items.find(i => i.id.toString() === itemId.toString());
+                const targetQty = targetItem?.issueQty || 0;
+
+                setScanError(null);
+
                 if (currentSerials.includes(serial)) {
-                    toast({ title: "Duplicate Serial", description: "This serial number has already been scanned.", variant: "destructive" });
+                    setScanError("This serial number has already been scanned.");
+                } else if (currentSerials.length >= targetQty) {
+                    setScanError(`Limit reached: You have already scanned ${targetQty} items.`);
                 } else {
                     setScannedSerialsPerItem(prev => ({
                         ...prev,
@@ -349,9 +501,16 @@ export default function InventorySMRRequests() {
         };
 
         return (
-            <Dialog open={isViewModalOpen} onOpenChange={setIsViewModalOpen}>
-                <DialogContent className="max-w-5xl max-h-[95vh] flex flex-col p-0 overflow-hidden">
-                    <DialogHeader className="p-6 pb-2 border-b">
+            <Dialog open={isViewModalOpen} onOpenChange={(open) => {
+                setIsViewModalOpen(open);
+                if (!open) fetchSMRRequests(currentPage);
+            }}>
+                <DialogContent 
+                    className="w-[95%] sm:max-w-3xl md:max-w-5xl xl:max-w-6xl max-h-[82vh] flex flex-col p-0 overflow-hidden"
+                    onInteractOutside={(e) => e.preventDefault()}
+                    onPointerDownOutside={(e) => e.preventDefault()}
+                >
+                    <DialogHeader className="shrink-0 border-b bg-white px-6 py-5">
                         <div className="flex items-center justify-between">
                             <div>
                                 <DialogTitle className="text-2xl font-bold">
@@ -365,7 +524,7 @@ export default function InventorySMRRequests() {
                     </DialogHeader>
 
                     {/* SMR INFORMATION - Horizontal Layout */}
-                    <div className="px-6 py-4 bg-slate-50/50 border-b">
+                    <div className="shrink-0 border-b bg-slate-50/50 px-6 py-4">
                         <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
                             <div className="space-y-1">
                                 <Label className="text-[10px] uppercase font-bold text-muted-foreground whitespace-nowrap">SMR No</Label>
@@ -394,35 +553,37 @@ export default function InventorySMRRequests() {
                         </div>
                     </div>
 
-                    <div className="flex-1 overflow-y-auto px-6 py-4 space-y-6">
+                    <div className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden px-6 py-5 space-y-6">
                         {/* Global Scanning Section - only for Requested Req. status */}
                         {isRequestedStatus && (
                             <div className="bg-blue-50/50 p-6 rounded-2xl border border-blue-100 shadow-sm transition-all animate-in slide-in-from-top-2 duration-300">
                                 <div className="grid grid-cols-12 gap-6">
                                     <div className="col-span-12 md:col-span-4">
                                         <Label className="text-xs font-bold text-slate-600 mb-2 block uppercase tracking-wide">Select Item to Scan</Label>
-                                        <Select
-                                            value={activeScanItem.toString()}
-                                            onValueChange={(v) => {
+                                        <SearchableSelect
+                                            placeholder="Choose an item..."
+                                            value={activeScanItem ? String(activeScanItem) : ""}
+                                            options={viewingRequest.items.map((item) => ({
+                                                label: `${item.itemName} ${item.itemCode}`.trim(),
+                                                value: String(item.id),
+                                                primaryText: String(item.itemName || "").trim(),
+                                                secondaryText: String(item.itemCode || "").trim(),
+                                            }))}
+                                            onChange={(v) => {
                                                 setActiveScanItem(v);
                                                 setScanInputValue("");
+                                                setScanError(null);
                                             }}
-                                        >
-                                            <SelectTrigger className="h-11 bg-white border-blue-200 focus:ring-blue-500 shadow-sm">
-                                                <SelectValue placeholder="Choose an item..." />
-                                            </SelectTrigger>
-                                            <SelectContent>
-                                                {viewingRequest.items.map(item => (
-                                                    <SelectItem key={item.id} value={item.id.toString()}>
-                                                        {item.itemName} ({item.uom})
-                                                    </SelectItem>
-                                                ))}
-                                            </SelectContent>
-                                        </Select>
+                                            className="h-auto min-h-11 items-start! py-2 bg-white border-blue-200 shadow-sm focus-visible:ring-blue-500"
+                                            selectedPrimaryLineClamp={2}
+                                            compactStackedSelected
+                                            showSelectedTitle
+                                            selectedTruncate="end"
+                                        />
                                     </div>
 
                                     <div className="col-span-12 md:col-span-5">
-                                        <Label className="text-xs font-bold text-slate-600 mb-2 block uppercase tracking-wide flex items-center justify-between">
+                                        <Label className="text-xs font-bold text-slate-600 mb-2 uppercase tracking-wide flex items-center justify-between">
                                             <span>Scan or Type QR Code</span>
                                             {activeScanItem && (
                                                 <span className="text-[10px] font-medium text-blue-600">
@@ -435,10 +596,20 @@ export default function InventorySMRRequests() {
                                                 placeholder={activeScanItem ? "Scan serial number..." : "Select item first"}
                                                 className="h-11 pr-20 bg-white border-blue-200 focus:ring-blue-500 shadow-sm"
                                                 value={scanInputValue}
-                                                onChange={(e) => setScanInputValue(e.target.value)}
+                                                onChange={(e) => {
+                                                    setScanInputValue(e.target.value);
+                                                    if (!e.target.value.trim()) {
+                                                        setScanError(null);
+                                                    }
+                                                }}
                                                 disabled={!activeScanItem}
                                                 onKeyDown={(e) => activeScanItem && handleScanKeyDown(activeScanItem, e)}
                                             />
+                                            {scanError && (
+                                                <p className="text-[10px] font-bold text-destructive mt-1 animate-in fade-in slide-in-from-top-1 duration-200">
+                                                    {scanError}
+                                                </p>
+                                            )}
                                             <div className="absolute right-2 top-2 h-7 px-2 flex items-center justify-center bg-blue-50 rounded text-[10px] font-bold text-blue-500 border border-blue-100 uppercase tracking-tighter">
                                                 Enter ↵
                                             </div>
@@ -448,7 +619,7 @@ export default function InventorySMRRequests() {
                                     <div className="col-span-12 md:col-span-3">
                                         <Label className="text-xs font-bold text-slate-600 mb-2 block uppercase tracking-wide">Scanned Counter</Label>
                                         <div className={cn(
-                                            "h-11 flex items-center gap-3 px-4 rounded-xl border font-bold text-xs shadow-sm shadow-inner transition-all",
+                                            "h-11 flex items-center gap-3 px-4 rounded-xl border font-bold text-xs shadow-inner transition-all",
                                             activeScanItem && (scannedSerialsPerItem[activeScanItem]?.length || 0) > 0
                                                 ? "bg-blue-100 text-blue-700 border-blue-200"
                                                 : "bg-white text-slate-400 border-slate-200"
@@ -530,13 +701,20 @@ export default function InventorySMRRequests() {
                             )}
                         </div>
                         <div className="flex gap-2">
-                            <Button variant="outline" onClick={() => setIsViewModalOpen(false)} className="px-6 h-11 font-bold">
+                            <Button
+                                variant="outline"
+                                onClick={() => setIsViewModalOpen(false)}
+                                className="px-6 h-11 font-bold"
+                                disabled={actionLoading === "issue"}
+                            >
                                 Close
                             </Button>
-                            {isRequestedStatus && (
+                            {isRequestedStatus && canEdit(INVENTORY_SMR_MODULE) && (
                                 <Button
                                     className="px-8 h-11 bg-blue-600 hover:bg-blue-700 text-white font-bold shadow-lg shadow-blue-200"
                                     onClick={handleIssueItems}
+                                    loading={actionLoading === "issue"}
+                                    disabled={actionLoading === "issue"}
                                 >
                                     Issue Items
                                 </Button>
@@ -551,6 +729,10 @@ export default function InventorySMRRequests() {
     // ========================================================================
     // RENDER: MAIN COMPONENT
     // ========================================================================
+
+    if (!hasModuleAccess) {
+        return <Unauthorized />;
+    }
 
     return (
         <div className="h-full flex flex-col gap-6 animate-in fade-in duration-500 overflow-visible">
@@ -575,7 +757,12 @@ export default function InventorySMRRequests() {
                         type: 'select',
                         label: 'Status',
                         value: filterStatus,
-                        options: [{ label: "All Status", value: "all" }, "Requested Req.", "Issued Req. by WH", "Received Req. by SC"],
+                        options: [
+                            { label: "All Status", value: "all" },
+                            ...(smrStatuses || [])
+                                .filter(s => s?.name && !s.name.toLowerCase().includes("draft"))
+                                .map(s => ({ label: s.name, value: String(s.id) }))
+                        ],
                         onChange: setFilterStatus,
                         searchable: true
                     }
@@ -598,7 +785,16 @@ export default function InventorySMRRequests() {
                                 </TableRow>
                             </TableHeader>
                             <TableBody>
-                                {paginatedData.length === 0 ? (
+                                {isListLoading ? (
+                                    <TableRow>
+                                        <TableCell colSpan={6} className="h-32 text-center">
+                                            <div className="flex items-center justify-center gap-2 text-muted-foreground">
+                                                <div className="h-4 w-4 animate-spin rounded-full border-2 border-primary border-t-transparent" />
+                                                Loading requisitions...
+                                            </div>
+                                        </TableCell>
+                                    </TableRow>
+                                ) : paginatedData.length === 0 ? (
                                     <TableRow>
                                         <TableCell colSpan={6} className="h-32 text-center text-muted-foreground italic">
                                             No Requisitions found
@@ -636,10 +832,31 @@ export default function InventorySMRRequests() {
                                             </TableCell>
 
                                             {/* Actions */}
-                                            <TableCell className="py-4 text-center">
-                                                <TableActionButtons
-                                                    onView={() => handleView(request)}
-                                                />
+                                            <TableCell className="py-4">
+                                                <div className="flex items-center justify-center gap-1">
+                                                    <Button
+                                                        variant="ghost"
+                                                        size="icon"
+                                                        className="h-8 w-8 text-slate-400 hover:text-primary hover:bg-slate-100"
+                                                        onClick={() => handleView(request)}
+                                                        title="View Details"
+                                                        disabled={!canView(INVENTORY_SMR_MODULE) || actionLoading === "view" || actionLoading === "edit"}
+                                                    >
+                                                        <Eye className="h-4 w-4" />
+                                                    </Button>
+                                                    {(request.status || "").toLowerCase().includes("requested") && canEdit(INVENTORY_SMR_MODULE) && (
+                                                        <Button
+                                                            variant="ghost"
+                                                            size="icon"
+                                                            className="h-8 w-8 text-slate-400 hover:text-primary hover:bg-slate-100"
+                                                            onClick={() => handleEdit(request)}
+                                                            title="Process / Issue Items"
+                                                            disabled={actionLoading === "view" || actionLoading === "edit"}
+                                                        >
+                                                            <Edit className="h-4 w-4" />
+                                                        </Button>
+                                                    )}
+                                                </div>
                                             </TableCell>
                                         </TableRow>
                                     ))
@@ -649,15 +866,14 @@ export default function InventorySMRRequests() {
                     </div>
 
                     {/* Pagination */}
-                    {filteredRequests.length > 0 && (
+                    {totalRecords > 0 && (
                         <DataTablePagination
                             currentPage={currentPage}
                             totalPages={totalPages}
-                            totalItems={filteredRequests.length}
+                            totalItems={totalRecords}
                             itemsPerPage={itemsPerPage}
                             onPageChange={setCurrentPage}
                             onItemsPerPageChange={setItemsPerPage}
-                            options={[10, 15, 30, 50]}
                         />
                     )}
                 </CardContent>

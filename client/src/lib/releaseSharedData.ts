@@ -12,6 +12,7 @@ export interface ProducedItem {
   itemName: string;
   uom: string;
   qtyProduced: number;
+  itemTypeCode?: string;
 }
 
 export interface OperationRelease {
@@ -29,9 +30,71 @@ export interface OperationRelease {
   qcVerifiedOn?: string;
   batchDetails?: Array<{
     batchNo: string;
-    shift: "Morning" | "Night";
+    /** e.g. Morning, Night, Day Shift — from API */
+    shift: string;
     items: ProducedItem[];
   }>;
+}
+
+/** Merge line items by code + name + uom (sums qty). */
+export function aggregateProducedItems(items: ProducedItem[]): ProducedItem[] {
+  const byKey = new Map<string, ProducedItem>();
+  let nextId = 1;
+  for (const it of items) {
+    const key = `${it.itemCode}\0${it.itemName}\0${it.uom}`;
+    const ex = byKey.get(key);
+    if (ex) {
+      ex.qtyProduced += it.qtyProduced;
+    } else {
+      byKey.set(key, { ...it, id: nextId++ });
+    }
+  }
+  return Array.from(byKey.values());
+}
+
+/**
+ * Backend often nests output under `batch_wise_outputs` (batch_code, shift_name, items[]).
+ * Returns per-batch rows + batch ids + flattened line items (not aggregated; use aggregateProducedItems for summary).
+ */
+export function parseBatchWiseOutputs(raw: unknown): {
+  batchDetails: NonNullable<OperationRelease["batchDetails"]>;
+  batchIds: string[];
+  lineItems: ProducedItem[];
+} {
+  if (!Array.isArray(raw) || raw.length === 0) {
+    return { batchDetails: [], batchIds: [], lineItems: [] };
+  }
+  const batchDetails: NonNullable<OperationRelease["batchDetails"]> = [];
+  const lineItems: ProducedItem[] = [];
+  let lineId = 0;
+  for (const bd of raw) {
+    if (bd == null || typeof bd !== "object") continue;
+    const o = bd as Record<string, any>;
+    const batchNo = String(o.batch_code ?? o.batch_no ?? o.batchNo ?? "");
+    const shift = String(o.shift_name ?? o.shift ?? "—");
+    const bItems = o.items ?? o.produced_items ?? [];
+    const items: ProducedItem[] = Array.isArray(bItems)
+      ? bItems.map((r: any) => {
+          const row: ProducedItem = {
+            id: ++lineId,
+            itemCode: String(r.item_code ?? r.itemCode ?? ""),
+            itemName: String(r.item_name ?? r.itemName ?? ""),
+            uom: String(r.uom_name ?? r.uom ?? ""),
+            qtyProduced: Number(
+              r.total_qty ?? r.produced_qty ?? r.qty_produced ?? r.qtyProduced ?? r.qty ?? 0
+            ),
+            itemTypeCode: String(r.item_type_code ?? r.itemTypeCode ?? "")
+          };
+          lineItems.push(row);
+          return { ...row };
+        })
+      : [];
+    if (batchNo) {
+      batchDetails.push({ batchNo, shift, items });
+    }
+  }
+  const batchIds = batchDetails.map((b) => b.batchNo).filter(Boolean);
+  return { batchDetails, batchIds, lineItems };
 }
 
 // ============================================================================

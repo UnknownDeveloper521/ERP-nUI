@@ -4,12 +4,13 @@
 // Updated: Removed localStorage - using mock store
 // ============================================================================
 
-import React, { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect, useRef, useCallback } from "react";
+import { useDebounce } from "@/hooks/useDebounce";
 import { useLocation } from "wouter";
 import { format } from "date-fns";
 import { Card, CardContent } from "@/components/ui/card";
 import { generateInvoicePDFHTML } from "@/lib/invoicePDFTemplate";
-import { Search, ChevronLeft, ChevronRight, Calendar as CalendarIcon, Trash2, Plus, Download } from "lucide-react";
+import { Search, ChevronLeft, ChevronRight, Calendar as CalendarIcon, Trash2, Plus, Download, X, Loader2 } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
@@ -17,6 +18,8 @@ import { Textarea } from "@/components/ui/textarea";
 import { DataTablePagination } from "@/components/shared/DataTablePagination";
 import { AppListToolbar } from "@/components/shared/AppListToolbar";
 import { SearchableSelect } from "@/components/shared/SearchableSelect";
+import { useHasPermission } from "@/hooks/usePermissions";
+import Unauthorized from "@/pages/Unauthorized";
 import { DatePicker } from "@/components/shared/DatePicker";
 import {
     Table,
@@ -26,6 +29,7 @@ import {
     TableHeader,
     TableRow,
 } from "@/components/ui/table";
+import { Checkbox } from "@/components/ui/checkbox";
 import { TableActionButtons } from "@/components/shared/TableActionButtons";
 import {
     Select,
@@ -62,6 +66,8 @@ import {
     type InvoiceTerm as MockInvoiceTerm
 } from "@/lib/mockInvoices";
 import { getSalesOrders, updateSalesOrder, changeSOStatus, checkAndMoveToDispatchPending } from "@/lib/mockSalesOrders";
+import { invoicingApi } from "@/lib/api";
+import { useCommonStore } from "@/store/commonStore";
 
 // ============================================================================
 // HELPER FUNCTIONS
@@ -69,21 +75,38 @@ import { getSalesOrders, updateSalesOrder, changeSOStatus, checkAndMoveToDispatc
 
 // Currency symbol helper
 const getCurrencySymbol = (currency: string): string => {
+    if (!currency) return "USD";
+    const clean = currency.trim().toUpperCase();
+    
+    // Check for codes or full names
     const symbols: Record<string, string> = {
         'USD': '$',
+        'US DOLLAR': '$',
         'EUR': '€',
+        'EURO': '€',
         'GBP': '£',
+        'BRITISH POUND': '£',
         'INR': '₹',
+        'INDIAN RUPEE': '₹',
         'JPY': '¥',
+        'JAPANESE YEN': '¥',
         'CNY': '¥',
+        'CHINESE YUAN': '¥',
         'AUD': 'A$',
+        'AUSTRALIAN DOLLAR': 'A$',
         'CAD': 'C$',
+        'CANADIAN DOLLAR': 'C$',
         'CHF': 'CHF',
+        'SWISS FRANC': 'CHF',
         'SEK': 'kr',
+        'SWEDISH KRONA': 'kr',
         'NZD': 'NZ$',
-        'UGX': 'USh'
+        'NEW ZEALAND DOLLAR': 'NZ$',
+        'UGX': 'USh',
+        'UGANDA SHILLING': 'USh'
     };
-    return symbols[currency] || currency;
+    
+    return symbols[clean] || currency;
 };
 
 // Safe date formatting helper - validates date before formatting
@@ -103,8 +126,8 @@ const safeFormatDate = (dateValue: any, formatStr: string = "dd-MM-yyyy"): strin
 // TYPE DEFINITIONS
 // ============================================================================
 
-// Invoice Status: Invoice Pending → Invoiced → Paid
-type InvoiceStatus = "Invoice Pending" | "Invoiced" | "Paid";
+// Invoice Status: Draft → Open → Partially Paid → Closed | Overdue | Cancelled
+type InvoiceStatus = "Draft" | "Open" | "Partially Paid" | "Closed" | "Overdue" | "Cancelled";
 
 // Use types from mock service
 type InvoiceItem = MockInvoiceItem;
@@ -188,6 +211,7 @@ const getInvoicePendingFromSalesOrders = (): InvoiceData[] => {
                     billingAddress: so.billingAddress,
                     deliveryDate: so.deliveryDate,
                     currency: so.currency,
+                    currencySymbol: getCurrencySymbol(so.currency || "UGX"),
                     remarks: so.remarks,
                     // Map ALL fields, but amounts are prorated
                     discountValue: discountValue,
@@ -197,14 +221,14 @@ const getInvoicePendingFromSalesOrders = (): InvoiceData[] => {
                     tax: proratedTax,
                     subtotal: proratedSubtotal,
                     grandTotal: proratedGrandTotal,
-                    status: "Invoice Pending" as InvoiceStatus,
+                    status: "Draft" as InvoiceStatus,
                     // THIS IS THE CRITICAL PART: Only show THIS specific term!
                     terms: [{
                         id: term.id,
                         percentage: term.percentage,
                         termType: term.termType,
                         date: term.date,
-                        days: term.days,
+                        days: term.days as number | undefined,
                         note: term.note
                     }],
                     items: so.items.map(i => ({
@@ -227,7 +251,7 @@ const getInvoicePendingFromSalesOrders = (): InvoiceData[] => {
 // Get all invoices: Invoice Pending from SOs + Invoiced/Paid from invoice store
 const getStoredInvoices = (): InvoiceData[] => {
     const invoicePending = getInvoicePendingFromSalesOrders();
-    const actualInvoices = getInvoices().filter(inv => inv.status !== "Invoice Pending");
+    const actualInvoices = getInvoices(); // Include ALL records from the store, including manual drafts
     return [...invoicePending, ...actualInvoices];
 };
 
@@ -240,13 +264,67 @@ const getStoredInvoices = (): InvoiceData[] => {
 // HELPER FUNCTIONS
 // ============================================================================
 
-const getInvoiceStatusBadge = (status: InvoiceStatus) => {
-    switch (status) {
-        case "Invoice Pending": return <Badge className="bg-orange-500 hover:bg-orange-600">Invoice Pending</Badge>;
-        case "Invoiced": return <Badge className="bg-blue-500 hover:bg-blue-600">Invoiced</Badge>;
-        case "Paid": return <Badge className="bg-green-500 hover:bg-green-600">Paid</Badge>;
-        default: return <Badge variant="outline">{status}</Badge>;
-    }
+const getInvoiceStatusBadge = (status: string) => {
+    const s = status?.toUpperCase() || "";
+    if (s.includes("DRAFT") || s.includes("PENDING")) return <Badge className="bg-slate-500 hover:bg-slate-600">Draft</Badge>;
+    if (s.includes("OPEN")) return <Badge className="bg-blue-500 hover:bg-blue-600">Open</Badge>;
+    if (s.includes("PARTIALLY") || s.includes("PARTIAL")) return <Badge className="bg-cyan-500 hover:bg-cyan-600">Partially Paid</Badge>;
+    if (s.includes("CLOSED") || s.includes("PAID")) return <Badge className="bg-green-500 hover:bg-green-600">Closed</Badge>;
+    if (s.includes("OVERDUE")) return <Badge className="bg-red-500 hover:bg-red-600">Overdue</Badge>;
+    if (s.includes("CANCELLED") || s.includes("CANCEL")) return <Badge className="bg-slate-500 hover:bg-slate-600">Cancelled</Badge>;
+    return <Badge variant="outline">{status}</Badge>;
+};
+
+// ============================================================================
+// API RESPONSE MAPPING
+// ============================================================================
+
+const mapApiResponseToInvoice = (apiData: any): any => {
+    if (!apiData) return null;
+    const d = apiData;
+    const summary = d.summary || {};
+
+    return {
+        id: d.invoice_id,
+        companyName: d.company_name,
+        companyAddress: d.company_address,
+        invoiceNumber: d.invoice_code,
+        invoiceDate: d.invoice_date,
+        status: d.status_name || "Draft",
+        soNumber: d.so_code,
+        soDate: d.order_date,
+        deliveryDate: d.delivery_date,
+        customerName: d.customer_name,
+        contactPerson: d.contact_person,
+        mobileNo: d.mobile_no,
+        billingAddress: d.billing_address,
+        shippingAddress: d.shipping_address,
+        currency: d.currency_name || "UGX",
+        currencySymbol: getCurrencySymbol(d.currency_name || "UGX"),
+        items: (d.items || []).map((item: any, idx: number) => ({
+            id: idx + 1,
+            itemName: item.item_name,
+            uom: item.uom,
+            orderedQty: item.ordered_qty || 0,
+            rate: item.unit_price || 0,
+            price: item.price_per_item || 0
+        })),
+        terms: (d.terms || []).map((term: any) => ({
+            id: term.term_id,
+            termType: term.term_type_name,
+            percentage: term.percentage || 0,
+            days: term.days || 0
+        })),
+        subtotal: summary.subtotal || 0,
+        discountValue: summary.discount_percent || 0,
+        discountAmount: summary.discount_amount || 0,
+        discountType: "%" as const,
+        taxPercentage: summary.tax_percent || 0,
+        tax: summary.tax_amount || 0,
+        taxValue: summary.tax_percent || 0, // In template, taxValue is used as the rate when taxType is '%'
+        taxType: "%" as const,
+        grandTotal: summary.grand_total || 0
+    };
 };
 
 // ============================================================================
@@ -254,51 +332,120 @@ const getInvoiceStatusBadge = (status: InvoiceStatus) => {
 // ============================================================================
 
 const Invoicing = () => {
+    const { canView, canEdit, canPrint, canDelete } = useHasPermission();
+    const MODULE_KEY = "ACCOUNTING/INVOICING";
+    const canViewInvoicing = canView(MODULE_KEY);
+    const canEditInvoicing = canEdit(MODULE_KEY);
+    const canPrintInvoicing = canPrint(MODULE_KEY);
+    const canDeleteInvoicing = canDelete(MODULE_KEY);
+
     const { toast } = useToast();
     const [location, setLocation] = useLocation();
     
     // Parse query params
     const searchParams = new URLSearchParams(window.location.search);
     const fromSource = searchParams.get('from');
+    const pendingPaymentIdParam = searchParams.get('pending_payment_id');
     const invoiceIdParam = searchParams.get('invoiceId');
 
-    // State management
-    const [invoices, setInvoices] = useState<InvoiceData[]>([]);
+    const [invoices, setInvoices] = useState<any[]>([]);
     const [searchTerm, setSearchTerm] = useState("");
-    const [filterStatus, setFilterStatus] = useState<string>("Invoice Pending"); // Default to Invoice Pending
+    const debouncedSearchTerm = useDebounce(searchTerm, 500);
+    const [filterStatus, setFilterStatus] = useState<string>("all");
+    const [hasSetDefaultStatus, setHasSetDefaultStatus] = useState(false);
     const [filterDate, setFilterDate] = useState<Date | undefined>(undefined);
-    const [navigationSource, setNavigationSource] = useState<string | null>(null); // Store navigation source
+    const [navigationSource, setNavigationSource] = useState<string | null>(null);
+    const [isListLoading, setIsListLoading] = useState(true);
+    const [isViewDetailLoading, setIsViewDetailLoading] = useState(false);
+    const [isFormOpening, setIsFormOpening] = useState(false);
+    const [isCancelling, setIsCancelling] = useState(false);
+    const [isMarkingInvoiced, setIsMarkingInvoiced] = useState(false);
+    const [openingInvoiceId, setOpeningInvoiceId] = useState<number | null>(null);
 
     // Pagination
     const [currentPage, setCurrentPage] = useState(1);
     const [itemsPerPage, setItemsPerPage] = useState(10);
+    const [totalRecords, setTotalRecords] = useState(0);
 
     // Dialog states
-    const [isViewDialogOpen, setIsViewDialogOpen] = useState(false);
-    const [isEditDialogOpen, setIsEditDialogOpen] = useState(false);
-    const [activeInvoice, setActiveInvoice] = useState<InvoiceData | null>(null);
+    const [isInvoiceDialogOpen, setIsInvoiceDialogOpen] = useState(false);
+    const [isPDFDialogOpen, setIsPDFDialogOpen] = useState(false);
+    const [isCancelDialogOpen, setIsCancelDialogOpen] = useState(false);
+    const [invoiceToCancel, setInvoiceToCancel] = useState<any | null>(null);
+    const [activeInvoice, setActiveInvoice] = useState<any | null>(null);
+    const [selectedTerms, setSelectedTerms] = useState<number[]>([]);
 
-    // Load invoices on mount and listen for changes
+    const invoicingStatuses = useCommonStore(state => state.invoicingStatuses);
+
+    // API fetching logic
+    const fetchInvoices = async () => {
+        setIsListLoading(true);
+        try {
+            const params = {
+                search: debouncedSearchTerm,
+                date: filterDate ? format(filterDate, "yyyy-MM-dd") : undefined,
+                status_id: filterStatus !== "all" ? filterStatus : undefined,
+                page: currentPage,
+                limit: itemsPerPage
+            };
+            const res = await invoicingApi.getInvoicesList(params);
+            if (res.isSuccessful && res.data) {
+                setInvoices(res.data.records || []);
+                setTotalRecords(res.data.pagination?.totalRecords || 0);
+            } else {
+                setInvoices([]);
+                setTotalRecords(0);
+            }
+        } catch (error) {
+            console.error("Failed to fetch invoices:", error);
+            setInvoices([]);
+            setTotalRecords(0);
+        } finally {
+            setIsListLoading(false);
+        }
+    };
+
+    // Row actions stay enabled during list refresh; only block during open/view/save flows.
+    const isRowActionBusy =
+        openingInvoiceId !== null ||
+        isViewDetailLoading ||
+        isFormOpening ||
+        isCancelling ||
+        isMarkingInvoiced;
+
+    // Set default status filter to "Draft" once statuses are loaded
     useEffect(() => {
-        setInvoices(getStoredInvoices());
+        if (!hasSetDefaultStatus && invoicingStatuses.length > 0) {
+            const draftStatus = invoicingStatuses.find(s => 
+                (s.value_code || "").toUpperCase() === "DRAFT" || 
+                (s.name || "").toUpperCase() === "DRAFT"
+            );
+            if (draftStatus) {
+                setFilterStatus(String(draftStatus.id));
+            }
+            setHasSetDefaultStatus(true);
+        }
+    }, [invoicingStatuses, hasSetDefaultStatus]);
 
-        const handleStorageChange = (e: any) => {
-            // Refresh when either invoices OR sales orders change
-            if (e.key === "erp_mock_invoices_v2" || 
-                e.key === "erp_mock_sales_orders_v2" ||
-                e.type === "erp:invoices-updated" ||
-                e.type === "erp:sales-orders-updated") {
-                setInvoices(getStoredInvoices());
+    // Load invoices on mount and when filters change
+    useEffect(() => {
+        // Skip first fetch until we've attempted to set the default status if statuses are available
+        if (!hasSetDefaultStatus && invoicingStatuses.length > 0) return;
+
+        fetchInvoices();
+    }, [debouncedSearchTerm, filterDate, filterStatus, currentPage, itemsPerPage, hasSetDefaultStatus]);
+
+    // Listen for changes
+    useEffect(() => {
+        const handleRefresh = (e: any) => {
+            if (e.type === "erp:invoices-updated") {
+                fetchInvoices();
             }
         };
 
-        window.addEventListener("storage", handleStorageChange);
-        window.addEventListener("erp:invoices-updated", handleStorageChange);
-        window.addEventListener("erp:sales-orders-updated", handleStorageChange);
+        window.addEventListener("erp:invoices-updated", handleRefresh);
         return () => {
-            window.removeEventListener("storage", handleStorageChange);
-            window.removeEventListener("erp:invoices-updated", handleStorageChange);
-            window.removeEventListener("erp:sales-orders-updated", handleStorageChange);
+            window.removeEventListener("erp:invoices-updated", handleRefresh);
         };
     }, []);
 
@@ -306,74 +453,189 @@ const Invoicing = () => {
     const hasProcessedNavigation = useRef(false);
     
     useEffect(() => {
-        if ((fromSource === 'pending-payment' || fromSource === 'sales-follow-up') && invoiceIdParam && !hasProcessedNavigation.current) {
-            hasProcessedNavigation.current = true;
-            
-            // Store the navigation source before clearing query params
-            setNavigationSource(fromSource);
-            
-            const invoice = getInvoiceById(parseInt(invoiceIdParam));
-            if (invoice) {
-                setActiveInvoice(invoice);
-                setIsViewDialogOpen(true); // Open View dialog (PDF preview)
-            }
-            // Clear the query params
-            setLocation('/accounting/invoicing');
-        }
-    }, [fromSource, invoiceIdParam, setLocation]);
+        const processNavigation = async () => {
+            if ((fromSource === 'pending-payment' || fromSource === 'sales-follow-up') && (pendingPaymentIdParam || invoiceIdParam) && !hasProcessedNavigation.current) {
+                hasProcessedNavigation.current = true;
+                
+                // Store the navigation source before clearing query params
+                setNavigationSource(fromSource);
+                
+                let targetInvoiceId = invoiceIdParam ? parseInt(invoiceIdParam) : null;
 
-    // Helper to refresh from service (includes Invoice Pending from SOs)
+                // If we only have pending_payment_id, we need to resolve it to an invoice_id
+                if (fromSource === 'pending-payment' && pendingPaymentIdParam && !targetInvoiceId) {
+                    setIsViewDetailLoading(true);
+                    try {
+                        const res = await invoicingApi.getPendingPaymentById(parseInt(pendingPaymentIdParam));
+                        if (res.isSuccessful && res.data && res.data.invoice_id) {
+                            targetInvoiceId = res.data.invoice_id;
+                        }
+                    } catch (error) {
+                        console.error("Failed to resolve pending payment to invoice:", error);
+                    } finally {
+                        setIsViewDetailLoading(false);
+                    }
+                }
+
+                if (targetInvoiceId) {
+                    setOpeningInvoiceId(targetInvoiceId);
+                    setIsViewDetailLoading(true);
+                    setIsPDFDialogOpen(true);
+                    setActiveInvoice(null);
+                    // Try to get from mock data first (for backward compatibility with old mock flow)
+                    const invoice = getInvoiceById(targetInvoiceId);
+                    if (invoice) {
+                        setActiveInvoice(invoice);
+                    } else {
+                        // If not in mock, try to fetch via API
+                        try {
+                            const res = await invoicingApi.getInvoiceById(targetInvoiceId);
+                            if (res.isSuccessful && res.data) {
+                                const mappedInvoice = mapApiResponseToInvoice(res.data);
+                                setActiveInvoice(mappedInvoice);
+                            }
+                        } catch (error) {
+                            console.error("Failed to fetch invoice for navigation:", error);
+                        }
+                    }
+                    setIsViewDetailLoading(false);
+                    setOpeningInvoiceId(null);
+                }
+                
+                // Clear the query params
+                setLocation('/accounting/invoicing');
+            }
+        };
+
+        processNavigation();
+    }, [fromSource, invoiceIdParam, pendingPaymentIdParam, setLocation]);
+
+    // Refresh helper
     const refreshInvoices = () => {
-        setInvoices(getStoredInvoices());
+        fetchInvoices();
     };
 
-    // Filtering logic
-    const filteredInvoices = invoices.filter(invoice => {
-        const matchesSearch = invoice.invoiceNumber.toLowerCase().includes(searchTerm.toLowerCase()) ||
-            invoice.soNumber.toLowerCase().includes(searchTerm.toLowerCase()) ||
-            invoice.customerName.toLowerCase().includes(searchTerm.toLowerCase());
+    const handleOpenCancelDialog = (invoice: any) => {
+        setInvoiceToCancel(invoice);
+        setIsCancelDialogOpen(true);
+    };
 
-        const matchesDate = filterDate ? invoice.invoiceDate === format(filterDate, "yyyy-MM-dd") : true;
-        const matchesStatus = filterStatus === "all" ? true : invoice.status === filterStatus;
-
-        return matchesSearch && matchesDate && matchesStatus;
-    });
+    const handleConfirmCancel = async () => {
+        if (!invoiceToCancel || isRowActionBusy) return;
+        
+        try {
+            setIsCancelling(true);
+            
+            const res = await invoicingApi.cancelInvoice(invoiceToCancel.invoice_id);
+            
+            if (res.isSuccessful) {
+                toast({
+                    title: "Invoice Cancelled",
+                    description: res.message || `Invoice ${invoiceToCancel.invoice_code} has been cancelled successfully.`,
+                    variant: "success"
+                });
+                refreshInvoices();
+            } else {
+                toast({
+                    title: "Error",
+                    description: res.message || "Failed to cancel invoice.",
+                    variant: "destructive"
+                });
+            }
+        } catch (error: any) {
+            console.error("Error cancelling invoice:", error);
+            toast({
+                title: "Error",
+                description: error.message || "An unexpected error occurred while cancelling the invoice.",
+                variant: "destructive"
+            });
+        } finally {
+            setIsCancelling(false);
+            setIsCancelDialogOpen(false);
+            setInvoiceToCancel(null);
+        }
+    };
 
     // Pagination calculations
-    const totalPages = Math.ceil(filteredInvoices.length / itemsPerPage);
-    const paginatedData = filteredInvoices.slice(
-        (currentPage - 1) * itemsPerPage,
-        currentPage * itemsPerPage
-    );
-
-    // Auto-adjust page when data changes
-    React.useEffect(() => {
-        if (currentPage > totalPages && totalPages > 0) {
-            setCurrentPage(totalPages);
-        }
-    }, [filteredInvoices.length, currentPage, totalPages]);
+    const totalPages = Math.ceil(totalRecords / itemsPerPage);
 
     // Reset to page 1 when filters change
     React.useEffect(() => {
         setCurrentPage(1);
-    }, [searchTerm, filterDate, filterStatus]);
+    }, [debouncedSearchTerm, filterDate, filterStatus]);
 
-    // Open invoice View dialog (PDF preview - read-only)
-    const handleViewInvoice = (invoice: InvoiceData) => {
-        setActiveInvoice({ ...invoice });
-        setIsViewDialogOpen(true);
+    // Open PDF Preview dialog
+    const handleViewInvoice = async (invoice: any) => {
+        if (isRowActionBusy) return;
+        setOpeningInvoiceId(invoice.invoice_id);
+        setIsViewDetailLoading(true);
+        setActiveInvoice(null);
+        setIsPDFDialogOpen(true);
+        try {
+            const res = await invoicingApi.getInvoiceById(invoice.invoice_id);
+            if (res.isSuccessful && res.data) {
+                const mappedInvoice = mapApiResponseToInvoice(res.data);
+                setActiveInvoice(mappedInvoice);
+            } else {
+                toast({
+                    title: "Error",
+                    description: res.message || "Failed to fetch invoice details",
+                    variant: "destructive"
+                });
+                setIsPDFDialogOpen(false);
+            }
+        } catch (error) {
+            console.error("Failed to view invoice:", error);
+            setIsPDFDialogOpen(false);
+        } finally {
+            setIsViewDetailLoading(false);
+            setOpeningInvoiceId(null);
+        }
     };
 
-    // Open invoice Edit dialog (form with all actions)
-    const handleEditInvoice = (invoice: InvoiceData) => {
-        setActiveInvoice({ ...invoice });
-        setIsEditDialogOpen(true);
+    // Open Invoice Form dialog (Sales Order structure)
+    const handleEditInvoice = async (invoice: any) => {
+        if (isRowActionBusy) return;
+        setOpeningInvoiceId(invoice.invoice_id);
+        setIsFormOpening(true);
+        setIsInvoiceDialogOpen(true);
+        setActiveInvoice(null);
+        try {
+            const res = await invoicingApi.getInvoiceById(invoice.invoice_id);
+            if (res.isSuccessful && res.data) {
+                const mappedInvoice = mapApiResponseToInvoice(res.data);
+                setActiveInvoice(mappedInvoice);
+                setSelectedTerms([]); // Reset selections
+            } else {
+                toast({
+                    title: "Error",
+                    description: res.message || "Failed to fetch invoice details",
+                    variant: "destructive"
+                });
+            }
+        } catch (error) {
+            console.error("Failed to edit invoice:", error);
+            setIsInvoiceDialogOpen(false);
+        } finally {
+            setIsFormOpening(false);
+            setOpeningInvoiceId(null);
+        }
     };
 
-    // Close View dialog with navigation handling
-    const handleCloseView = () => {
-        setIsViewDialogOpen(false);
-        // Navigate back to the source page
+    // Close PDF dialog
+    const handleClosePDF = () => {
+        setIsPDFDialogOpen(false);
+        handleNavigationCleanup();
+    };
+
+    // Close Form dialog
+    const handleCloseInvoice = () => {
+        setIsInvoiceDialogOpen(false);
+        handleNavigationCleanup();
+    };
+
+    // Helper for navigation cleanup
+    const handleNavigationCleanup = () => {
         if (navigationSource === 'pending-payment') {
             setNavigationSource(null);
             setLocation('/accounting/pending-payment');
@@ -381,11 +643,6 @@ const Invoicing = () => {
             setNavigationSource(null);
             setLocation('/sales/follow-up');
         }
-    };
-
-    // Close Edit dialog
-    const handleCloseEdit = () => {
-        setIsEditDialogOpen(false);
     };
 
     // Download Invoice as PDF-like format (used in both View and Edit)
@@ -425,7 +682,7 @@ const Invoicing = () => {
     // Add new term
     const handleAddTerm = () => {
         if (!activeInvoice) return;
-        const hasAdvanceTerm = activeInvoice.terms.some(t => t.termType === "Advance");
+        const hasAdvanceTerm = activeInvoice.terms.some((t: any) => t.termType === "Advance");
         const newTerm: InvoiceTerm = {
             id: Date.now(),
             percentage: 0,
@@ -438,19 +695,18 @@ const Invoicing = () => {
     // Remove term
     const handleRemoveTerm = (termId: number) => {
         if (!activeInvoice) return;
-        setActiveInvoice({ ...activeInvoice, terms: activeInvoice.terms.filter(t => t.id !== termId) });
+        setActiveInvoice({ ...activeInvoice, terms: activeInvoice.terms.filter((t: any) => t.id !== termId) });
     };
 
     // Calculate totals function removed, using pre-calculated values from invoice data instead
 
-    // Save invoice (only for Invoice Pending status)
     const handleSaveInvoice = () => {
-        if (!activeInvoice || activeInvoice.status !== "Invoice Pending") return;
+        if (!activeInvoice || activeInvoice.status !== "Draft") return;
 
         // Validation: Check if terms exist
         if (activeInvoice.terms.length === 0) {
             toast({
-                title: "Validation Error",
+                title: "Please Check",
                 description: "Please add at least one payment term.",
                 variant: "destructive"
             });
@@ -460,10 +716,10 @@ const Invoicing = () => {
 
 
         // Validation: Check for zero percentage terms
-        const hasZeroPercentage = activeInvoice.terms.some(term => term.percentage === 0);
+        const hasZeroPercentage = activeInvoice.terms.some((term: any) => term.percentage === 0);
         if (hasZeroPercentage) {
             toast({
-                title: "Validation Error",
+                title: "Please Check",
                 description: "Payment percentage cannot be 0%.",
                 variant: "destructive"
             });
@@ -502,162 +758,51 @@ const Invoicing = () => {
 
         toast({
             title: "Invoice Saved",
-            description: `Invoice ${activeInvoice.invoiceNumber} has been saved.`
+            description: `Invoice ${activeInvoice.invoiceNumber} has been saved.`,
+            variant: "success"
         });
 
-        handleCloseEdit();
+        handleCloseInvoice();
     }
 
-    // Mark as Invoiced (only for Invoice Pending status)
-    const handleMarkAsInvoiced = () => {
-        if (!activeInvoice || activeInvoice.status !== "Invoice Pending") return;
+    // Mark as Invoiced (only for Draft status)
+    const handleMarkAsInvoiced = async () => {
+        if (!activeInvoice || activeInvoice.status !== "Draft" || isRowActionBusy) return;
 
-        // Validation: Check if terms exist
-        if (activeInvoice.terms.length === 0) {
-            toast({
-                title: "Validation Error",
-                description: "Please add at least one payment term before generating invoice.",
-                variant: "destructive"
-            });
-            return;
-        }
-
-
-
-        // Validation: Check for zero percentage terms
-        const hasZeroPercentage = activeInvoice.terms.some(term => term.percentage === 0);
-        if (hasZeroPercentage) {
-            toast({
-                title: "Validation Error",
-                description: "Payment percentage cannot be 0% before generating invoice.",
-                variant: "destructive"
-            });
-            return;
-        }
-
-        // Validation: Tax percentage
-        if (activeInvoice.taxPercentage < 0 || activeInvoice.taxPercentage > 100) {
-            toast({
-                title: "Validation Error",
-                description: "Tax percentage must be between 0% and 100% before generating invoice.",
-                variant: "destructive"
-            });
-            return;
-        }
-
-        const generatedInvoiceDate = new Date().toISOString().split('T')[0];
-        let generatedInvoiceNumber = "";
-
-        // Find the SO and update the specific term
-        const so = getSalesOrders().find(s => s.soNumber === activeInvoice.soNumber);
-        if (so && activeInvoice.terms.length > 0 && activeInvoice.termId) {
-            const termIndex = so.terms.findIndex(t => t.id === activeInvoice.termId) + 1;
-            const soNumSuffix = activeInvoice.soNumber.split('-').slice(1).join('-');
-            generatedInvoiceNumber = `INV-${soNumSuffix}${so.terms.length > 1 ? `-${termIndex}` : ''}`;
-
-            // Calculate due date
-            const term = activeInvoice.terms[0];
-            let calculatedDate = term.date || "";
+        setIsMarkingInvoiced(true);
+        try {
+            const res = await invoicingApi.updateInvoice(activeInvoice.id, { status_code: "OPEN" });
             
-            if (term.termType === "Days" && term.days && !term.date) {
-                // Calculate due date: Invoice Date + days
-                const invoiceDateObj = new Date(generatedInvoiceDate);
-                const dueDateObj = new Date(invoiceDateObj);
-                dueDateObj.setDate(dueDateObj.getDate() + term.days);
-                calculatedDate = dueDateObj.toISOString().split('T')[0];
-            } else if (term.termType === "Advance" && !term.date) {
-                // Advance terms due on invoice date
-                calculatedDate = generatedInvoiceDate;
-            } else if ((term.termType === "Delivery" || term.termType === "On Delivery") && !term.date && activeInvoice.deliveryDate) {
-                // Delivery terms due on delivery date
-                calculatedDate = activeInvoice.deliveryDate;
-            }
-
-            // Update the specific term in the SO
-            const updatedTerms = so.terms.map(t => {
-                 if (t.id === activeInvoice.termId) {
-                     return {
-                        ...t,
-                        percentage: term.percentage,
-                        value: term.percentage, // Sync value with percentage
-                        termType: term.termType as any,
-                        date: calculatedDate,
-                        days: term.days,
-                        note: term.note,
-                        isGenerated: true,
-                        invoiceNo: generatedInvoiceNumber,
-                        invoiceDate: generatedInvoiceDate
-                     };
-                 }
-                 return t;
-            });
-
-            updateSalesOrder(so.id, {
-                taxValue: activeInvoice.taxPercentage, // Update taxValue (new field)
-                taxPercentage: activeInvoice.taxPercentage, // Keep for backward compatibility
-                terms: updatedTerms
-            });
-            
-            // Check if all terms are generated and move to Dispatch Pending if so
-            const updatedSO = checkAndMoveToDispatchPending(so.id);
-            if (updatedSO && updatedSO.status === "Dispatch Pending") {
-                console.log('[INVOICING] All terms generated. SO moved to Dispatch Pending:', {
-                    soNumber: so.soNumber
+            if (res.isSuccessful) {
+                toast({
+                    title: "Invoice Opened",
+                    description: res.message || "Invoice status updated to Open successfully.",
+                    variant: "success"
+                });
+                setIsInvoiceDialogOpen(false);
+                fetchInvoices(); // Refresh the list
+            } else {
+                toast({
+                    title: "Update Failed",
+                    description: res.message || "Failed to update invoice status.",
+                    variant: "destructive"
                 });
             }
-            
-            // Create actual invoice record with status "Invoiced"
-            const newInvoice = createInvoice({
-                invoiceNumber: generatedInvoiceNumber,
-                invoiceDate: generatedInvoiceDate,
-                termId: activeInvoice.termId,
-                dueDate: calculatedDate || "",
-                soNumber: activeInvoice.soNumber,
-                soDate: activeInvoice.soDate,
-                customerName: activeInvoice.customerName,
-                contactPerson: activeInvoice.contactPerson,
-                mobileNo: activeInvoice.mobileNo,
-                shippingAddress: activeInvoice.shippingAddress,
-                billingAddress: activeInvoice.billingAddress,
-                deliveryDate: activeInvoice.deliveryDate,
-                currency: activeInvoice.currency,
-                remarks: activeInvoice.remarks,
-                // Discount fields
-                discountValue: activeInvoice.discountValue || 0,
-                discountType: activeInvoice.discountType || "%",
-                discountAmount: activeInvoice.discountAmount || 0,
-                // Tax and totals
-                taxPercentage: activeInvoice.taxPercentage,
-                subtotal: activeInvoice.subtotal,
-                tax: activeInvoice.tax,
-                grandTotal: activeInvoice.grandTotal,
-                status: "Invoiced",
-                terms: [{
-                    ...term,
-                    date: calculatedDate
-                }],
-                items: activeInvoice.items
-            });
-
-            refreshInvoices();
-
+        } catch (error) {
+            console.error("Error updating invoice status:", error);
             toast({
-                title: "Invoice Generated",
-                description: `Invoice ${generatedInvoiceNumber} has been generated successfully for this payment term. Downloading PDF...`
-            });
-
-            // Trigger PDF download with the new invoice data
-            handleDownloadInvoice(newInvoice);
-
-            handleCloseEdit();
-        } else {
-             toast({
                 title: "Error",
-                description: "Sales order or term data mismatch.",
+                description: "An unexpected error occurred while updating the invoice.",
                 variant: "destructive"
             });
+        } finally {
+            setIsMarkingInvoiced(false);
         }
     };
+
+    if (!canViewInvoicing) {
+        return <Unauthorized />;
+    }
 
     return (
         <div className="h-full flex flex-col gap-6 animate-in fade-in duration-500">
@@ -667,7 +812,7 @@ const Invoicing = () => {
             {/* Toolbar */}
             <AppListToolbar
                 search={{
-                    placeholder: "Search by Invoice No, SO No, Customer...",
+                    placeholder: "Search by Invoice Code, SO Code, Customer...",
                     value: searchTerm,
                     onChange: (val) => setSearchTerm(val)
                 }}
@@ -686,8 +831,10 @@ const Invoicing = () => {
                         onChange: setFilterStatus,
                         options: [
                             { value: "all", label: "All Status" },
-                            { value: "Invoice Pending", label: "Invoice Pending" },
-                            { value: "Invoiced", label: "Invoiced" }
+                            ...invoicingStatuses.map(s => ({
+                                value: String(s.id),
+                                label: s.name
+                            }))
                         ],
                         searchable: true
                     }
@@ -701,52 +848,71 @@ const Invoicing = () => {
                         <Table>
                             <TableHeader>
                                 <TableRow className="bg-muted/50 hover:bg-muted/50">
-                                    <TableHead className="font-semibold text-xs uppercase tracking-wider">Invoice No</TableHead>
+                                    <TableHead className="font-semibold text-xs uppercase tracking-wider">Invoice Code</TableHead>
                                     <TableHead className="font-semibold text-xs uppercase tracking-wider">Invoice Date</TableHead>
-                                    <TableHead className="font-semibold text-xs uppercase tracking-wider">SO No</TableHead>
-                                    <TableHead className="font-semibold text-xs uppercase tracking-wider">Customer</TableHead>
-                                    <TableHead className="font-semibold text-xs uppercase tracking-wider">Term Type</TableHead>
-                                    <TableHead className="font-semibold text-xs uppercase tracking-wider text-right">Invoice Amount</TableHead>
+                                    <TableHead className="font-semibold text-xs uppercase tracking-wider">SO Code</TableHead>
+                                    <TableHead className="font-semibold text-xs uppercase tracking-wider w-[250px]">Customer</TableHead>
+                                    <TableHead className="font-semibold text-xs uppercase tracking-wider text-right w-[180px]">Invoice Amount</TableHead>
                                     <TableHead className="font-semibold text-xs uppercase tracking-wider text-center">Status</TableHead>
                                     <TableHead className="text-center w-[100px]">Actions</TableHead>
                                 </TableRow>
                             </TableHeader>
                             <TableBody>
-                                {paginatedData.length === 0 ? (
+                                {isListLoading ? (
+                                    <TableRow>
+                                        <TableCell colSpan={7} className="h-32 text-center">
+                                            <div className="flex flex-col items-center justify-center gap-3">
+                                                <Loader2 className="h-8 w-8 animate-spin text-primary" />
+                                                <p className="text-sm text-muted-foreground">Loading...</p>
+                                            </div>
+                                        </TableCell>
+                                    </TableRow>
+                                ) : invoices.length === 0 ? (
                                     <TableRow>
                                         <TableCell colSpan={7} className="h-32 text-center text-muted-foreground italic">
                                             No invoices found
                                         </TableCell>
                                     </TableRow>
                                 ) : (
-                                    paginatedData.map((invoice) => {
+                                    invoices.map((invoice) => {
+                                        const isDraft = (invoice.status_name || "").toUpperCase().includes("DRAFT");
                                         return (
-                                            <TableRow key={invoice.id} className="hover:bg-muted/30 transition-colors border-b last:border-none">
+                                            <TableRow key={invoice.invoice_id} className="hover:bg-muted/30 transition-colors border-b last:border-none">
                                                 <TableCell className="py-4 font-mono font-medium">
                                                     <div className="flex flex-col">
-                                                        <span>{invoice.invoiceNumber}</span>
-                                                        {invoice.terms && invoice.terms.length > 0 && invoice.terms[0].isGenerated ? (
-                                                            <div className="flex flex-col">
-                                                                <span className="text-xs text-muted-foreground">Generated: {invoice.terms[0].invoiceNo}</span>
-                                                                <span className="text-xs text-muted-foreground">{safeFormatDate(invoice.terms[0].invoiceDate, "MMM dd, yyyy")}</span>
-                                                            </div>
-                                                        ) : null}
+                                                        <span>{isDraft ? "-" : invoice.invoice_code}</span>
                                                     </div>
                                                 </TableCell>
                                                 <TableCell className="py-4 text-sm font-medium text-slate-600">
-                                                    {safeFormatDate(invoice.invoiceDate)}
+                                                    {isDraft ? "-" : safeFormatDate(invoice.invoice_date)}
                                                 </TableCell>
-                                                <TableCell className="py-4 font-mono font-medium">{invoice.soNumber}</TableCell>
-                                                <TableCell className="py-4 text-sm font-bold">{invoice.customerName}</TableCell>
-                                                <TableCell className="py-4 text-sm font-medium">{invoice.terms && invoice.terms.length > 0 ? invoice.terms[0].termType : "-"}</TableCell>
-                                                <TableCell className="py-4 text-right text-sm font-bold text-green-600">USh {(invoice.grandTotal || 0).toFixed(2)}</TableCell>
+                                                <TableCell className="py-4 font-mono font-medium">{invoice.so_code}</TableCell>
+                                                <TableCell className="py-4 text-sm font-bold">{invoice.customer_name}</TableCell>
+                                                <TableCell className="py-4 text-right text-sm font-bold text-green-600">
+                                                    {getCurrencySymbol(invoice.currency_name || "UGX")} {(invoice.invoice_amount || 0).toFixed(2)}
+                                                </TableCell>
                                                 <TableCell className="py-4 text-center">
-                                                    {getInvoiceStatusBadge(invoice.status)}
+                                                    {getInvoiceStatusBadge(invoice.status_name)}
                                                 </TableCell>
                                                 <TableCell className="py-4 text-center">
                                                     <TableActionButtons
-                                                        onView={() => handleViewInvoice(invoice)}
-                                                        onEdit={invoice.status === "Invoice Pending" && (!invoice.terms || invoice.terms.length === 0 || !invoice.terms[0].isGenerated) ? () => handleEditInvoice(invoice) : undefined}
+                                                        onView={canViewInvoicing ? () => handleViewInvoice(invoice) : undefined}
+                                                        onEdit={canEditInvoicing && isDraft ? () => handleEditInvoice(invoice) : undefined}
+                                                        customActions={
+                                                            canDeleteInvoicing && !isRowActionBusy && (invoice.status_name?.toUpperCase().includes("OPEN") || 
+                                                             invoice.status_name?.toUpperCase().includes("PARTIAL")) && (
+                                                                <Button 
+                                                                    variant="ghost" 
+                                                                    size="icon" 
+                                                                    className="h-8 w-8 text-red-500 hover:text-red-700 hover:bg-red-50" 
+                                                                    onClick={() => handleOpenCancelDialog(invoice)}
+                                                                    disabled={isRowActionBusy}
+                                                                    title="Cancel Invoice"
+                                                                >
+                                                                    <X className="h-4 w-4" />
+                                                                </Button>
+                                                            )
+                                                        }
                                                     />
                                                 </TableCell>
                                             </TableRow>
@@ -757,12 +923,11 @@ const Invoicing = () => {
                         </Table>
                     </div>
 
-                    {/* Pagination */}
-                    {filteredInvoices.length > 0 && (
+                    {totalRecords > 0 && !isListLoading && (
                         <DataTablePagination
                             currentPage={currentPage}
                             totalPages={totalPages}
-                            totalItems={filteredInvoices.length}
+                            totalItems={totalRecords}
                             itemsPerPage={itemsPerPage}
                             onPageChange={setCurrentPage}
                             onItemsPerPageChange={setItemsPerPage}
@@ -772,10 +937,19 @@ const Invoicing = () => {
                 </CardContent>
             </Card>
 
-            {/* View Invoice Dialog - PDF Preview (Read-Only) */}
-            <Dialog open={isViewDialogOpen} onOpenChange={(open) => !open && handleCloseView()}>
-                <DialogContent className="max-w-[900px] max-h-[95vh] flex flex-col p-0">
-                    <div className="flex-1 overflow-y-auto p-8 bg-slate-100">
+            {/* PDF Preview Dialog - A4 Layout */}
+            <Dialog open={isPDFDialogOpen} onOpenChange={(open) => !open && handleClosePDF()}>
+                <DialogContent 
+                    className="max-w-[900px] max-h-[95vh] flex flex-col p-0"
+                    onInteractOutside={(e) => e.preventDefault()}
+                    onEscapeKeyDown={(e) => e.preventDefault()}
+                >
+                    <div className="flex-1 overflow-y-auto p-8 bg-slate-100 relative">
+                        {isViewDetailLoading && (
+                            <div className="absolute inset-0 z-10 flex items-center justify-center bg-slate-100/80">
+                                <Loader2 className="h-8 w-8 animate-spin text-primary" />
+                            </div>
+                        )}
                         {/* A4 Page Container */}
                         <div className="max-w-[210mm] mx-auto bg-white shadow-2xl" style={{ minHeight: '297mm' }}>
                             {/* PDF Document Content */}
@@ -783,161 +957,146 @@ const Invoicing = () => {
                                 {/* Header */}
                                 <div className="flex justify-between items-start mb-8 pb-6 border-b-2 border-slate-300">
                                     <div>
-                                        <h1 className="text-2xl font-bold text-slate-800 mb-1">MASTER-ERP</h1>
-                                        <p className="text-xs text-slate-600">Industrial Solutions & Services</p>
-                                        <p className="text-xs text-slate-600">Ahmedabad, Gujarat, India</p>
+                                        <h1 className="text-2xl font-bold text-slate-800 mb-1">{activeInvoice?.companyName || ""}</h1>
+                                        <p className="text-xs text-slate-600 whitespace-pre-line">{activeInvoice?.companyAddress || ""}</p>
                                     </div>
-                                    <div className="text-right">
-                                        <h2 className="text-xl font-bold text-slate-800">TAX INVOICE</h2>
-                                        <p className="text-xs text-slate-900 mt-1 font-semibold">{activeInvoice?.invoiceNumber}</p>
-                                        <div className="inline-block px-3 py-1 rounded text-[10px] font-bold mt-2 bg-slate-100 text-slate-700">
-                                            {activeInvoice?.status.toUpperCase()}
+                                    <div className="text-right flex flex-col items-end">
+                                        <h2 className="text-2xl font-bold text-slate-900 leading-none">TAX INVOICE</h2>
+                                        <div className="flex items-center gap-2 mt-2">
+                                            <div className={`px-2 py-0.5 rounded text-[10px] font-bold ${
+                                                activeInvoice?.status === "Draft" ? "bg-slate-100 text-slate-600 border border-slate-200" : 
+                                                activeInvoice?.status === "Open" ? "bg-blue-50 text-blue-700 border border-blue-100" : 
+                                                "bg-emerald-50 text-emerald-700 border border-emerald-100"
+                                            }`}>
+                                                {activeInvoice?.status.toUpperCase()}
+                                            </div>
+                                            <p className="text-sm text-slate-900 font-bold">
+                                                {activeInvoice?.status === "Draft" ? "-" : activeInvoice?.invoiceNumber}
+                                            </p>
                                         </div>
                                     </div>
                                 </div>
 
-                                {/* Customer & Invoice Information - Stacked vertically: Bill To first, then Invoice Details */}
-                                <div className="mb-6">
-                                    <div className="border border-slate-200 rounded-lg p-4 mb-4">
-                                        <h3 className="text-[9px] uppercase font-bold text-slate-600 mb-3 pb-2 border-b border-slate-200 tracking-wide">Bill To</h3>
-                                        <div className="space-y-1.5">
-                                            <div className="flex text-xs">
-                                                <span className="w-32 text-slate-600 font-medium">Customer:</span>
+                                {/* Customer & Invoice Information - Stacked vertically */}
+                                <div className="space-y-4 mb-6">
+                                    <div className="border border-slate-200 rounded-lg p-4">
+                                        <h3 className="text-[9px] uppercase font-bold text-slate-500 mb-3 tracking-wide border-b pb-1">Bill To</h3>
+                                        <div className="space-y-2">
+                                            <div className="grid grid-cols-[120px_1fr] text-xs">
+                                                <span className="text-slate-600">Customer:</span>
                                                 <span className="font-bold text-slate-900">{activeInvoice?.customerName}</span>
                                             </div>
-                                            <div className="flex text-xs">
-                                                <span className="w-32 text-slate-600 font-medium">Contact Person:</span>
-                                                <span className="font-medium text-slate-900">{activeInvoice?.contactPerson}</span>
+                                            <div className="grid grid-cols-[120px_1fr] text-xs">
+                                                <span className="text-slate-600">Contact Person:</span>
+                                                <span className="text-slate-900 font-medium">{activeInvoice?.contactPerson}</span>
                                             </div>
-                                            <div className="flex text-xs">
-                                                <span className="w-32 text-slate-600 font-medium">Mobile:</span>
-                                                <span className="font-medium text-slate-900">{activeInvoice?.mobileNo || "N/A"}</span>
+                                            <div className="grid grid-cols-[120px_1fr] text-xs">
+                                                <span className="text-slate-600">Mobile:</span>
+                                                <span className="text-slate-900 font-medium">{activeInvoice?.mobileNo || "N/A"}</span>
                                             </div>
-                                            <div className="flex text-xs">
-                                                <span className="w-32 text-slate-600 font-medium">Billing Address:</span>
-                                                <span className="font-medium text-slate-900">{activeInvoice?.billingAddress}</span>
+                                            <div className="grid grid-cols-[120px_1fr] text-xs">
+                                                <span className="text-slate-600">Billing Address:</span>
+                                                <span className="text-slate-900 font-medium">{activeInvoice?.billingAddress}</span>
                                             </div>
-                                            <div className="flex text-xs">
-                                                <span className="w-32 text-slate-600 font-medium">Shipping Address:</span>
-                                                <span className="font-medium text-slate-900">{activeInvoice?.shippingAddress}</span>
+                                            <div className="grid grid-cols-[120px_1fr] text-xs">
+                                                <span className="text-slate-600">Shipping Address:</span>
+                                                <span className="text-slate-900 font-medium">{activeInvoice?.shippingAddress}</span>
                                             </div>
                                         </div>
                                     </div>
+
                                     <div className="border border-slate-200 rounded-lg p-4">
-                                        <h3 className="text-[9px] uppercase font-bold text-slate-600 mb-3 pb-2 border-b border-slate-200 tracking-wide">Invoice Details</h3>
-                                        <div className="space-y-1.5">
-                                            <div className="flex text-xs">
-                                                <span className="w-32 text-slate-600 font-medium">Invoice Date:</span>
-                                                <span className="font-medium text-slate-900">
-                                                    {safeFormatDate(activeInvoice?.invoiceDate)}
+                                        <h3 className="text-[9px] uppercase font-bold text-slate-500 mb-3 tracking-wide border-b pb-1">Invoice Details</h3>
+                                        <div className="space-y-2">
+                                            <div className="grid grid-cols-[120px_1fr] text-xs">
+                                                <span className="text-slate-600">Invoice Date:</span>
+                                                <span className="text-slate-900 font-medium">
+                                                    {activeInvoice?.status === "Draft" ? "-" : safeFormatDate(activeInvoice?.invoiceDate)}
                                                 </span>
                                             </div>
-                                            <div className="flex text-xs">
-                                                <span className="w-32 text-slate-600 font-medium">SO Number:</span>
+                                            <div className="grid grid-cols-[120px_1fr] text-xs">
+                                                <span className="text-slate-600">SO Code:</span>
                                                 <span className="font-bold text-slate-900">{activeInvoice?.soNumber}</span>
                                             </div>
-                                            <div className="flex text-xs">
-                                                <span className="w-32 text-slate-600 font-medium">SO Date:</span>
-                                                <span className="font-medium text-slate-900">
-                                                    {activeInvoice?.soDate ? format(new Date(activeInvoice.soDate), "dd-MM-yyyy") : "-"}
-                                                </span>
+                                            <div className="grid grid-cols-[120px_1fr] text-xs">
+                                                <span className="text-slate-600">SO Date:</span>
+                                                <span className="text-slate-900 font-medium">{safeFormatDate(activeInvoice?.soDate)}</span>
                                             </div>
-                                            <div className="flex text-xs">
-                                                <span className="w-32 text-slate-600 font-medium">Delivery Date:</span>
-                                                <span className="font-medium text-slate-900">
-                                                    {activeInvoice?.deliveryDate ? format(new Date(activeInvoice.deliveryDate), "dd-MM-yyyy") : "-"}
-                                                </span>
+                                            <div className="grid grid-cols-[120px_1fr] text-xs">
+                                                <span className="text-slate-600">Delivery Date:</span>
+                                                <span className="text-slate-900 font-medium">{safeFormatDate(activeInvoice?.deliveryDate)}</span>
                                             </div>
-                                            <div className="flex text-xs">
-                                                <span className="w-32 text-slate-600 font-medium">Currency:</span>
-                                                <span className="font-bold text-slate-900">{activeInvoice?.currency || "USD"}</span>
+                                            <div className="grid grid-cols-[120px_1fr] text-xs">
+                                                <span className="text-slate-600">Currency:</span>
+                                                <span className="font-bold text-slate-900">{activeInvoice?.currency || "USh"}</span>
                                             </div>
                                         </div>
                                     </div>
                                 </div>
 
-                                {/* Remarks - Moved before Payment Terms */}
-                                {activeInvoice?.remarks && (
-                                    <div className="mb-6">
-                                        <h3 className="text-[9px] font-bold text-slate-600 mb-2 uppercase tracking-wide">Remarks / Special Instructions</h3>
-                                        <div className="border border-slate-300 rounded p-3 bg-slate-50 text-xs text-slate-700 min-h-[40px]">
-                                            {activeInvoice.remarks}
-                                        </div>
-                                    </div>
-                                )}
 
-                                {/* Payment Terms - Now displayed as bullet points with proper due information */}
+                                {/* Payment Terms Section - Updated to Table Format */}
                                 {activeInvoice && activeInvoice.terms.length > 0 && (
                                     <div className="mb-6">
-                                        <h3 className="text-[9px] font-bold text-slate-600 mb-2 uppercase tracking-wide">Payment Terms</h3>
-                                        <ul className="space-y-1">
-                                            {activeInvoice.terms.map((term) => {
-                                                let termDescription = `${term.percentage}% ${term.termType}`;
-                                                
-                                                // FIX 2: Show proper due information based on term type
-                                                if (term.termType === "Delivery" || term.termType === "On Delivery") {
-                                                    if (term.date) {
-                                                        termDescription += ` – Due on ${format(new Date(term.date), "dd-MM-yyyy")}`;
-                                                    } else if (activeInvoice.deliveryDate) {
-                                                        termDescription += ` – Due on delivery (${format(new Date(activeInvoice.deliveryDate), "dd-MM-yyyy")})`;
-                                                    } else {
-                                                        termDescription += ` – Due on delivery`;
-                                                    }
-                                                } else if (term.termType === "Days" && term.days) {
-                                                    // Calculate due date: Invoice Date + days
-                                                    if (activeInvoice.invoiceDate && activeInvoice.invoiceDate !== "-") {
-                                                        const invoiceDate = new Date(activeInvoice.invoiceDate);
-                                                        const dueDate = new Date(invoiceDate);
-                                                        dueDate.setDate(dueDate.getDate() + term.days);
-                                                        termDescription += ` within ${term.days} days – Due on ${format(dueDate, "dd-MM-yyyy")}`;
-                                                    } else {
-                                                        termDescription += ` within ${term.days} days – Due on Invoice generation`;
-                                                    }
-                                                } else if (term.termType === "Advance") {
-                                                    if (term.date) {
-                                                        termDescription += ` – Due on ${format(new Date(term.date), "dd-MM-yyyy")}`;
-                                                    } else if (activeInvoice.invoiceDate && activeInvoice.invoiceDate !== "-") {
-                                                        termDescription += ` – Due on ${format(new Date(activeInvoice.invoiceDate), "dd-MM-yyyy")} (Invoice Date)`;
-                                                    } else {
-                                                        termDescription += ` – Due on Invoice generation`;
-                                                    }
-                                                } else if (term.date) {
-                                                    termDescription += ` – Due on ${format(new Date(term.date), "dd-MM-yyyy")}`;
-                                                }
-                                                
-                                                return (
-                                                    <li key={term.id} className="text-xs text-slate-700">
-                                                        • {termDescription}
-                                                    </li>
-                                                );
-                                            })}
-                                        </ul>
+                                        <h3 className="text-[9px] uppercase font-bold text-slate-500 mb-2 tracking-wide">Payment Terms</h3>
+                                        <table className="w-full border border-slate-200 text-xs">
+                                            <thead>
+                                                <tr className="bg-slate-50 border-b border-slate-200">
+                                                    <th className="px-3 py-1.5 text-left text-[9px] font-bold text-slate-600 border-r border-slate-200">TERM TYPE</th>
+                                                    <th className="px-3 py-1.5 text-center text-[9px] font-bold text-slate-600 border-r border-slate-200">PERCENTAGE</th>
+                                                    <th className="px-3 py-1.5 text-center text-[9px] font-bold text-slate-600 border-r border-slate-200">DAYS</th>
+                                                    <th className="px-3 py-1.5 text-right text-[9px] font-bold text-slate-600">AMOUNT</th>
+                                                </tr>
+                                            </thead>
+                                            <tbody>
+                                                {activeInvoice.terms.map((term: any, index: number) => (
+                                                    <tr key={index} className="border-b border-slate-200 last:border-b-0">
+                                                        <td className="px-3 py-2 text-left text-slate-700 border-r border-slate-200 font-medium">{term.termType}</td>
+                                                        <td className="px-3 py-2 text-center text-slate-700 border-r border-slate-200">{term.percentage}%</td>
+                                                        <td className="px-3 py-2 text-center text-slate-700 border-r border-slate-200">{term.days || "-"}</td>
+                                                        <td className="px-3 py-2 text-right font-bold text-slate-900">
+                                                            {activeInvoice.currencySymbol} {((activeInvoice.grandTotal * term.percentage) / 100).toFixed(2)}
+                                                        </td>
+                                                    </tr>
+                                                ))}
+                                            </tbody>
+                                        </table>
                                     </div>
                                 )}
 
                                 {/* Items Table */}
                                 <div className="mb-6">
-                                    <h3 className="text-[9px] font-bold text-slate-600 mb-2 uppercase tracking-wide">Invoice Items</h3>
-                                    <table className="w-full border-collapse border border-slate-300">
+                                    <h3 className="text-[9px] uppercase font-bold text-slate-500 mb-2 tracking-wide">Invoice Items</h3>
+                                    <table className="w-full border border-slate-200">
                                         <thead>
-                                            <tr className="bg-slate-50">
-                                                <th className="border border-slate-300 px-3 py-2 text-center text-[9px] uppercase font-bold text-slate-600" style={{ width: '50px' }}>#</th>
-                                                <th className="border border-slate-300 px-3 py-2 text-left text-[9px] uppercase font-bold text-slate-600">Item Name</th>
-                                                <th className="border border-slate-300 px-3 py-2 text-center text-[9px] uppercase font-bold text-slate-600" style={{ width: '60px' }}>UOM</th>
-                                                <th className="border border-slate-300 px-3 py-2 text-right text-[9px] uppercase font-bold text-slate-600" style={{ width: '80px' }}>Qty</th>
-                                                <th className="border border-slate-300 px-3 py-2 text-right text-[9px] uppercase font-bold text-slate-600" style={{ width: '80px' }}>Rate</th>
-                                                <th className="border border-slate-300 px-3 py-2 text-right text-[9px] uppercase font-bold text-slate-600" style={{ width: '100px' }}>Amount</th>
+                                            <tr className="bg-slate-50 border-b border-slate-200">
+                                                <th className="px-3 py-2 text-center text-[9px] font-bold text-slate-600 border-r border-slate-200" style={{ width: '40px' }}>#</th>
+                                                <th className="px-3 py-2 text-left text-[9px] font-bold text-slate-600 border-r border-slate-200">ITEM NAME</th>
+                                                <th className="px-3 py-2 text-center text-[9px] font-bold text-slate-600 border-r border-slate-200" style={{ width: '60px' }}>UOM</th>
+                                                <th className="px-3 py-2 text-center text-[9px] font-bold text-slate-600 border-r border-slate-200" style={{ width: '60px' }}>QTY</th>
+                                                <th className="px-3 py-2 text-right text-[9px] font-bold text-slate-600 border-r border-slate-200" style={{ width: '100px' }}>UNIT PRICE</th>
+                                                <th className="px-3 py-2 text-right text-[9px] font-bold text-slate-600" style={{ width: '120px' }}>AMOUNT</th>
                                             </tr>
                                         </thead>
                                         <tbody>
-                                            {activeInvoice?.items.map((item, index) => (
-                                                <tr key={item.id}>
-                                                    <td className="border border-slate-300 px-3 py-2 text-center text-xs font-medium text-slate-700">{index + 1}</td>
-                                                    <td className="border border-slate-300 px-3 py-2 text-xs font-bold text-slate-900">{item.itemName}</td>
-                                                    <td className="border border-slate-300 px-3 py-2 text-center text-xs text-slate-600">{item.uom}</td>
-                                                    <td className="border border-slate-300 px-3 py-2 text-right text-xs font-medium text-slate-700">{item.orderedQty}</td>
-                                                    <td className="border border-slate-300 px-3 py-2 text-right text-xs font-medium text-slate-700">USh {item.rate.toFixed(2)}</td>
-                                                    <td className="border border-slate-300 px-3 py-2 text-right text-xs font-bold text-slate-900">USh {item.price.toFixed(2)}</td>
+                                            {activeInvoice?.items.map((item: any, index: number) => (
+                                                <tr key={item.id} className="border-b border-slate-200 last:border-b-0">
+                                                    <td className="px-3 py-3 text-center text-xs text-slate-600 border-r border-slate-200">{index + 1}</td>
+                                                    <td className="px-3 py-3 text-left text-xs font-bold text-slate-900 border-r border-slate-200">{item.itemName}</td>
+                                                    <td className="px-3 py-3 text-center text-xs text-slate-600 border-r border-slate-200">{item.uom}</td>
+                                                    <td className="px-3 py-3 text-center text-xs font-medium text-slate-900 border-r border-slate-200">{item.orderedQty}</td>
+                                                    <td className="px-3 py-3 text-right text-xs text-slate-900 border-r border-slate-200">
+                                                        <div className="flex items-center justify-end gap-1">
+                                                            <span className="text-slate-500">{activeInvoice.currencySymbol}</span>
+                                                            <span className="font-medium">{item.rate.toFixed(2)}</span>
+                                                        </div>
+                                                    </td>
+                                                    <td className="px-3 py-3 text-right text-xs text-slate-900">
+                                                        <div className="flex items-center justify-end gap-1">
+                                                            <span className="text-slate-500">{activeInvoice.currencySymbol}</span>
+                                                            <span className="font-bold">{item.price.toFixed(2)}</span>
+                                                        </div>
+                                                    </td>
                                                 </tr>
                                             ))}
                                         </tbody>
@@ -945,48 +1104,35 @@ const Invoicing = () => {
                                 </div>
 
                                 {/* Totals */}
-                                {activeInvoice && (
-                                    <div className="flex justify-end mb-6">
-                                        <div className="w-80 border border-slate-300 rounded-lg p-4 bg-slate-50">
-                                            <div className="flex justify-between text-xs mb-2">
-                                                <span className="text-slate-600 font-medium">Subtotal:</span>
-                                                <span className="font-bold text-slate-900">USh {(activeInvoice.subtotal || 0).toFixed(2)}</span>
+                                <div className="flex justify-end">
+                                    <div className="w-72 border border-slate-200 rounded-lg p-4 bg-slate-50/30">
+                                        <div className="space-y-2">
+                                            <div className="flex justify-between text-xs">
+                                                <span className="text-slate-600">Subtotal:</span>
+                                                <span className="font-bold text-slate-900">{activeInvoice?.currencySymbol} {(activeInvoice?.subtotal || 0).toFixed(2)}</span>
                                             </div>
-                                            <div className="flex justify-between text-xs mb-2">
-                                                <span className="text-slate-600 font-medium">Discount ({activeInvoice.discountType === "%" ? `${activeInvoice.discountValue || 0}%` : "Amount"}):</span>
-                                                <span className="font-bold text-red-600">-USh {(activeInvoice.discountAmount || 0).toFixed(2)}</span>
+                                            <div className="flex justify-between text-xs">
+                                                <span className="text-slate-600">Discount ({activeInvoice?.discountValue}%):</span>
+                                                <span className="font-bold text-red-600">-{activeInvoice?.currencySymbol} {(activeInvoice?.discountAmount || 0).toFixed(2)}</span>
                                             </div>
-                                            <div className="flex justify-between text-xs mb-2">
-                                                <span className="text-slate-600 font-medium">Tax ({activeInvoice.taxPercentage}%):</span>
-                                                <span className="font-bold text-slate-900">USh {(activeInvoice.tax || 0).toFixed(2)}</span>
+                                            <div className="flex justify-between text-xs">
+                                                <span className="text-slate-600">Tax ({activeInvoice?.taxPercentage}%):</span>
+                                                <span className="font-bold text-slate-900">+{activeInvoice?.currencySymbol} {(activeInvoice?.tax || 0).toFixed(2)}</span>
                                             </div>
-                                            <div className="flex justify-between text-sm border-t-2 border-slate-300 pt-2 mt-2">
-                                                <span className="font-bold text-slate-900">Grand Total:</span>
-                                                <span className="font-bold text-slate-900 text-lg">USh {(activeInvoice.grandTotal || 0).toFixed(2)}</span>
+                                            <div className="flex justify-between text-sm border-t border-slate-200 pt-2 mt-2">
+                                                <span className="font-bold text-slate-900 uppercase tracking-wide">Grand Total</span>
+                                                <span className="font-bold text-slate-900 text-lg">{activeInvoice?.currencySymbol} {(activeInvoice?.grandTotal || 0).toFixed(2)}</span>
                                             </div>
                                         </div>
                                     </div>
-                                )}
-
-                                {/* Footer */}
-                                <div className="mt-8 pt-4 border-t border-slate-200 text-center">
-                                    <p className="text-[9px] text-slate-500">This is a computer generated document. Generated on {format(new Date(), "dd-MM-yyyy, HH:mm")}</p>
-                                    <p className="text-[9px] text-slate-600 font-semibold">Tassos Consultancy Services | Govt IT Solutions | Ahmedabad</p>
                                 </div>
                             </div>
                         </div>
                     </div>
-
-                    {/* Action Buttons Outside Document */}
                     <div className="flex justify-end gap-3 p-4 border-t bg-white">
-                        <Button variant="outline" onClick={handleCloseView}>
-                            Close
-                        </Button>
-                        {activeInvoice?.status !== "Invoice Pending" && (
-                            <Button 
-                                onClick={() => handleDownloadInvoice(activeInvoice || undefined)} 
-                                className="bg-blue-600 hover:bg-blue-700"
-                            >
+                        <Button variant="outline" onClick={handleClosePDF}>Close</Button>
+                        {canPrint(MODULE_KEY) && activeInvoice?.status !== "Draft" && (
+                            <Button onClick={() => handleDownloadInvoice()} className="bg-blue-600 hover:bg-blue-700">
                                 <Download className="mr-2 h-4 w-4" /> Download PDF
                             </Button>
                         )}
@@ -994,247 +1140,279 @@ const Invoicing = () => {
                 </DialogContent>
             </Dialog>
 
-            {/* Edit Invoice Dialog - Full Form with Actions */}
-            <Dialog open={isEditDialogOpen} onOpenChange={(open) => !open && handleCloseEdit()}>
-                <DialogContent className="sm:max-w-[1200px] max-h-[95vh] flex flex-col p-0">
-                    <DialogHeader className="p-6 pb-2">
-                        <DialogTitle className="text-2xl font-bold">Edit Invoice</DialogTitle>
+            {/* Unified Invoice Form Dialog - Sales Order Structure */}
+            <Dialog open={isInvoiceDialogOpen} onOpenChange={(open) => !open && handleCloseInvoice()}>
+                <DialogContent 
+                    className="flex! min-h-0 w-[95%] max-h-[82vh] flex-col gap-0 overflow-hidden bg-white p-0 sm:max-w-3xl md:max-w-4xl lg:max-w-6xl xl:max-w-7xl"
+                    onInteractOutside={(e) => e.preventDefault()}
+                    onEscapeKeyDown={(e) => e.preventDefault()}
+                >
+                    <DialogHeader className="border-b bg-white p-4 sm:p-6">
+                        <DialogTitle className="text-2xl font-bold">Invoice</DialogTitle>
                         <DialogDescription>
-                            {activeInvoice?.status === "Invoice Pending" ? "Edit invoice terms and tax, then generate invoice." : "View and manage invoice details."}
+                            Review invoice details and information.
                         </DialogDescription>
                     </DialogHeader>
 
-                    <div className="flex-1 overflow-y-auto px-6 py-4 space-y-6">
-                        {/* Header Info */}
-                        <div className="grid grid-cols-3 gap-4 p-4 bg-muted/30 rounded-lg border">
-                            <div className="space-y-1">
-                                <Label className="text-[10px] uppercase font-bold text-muted-foreground">Invoice Number</Label>
-                                <p className="text-sm font-bold text-primary">{activeInvoice?.invoiceNumber}</p>
+                    <div className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto px-4 py-4 sm:px-6 space-y-6 relative">
+                        {isFormOpening && (
+                            <div className="absolute inset-0 z-10 flex items-center justify-center bg-background/60">
+                                <Loader2 className="h-8 w-8 animate-spin text-primary" />
                             </div>
-                            <div className="space-y-1">
-                                <Label className="text-[10px] uppercase font-bold text-muted-foreground">Invoice Date</Label>
-                                <p className="text-sm font-medium">{activeInvoice?.invoiceDate}</p>
-                            </div>
-                            <div className="space-y-1">
-                                <Label className="text-[10px] uppercase font-bold text-muted-foreground">Status</Label>
-                                {activeInvoice && getInvoiceStatusBadge(activeInvoice.status)}
-                            </div>
-                        </div>
-
-                        {/* Customer + SO Info (Read-only) */}
-                        <div className="space-y-4">
-                            <h3 className="text-lg font-semibold border-b pb-2">Customer & Sales Order Information</h3>
-                            <div className="grid grid-cols-2 gap-4">
-                                <div className="space-y-1">
-                                    <Label className="text-[10px] uppercase font-bold text-muted-foreground">SO Number</Label>
-                                    <p className="text-sm font-bold text-primary">{activeInvoice?.soNumber}</p>
+                        )}
+                        {/* Header Info - From Sales Order structure */}
+                        <div className="rounded-lg border bg-muted/20 p-4 sm:p-5">
+                            <div className="grid grid-cols-1 gap-4 sm:grid-cols-3 sm:items-start">
+                                <div className="min-w-0 space-y-1">
+                                    <Label className="text-[10px] uppercase font-bold text-muted-foreground">Invoice Code</Label>
+                                    <p className="truncate text-sm font-bold text-primary">
+                                        {activeInvoice?.status === "Draft" ? "-" : (activeInvoice?.invoiceNumber || "-")}
+                                    </p>
                                 </div>
-                                <div className="space-y-1">
-                                    <Label className="text-[10px] uppercase font-bold text-muted-foreground">SO Date</Label>
-                                    <p className="text-sm font-medium">{activeInvoice?.soDate}</p>
+                                <div className="min-w-0 space-y-1">
+                                    <Label className="text-[10px] uppercase font-bold text-muted-foreground">Invoice Date</Label>
+                                    <p className="text-sm font-medium">
+                                        {activeInvoice?.status === "Draft" ? "-" : safeFormatDate(activeInvoice?.invoiceDate)}
+                                    </p>
                                 </div>
-                                <div className="space-y-1">
-                                    <Label className="text-[10px] uppercase font-bold text-muted-foreground">Customer Name</Label>
-                                    <p className="text-sm font-bold text-primary">{activeInvoice?.customerName}</p>
-                                </div>
-                                <div className="space-y-1">
-                                    <Label className="text-[10px] uppercase font-bold text-muted-foreground">Contact Person</Label>
-                                    <p className="text-sm font-medium">{activeInvoice?.contactPerson}</p>
-                                </div>
-                                <div className="space-y-1">
-                                    <Label className="text-[10px] uppercase font-bold text-muted-foreground">Mobile No</Label>
-                                    <p className="text-sm font-medium">{activeInvoice?.mobileNo || "-"}</p>
-                                </div>
-                                <div className="space-y-1">
-                                    <Label className="text-[10px] uppercase font-bold text-muted-foreground">Delivery Date</Label>
-                                    <p className="text-sm font-medium">{activeInvoice?.deliveryDate}</p>
-                                </div>
-                                <div className="space-y-1">
-                                    <Label className="text-[10px] uppercase font-bold text-muted-foreground">Currency</Label>
-                                    <p className="text-sm font-medium font-bold text-primary">{activeInvoice?.currency || "USD"}</p>
-                                </div>
-                                <div className="space-y-1">
-                                    <Label className="text-[10px] uppercase font-bold text-muted-foreground">Billing Address</Label>
-                                    <p className="text-sm font-medium">{activeInvoice?.billingAddress}</p>
-                                </div>
-                                <div className="space-y-1">
-                                    <Label className="text-[10px] uppercase font-bold text-muted-foreground">Shipping Address</Label>
-                                    <p className="text-sm font-medium">{activeInvoice?.shippingAddress}</p>
+                                <div className="min-w-0 space-y-1">
+                                    <Label className="text-[10px] uppercase font-bold text-muted-foreground">Status</Label>
+                                    <div className="pt-0.5">
+                                        {activeInvoice && getInvoiceStatusBadge(activeInvoice.status)}
+                                    </div>
                                 </div>
                             </div>
                         </div>
 
-                        {/* Terms Section - Read-only */}
+                        {/* Customer & Details - Read-only inputs format */}
+                        <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                            <div className="space-y-2">
+                                <Label className="text-[10px] uppercase font-bold text-muted-foreground">Customer</Label>
+                                <Input value={activeInvoice?.customerName || ""} disabled className="h-9 bg-muted/50" />
+                            </div>
+                            <div className="space-y-2">
+                                <Label className="text-[10px] uppercase font-bold text-muted-foreground">SO Code Reference</Label>
+                                <Input value={activeInvoice?.soNumber || ""} disabled className="h-9 bg-muted/50" />
+                            </div>
+                            <div className="space-y-2">
+                                <Label className="text-[10px] uppercase font-bold text-muted-foreground">Contact Person</Label>
+                                <Input value={activeInvoice?.contactPerson || ""} disabled className="h-9 bg-muted/50" />
+                            </div>
+                            <div className="space-y-2">
+                                <Label className="text-[10px] uppercase font-bold text-muted-foreground">Mobile No</Label>
+                                <Input value={activeInvoice?.mobileNo || ""} disabled className="h-9 bg-muted/50" />
+                            </div>
+                            <div className="space-y-2">
+                                <Label className="text-[10px] uppercase font-bold text-muted-foreground">Shipping Address</Label>
+                                <Input value={activeInvoice?.shippingAddress || ""} disabled className="h-9 bg-muted/50" />
+                            </div>
+                            <div className="space-y-2">
+                                <Label className="text-[10px] uppercase font-bold text-muted-foreground">Billing Address</Label>
+                                <Input value={activeInvoice?.billingAddress || ""} disabled className="h-9 bg-muted/50" />
+                            </div>
+                            <div className="space-y-2">
+                                <Label className="text-[10px] uppercase font-bold text-muted-foreground">Currency</Label>
+                                <Input value={activeInvoice?.currency || ""} disabled className="h-9 bg-muted/50" />
+                            </div>
+                            <div className="space-y-2">
+                                <Label className="text-[10px] uppercase font-bold text-muted-foreground">Delivery Date</Label>
+                                <Input value={safeFormatDate(activeInvoice?.deliveryDate)} disabled className="h-9 bg-muted/50" />
+                            </div>
+                        </div>
+
+                        {/* Payment Terms Breakdown - From Pending Payment form */}
                         <div className="space-y-2">
-                            <div className="flex items-center justify-between">
-                                <Label className="text-sm font-bold">Terms</Label>
-                            </div>
-                            {activeInvoice && activeInvoice.terms.length > 0 && (
-                                <div className="rounded-xl border shadow-sm overflow-hidden bg-white">
-                                    <Table>
-                                        <TableHeader>
-                                            <TableRow className="bg-muted/50 text-[10px] uppercase font-bold text-muted-foreground whitespace-nowrap">
-                                                <TableCell className="py-2 pl-6">Payment %</TableCell>
-                                                <TableCell className="py-2">Term Type</TableCell>
-                                                <TableCell className="py-2">Due Condition</TableCell>
-                                            </TableRow>
-                                        </TableHeader>
-                                        <TableBody>
-                                            {/* Display only the single active term */}
-                                            {activeInvoice.terms.filter(term => term.id === activeInvoice.termId).map((term) => {
-                                                let dueCondition = "";
-                                                if (term.termType === "Advance") {
-                                                    const dateStr = activeInvoice.invoiceDate && activeInvoice.invoiceDate !== "-" ? format(new Date(activeInvoice.invoiceDate), "dd-MM-yyyy") : "Pending";
-                                                    dueCondition = `On Invoice Date (${dateStr})`;
-                                                } else if (term.termType === "Days" && term.days) {
-                                                    if (activeInvoice.invoiceDate && activeInvoice.invoiceDate !== "-") {
-                                                        const invoiceDate = new Date(activeInvoice.invoiceDate);
-                                                        const dueDate = new Date(invoiceDate);
-                                                        dueDate.setDate(dueDate.getDate() + term.days);
-                                                        dueCondition = `${term.days} days – Due on ${format(dueDate, "dd-MM-yyyy")}`;
-                                                    } else {
-                                                        dueCondition = `${term.days} days – Due on Invoice generation`;
-                                                    }
-                                                } else if (term.termType === "Delivery" || term.termType === "On Delivery") {
-                                                    if (activeInvoice.deliveryDate) {
-                                                        dueCondition = `On Delivery (${format(new Date(activeInvoice.deliveryDate), "dd-MM-yyyy")})`;
-                                                    } else {
-                                                        dueCondition = "On Delivery";
-                                                    }
-                                                } else {
-                                                    dueCondition = term.termType;
-                                                }
-                                                
-                                                return (
-                                                    <TableRow key={term.id} className="hover:bg-muted/20">
-                                                        <TableCell className="py-4 pl-6">
-                                                            <span className="font-medium">{term.percentage}%</span>
-                                                        </TableCell>
-                                                        <TableCell className="py-4">
-                                                            <span className="font-medium">{term.termType}</span>
-                                                        </TableCell>
-                                                        <TableCell className="py-4">
-                                                            <span className="font-medium text-slate-600">{dueCondition}</span>
-                                                        </TableCell>
-                                                    </TableRow>
-                                                );
-                                            })}
-                                        </TableBody>
-                                    </Table>
-                                </div>
-                            )}
-                        </div>
-
-                        {/* Items Table - Always Read-only */}
-                        <div className="space-y-2">
-                            <Label className="text-sm font-bold">Invoice Items</Label>
+                            <Label className="text-sm font-bold">Payment Terms Breakdown</Label>
                             <div className="rounded-xl border shadow-sm overflow-hidden bg-white">
-                                <Table>
+                                <Table className="table-fixed">
+                                    <colgroup>
+                                        <col className="w-[42%]" />
+                                        <col className="w-[16%]" />
+                                        <col className="w-[16%]" />
+                                        <col className="w-[26%]" />
+                                        {activeInvoice?.status === "Open" && <col className="w-16" />}
+                                    </colgroup>
                                     <TableHeader>
-                                        <TableRow className="bg-muted/50">
-                                            <TableHead className="text-[10px] font-bold uppercase py-3 pl-6">Item</TableHead>
-                                            <TableHead className="text-[10px] font-bold uppercase py-3 text-center">UOM</TableHead>
-                                            <TableHead className="text-[10px] font-bold uppercase py-3 text-center">Ordered Qty</TableHead>
-                                            <TableHead className="text-[10px] font-bold uppercase py-3 text-center">Rate</TableHead>
-                                            <TableHead className="text-[10px] font-bold uppercase py-3 text-center">Price</TableHead>
+                                        <TableRow className="bg-muted/50 text-[10px] uppercase font-bold text-muted-foreground whitespace-nowrap">
+                                            <TableHead className="py-2 pl-6">Term Type</TableHead>
+                                            <TableHead className="py-2 text-center">Percentage</TableHead>
+                                            <TableHead className="py-2 text-center">Days</TableHead>
+                                            <TableHead className="py-2 text-right pr-6">Term Amount</TableHead>
+                                            {activeInvoice?.status === "Open" && <TableHead className="w-16"></TableHead>}
                                         </TableRow>
                                     </TableHeader>
                                     <TableBody>
-                                        {activeInvoice?.items.length === 0 ? (
-                                            <TableRow>
-                                                <TableCell colSpan={5} className="text-center py-8 text-muted-foreground italic">
-                                                    No items
+                                        {activeInvoice?.terms.map((term: any, index: number) => (
+                                            <TableRow key={index} className="hover:bg-muted/20 border-b last:border-none align-top">
+                                                <TableCell className="py-3 pl-6 font-medium whitespace-normal wrap-break-word">{term.termType}</TableCell>
+                                                <TableCell className="py-3 text-center tabular-nums">{term.percentage}%</TableCell>
+                                                <TableCell className="py-3 text-center tabular-nums">{term.days || "-"}</TableCell>
+                                                <TableCell className="py-3 text-right pr-6 font-bold text-primary tabular-nums">
+                                                    {activeInvoice.currencySymbol} {((activeInvoice.grandTotal * term.percentage) / 100).toFixed(2)}
+                                                </TableCell>
+                                                {activeInvoice?.status === "Open" && (
+                                                    <TableCell className="w-16 py-3 text-center">
+                                                        {term.termType === "Advance" && (
+                                                            <Checkbox 
+                                                                checked={selectedTerms.includes(term.id)}
+                                                                onCheckedChange={(checked) => {
+                                                                    if (checked) setSelectedTerms([...selectedTerms, term.id]);
+                                                                    else setSelectedTerms(selectedTerms.filter(id => id !== term.id));
+                                                                }}
+                                                            />
+                                                        )}
+                                                    </TableCell>
+                                                )}
+                                            </TableRow>
+                                        ))}
+                                    </TableBody>
+                                </Table>
+                            </div>
+                        </div>
+
+                        {/* Invoice Items Table - Read-only */}
+                        <div className="space-y-2">
+                            <Label className="text-sm font-bold">Invoice Items</Label>
+                            <div className="rounded-xl border shadow-sm overflow-hidden bg-white">
+                                <Table className="table-fixed">
+                                    <colgroup>
+                                        <col className="w-[52%]" />
+                                        <col className="w-[14%]" />
+                                        <col className="w-[16%]" />
+                                        <col className="w-[18%]" />
+                                    </colgroup>
+                                    <TableHeader>
+                                        <TableRow className="bg-muted/50 text-[10px] uppercase font-bold text-muted-foreground whitespace-nowrap">
+                                            <TableHead className="py-2 pl-6">Item Name</TableHead>
+                                            <TableHead className="py-2 text-center">Ordered Qty</TableHead>
+                                            <TableHead className="py-2 text-center">Unit Price</TableHead>
+                                            <TableHead className="py-2 text-right pr-6">Price</TableHead>
+                                        </TableRow>
+                                    </TableHeader>
+                                    <TableBody>
+                                        {activeInvoice?.items.map((item: any) => (
+                                            <TableRow key={item.id} className="hover:bg-muted/20 border-b last:border-none align-top">
+                                                <TableCell className="py-3 pl-6">
+                                                    <div className="font-bold text-sm text-primary whitespace-normal wrap-break-word">
+                                                        {item.itemName}
+                                                    </div>
+                                                </TableCell>
+                                                <TableCell className="py-3 text-center font-medium tabular-nums">{item.orderedQty}</TableCell>
+                                                <TableCell className="py-3 text-center tabular-nums">{activeInvoice.currencySymbol} {item.rate.toFixed(2)}</TableCell>
+                                                <TableCell className="py-3 text-right pr-6 font-bold text-slate-900 tabular-nums">
+                                                    {activeInvoice.currencySymbol} {item.price.toFixed(2)}
                                                 </TableCell>
                                             </TableRow>
-                                        ) : (
-                                            activeInvoice?.items.map((item) => (
-                                                <TableRow key={item.id} className="hover:bg-muted/20">
-                                                    <TableCell className="py-4 pl-6">
-                                                        <div className="font-bold text-sm text-primary">{item.itemName}</div>
-                                                    </TableCell>
-                                                    <TableCell className="text-center">
-                                                        <span className="text-xs uppercase">{item.uom}</span>
-                                                    </TableCell>
-                                                    <TableCell className="text-center">
-                                                        <span className="font-bold text-primary">{item.orderedQty}</span>
-                                                    </TableCell>
-                                                    <TableCell className="text-center">
-                                                        <span className="font-medium">USh {item.rate}</span>
-                                                    </TableCell>
-                                                    <TableCell className="text-center">
-                                                        <span className="font-bold text-primary">USh {item.price.toFixed(2)}</span>
-                                                    </TableCell>
-                                                </TableRow>
-                                            ))
-                                        )}
+                                        ))}
                                     </TableBody>
                                 </Table>
                             </div>
                         </div>
 
                         {/* Totals Summary */}
-                        {activeInvoice && activeInvoice.items.length > 0 && (
-                            <div className="flex justify-end">
-                                <div className="w-80 space-y-2 p-4 bg-muted/30 rounded-lg border">
-                                    <div className="flex justify-between text-sm">
-                                        <span className="font-medium text-muted-foreground">Subtotal:</span>
-                                        <span className="font-bold">USh {(activeInvoice.subtotal || 0).toFixed(2)}</span>
-                                    </div>
-                                    <div className="flex justify-between text-sm">
-                                        <span className="font-medium text-muted-foreground">Discount ({activeInvoice.discountType === "%" ? `${activeInvoice.discountValue || 0}%` : "Amount"}):</span>
-                                        <span className="font-bold text-red-600">-USh {(activeInvoice.discountAmount || 0).toFixed(2)}</span>
-                                    </div>
-                                    <div className="flex justify-between items-center text-sm">
-                                        <span className="font-medium text-muted-foreground">Tax:</span>
-                                        <div className="flex items-center gap-2">
-                                            <span className="font-medium text-right col-span-1">{activeInvoice.taxPercentage || 0}%</span>
-                                            <span className="font-bold text-green-600">+USh {(activeInvoice.tax || 0).toFixed(2)}</span>
-                                        </div>
-                                    </div>
-                                    <div className="flex justify-between text-lg border-t pt-2">
-                                        <span className="font-bold">Grand Total:</span>
-                                        <span className="font-bold text-primary">USh {(activeInvoice.grandTotal || 0).toFixed(2)}</span>
-                                    </div>
+                        <div className="flex justify-end">
+                            <div className="w-full sm:w-80 space-y-2 p-4 bg-muted/20 rounded-lg border shadow-sm">
+                                <div className="flex justify-between text-sm">
+                                    <span className="font-medium text-muted-foreground">Subtotal:</span>
+                                    <span className="font-bold">{activeInvoice?.currencySymbol || "USh"} {(activeInvoice?.subtotal || 0).toFixed(2)}</span>
+                                </div>
+                                <div className="flex justify-between text-xs">
+                                    <span className="text-slate-500">Discount ({activeInvoice?.discountValue}%):</span>
+                                    <span className="font-bold text-red-600">-{activeInvoice?.currencySymbol || "USh"} {(activeInvoice?.discountAmount || 0).toFixed(2)}</span>
+                                </div>
+                                <div className="flex justify-between text-xs">
+                                    <span className="text-slate-500">Tax ({activeInvoice?.taxPercentage}%):</span>
+                                    <span className="font-bold text-green-600">+{activeInvoice?.currencySymbol || "USh"} {(activeInvoice?.tax || 0).toFixed(2)}</span>
+                                </div>
+                                <div className="flex justify-between text-sm pt-2 border-t mt-1">
+                                    <span className="font-bold text-slate-800">GRAND TOTAL</span>
+                                    <span className="font-bold text-primary">{activeInvoice?.currencySymbol || "USh"} {(activeInvoice?.grandTotal || 0).toFixed(2)}</span>
                                 </div>
                             </div>
-                        )}
-
-                        {/* Remarks Section - Editable only when Invoice Pending */}
-                        <div className="space-y-2">
-                            <Label className="text-sm font-bold">Remarks</Label>
-                            {activeInvoice?.status === "Invoice Pending" ? (
-                                <Textarea
-                                    value={activeInvoice.remarks}
-                                    onChange={(e) => setActiveInvoice({ ...activeInvoice, remarks: e.target.value })}
-                                    placeholder="Enter any special instructions or remarks..."
-                                    className="min-h-[80px] resize-none"
-                                />
-                            ) : (
-                                <div className="p-3 bg-muted/30 rounded-lg border">
-                                    <p className="text-sm text-muted-foreground">{activeInvoice?.remarks || "No remarks"}</p>
-                                </div>
-                            )}
                         </div>
                     </div>
 
-                    {/* Dialog Footer - Buttons based on status */}
-                    <DialogFooter className="p-6 border-t mt-auto gap-2">
-                        {activeInvoice?.status !== "Invoice Pending" && (
+                    {/* Footer - Status-wise Behavior */}
+                    <DialogFooter className="border-t bg-white p-4 sm:p-6 mt-auto gap-2 sm:flex-row sm:items-center sm:justify-end">
+                        {/* Draft Status Buttons */}
+                        {activeInvoice?.status === "Draft" && (
+                            <>
+                                <Button variant="outline" onClick={handleCloseInvoice}>Close</Button>
+                                <Button 
+                                    onClick={handleMarkAsInvoiced} 
+                                    loading={isMarkingInvoiced}
+                                    className="bg-emerald-600 hover:bg-emerald-700"
+                                    disabled={!canEdit(MODULE_KEY) || isFormOpening || isMarkingInvoiced}
+                                >
+                                    Open Invoice
+                                </Button>
+                            </>
+                        )}
+
+                        {/* Open Status Buttons */}
+                        {activeInvoice?.status === "Open" && (
+                            <>
+                                <Button variant="outline" onClick={handleCloseInvoice}>Close</Button>
+                                <Button 
+                                    onClick={() => {
+                                        toast({
+                                            title: "Action Not Implemented",
+                                            description: "Marking as partially paid is coming soon.",
+                                        });
+                                    }} 
+                                    className="bg-blue-600 hover:bg-blue-700"
+                                    disabled={!canEdit(MODULE_KEY)}
+                                >
+                                    Mark as Partially Paid
+                                </Button>
+                            </>
+                        )}
+
+                        {/* Other Statuses - Only Close */}
+                        {activeInvoice?.status !== "Draft" && activeInvoice?.status !== "Open" && (
+                            <Button variant="outline" onClick={handleCloseInvoice}>Close</Button>
+                        )}
+                        
+                        {/* Download button for non-pending (Hidden for Open status in edit mode) */}
+                        {canPrint(MODULE_KEY) && activeInvoice?.status !== "Invoice Pending" && activeInvoice?.status !== "Draft" && activeInvoice?.status !== "Open" && (
                             <Button
                                 onClick={() => handleDownloadInvoice(activeInvoice || undefined)}
                                 variant="outline"
-                                className="mr-auto"
+                                className="sm:mr-auto sm:order-first"
                             >
-                                <Download className="mr-2 h-4 w-4" /> Invoice
+                                <Download className="mr-2 h-4 w-4" /> Download PDF
                             </Button>
                         )}
-                        <Button variant="outline" onClick={handleCloseEdit}>Close</Button>
-                        {activeInvoice?.status === "Invoice Pending" && (
-                            <>
-                                <Button onClick={handleSaveInvoice} className="bg-blue-600 hover:bg-blue-700">Save</Button>
-                                <Button onClick={handleMarkAsInvoiced} className="bg-emerald-600 hover:bg-emerald-700">Generate Invoice</Button>
-                            </>
-                        )}
+                    </DialogFooter>
+                </DialogContent>
+            </Dialog>
+            {/* Cancel Confirmation Dialog */}
+            <Dialog open={isCancelDialogOpen} onOpenChange={setIsCancelDialogOpen}>
+                <DialogContent className="sm:max-w-[400px]">
+                    <DialogHeader>
+                        <DialogTitle className="text-red-600">
+                            Cancel
+                        </DialogTitle>
+                        <DialogDescription className="py-3">
+                            Are you sure you want to cancel this invoice?
+                        </DialogDescription>
+                    </DialogHeader>
+                    <DialogFooter className="gap-2 sm:gap-0">
+                        <Button 
+                            variant="outline" 
+                            onClick={() => setIsCancelDialogOpen(false)}
+                            disabled={isCancelling}
+                        >
+                            No
+                        </Button>
+                        <Button 
+                            variant="destructive" 
+                            onClick={handleConfirmCancel}
+                            loading={isCancelling}
+                            disabled={isCancelling}
+                        >
+                            Yes
+                        </Button>
                     </DialogFooter>
                 </DialogContent>
             </Dialog>

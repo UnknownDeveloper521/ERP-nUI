@@ -22,6 +22,8 @@ import {
   YAxis
 } from "recharts";
 import { useEffect, useState } from "react";
+import { useHasPermission } from "@/hooks/usePermissions";
+import Unauthorized from "@/pages/Unauthorized";
 
 const initialData = [
   { name: "Jan", total: 2400 },
@@ -34,6 +36,11 @@ const initialData = [
 ];
 
 export default function Dashboard() {
+  const { isMenuVisible } = useHasPermission();
+  if (!isMenuVisible("GENERAL/DASHBOARD")) {
+    return <Unauthorized />;
+  }
+
   const [chartData, setChartData] = useState(initialData);
   const [activeEmployees, setActiveEmployees] = useState(2350);
   const [presentToday, setPresentToday] = useState(2145);

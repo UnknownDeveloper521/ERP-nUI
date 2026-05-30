@@ -12,6 +12,7 @@ export interface Quotation {
     vendorName: string;
     note?: string;
     attachmentName?: string;
+    fileUrl?: string;
 }
 
 export interface ReceptionEntry {
@@ -22,6 +23,7 @@ export interface ReceptionEntry {
     deliveryDate: string;
     note: string;
     attachmentName?: string;
+    fileUrl?: string;
 }
 
 export interface MRItem {
@@ -30,11 +32,11 @@ export interface MRItem {
     itemName: string;
     uom: string;
     type: "RM" | "Consumable";
-    requiredQty: number | string;
+    requiredQty: number;
     availableQty: number;
     quotations: Quotation[];
     poNumber?: string;
-    price?: number | string;
+    price?: number;
     deliveryDate?: string;
     qtyReceived: number;
 }

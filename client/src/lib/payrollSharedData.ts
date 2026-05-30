@@ -7,7 +7,7 @@ export interface PayPeriod {
     year: number;
     startDate: string; // ISO format YYYY-MM-DD
     endDate: string; // ISO format YYYY-MM-DD
-    status: "Open" | "Locked" | "Processed" | "Paid";
+    status: "Active" | "Open" | "Locked" | "Processed" | "Paid" | "Draft";
     notes?: string;
 }
 

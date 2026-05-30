@@ -3,7 +3,8 @@
 // Cloned from Purchase Order implementation (OrderExecution.tsx)
 // ============================================================================
 
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useCallback, useMemo, useRef } from "react";
+import { useDebounce } from "@/hooks/useDebounce";
 import { format } from "date-fns";
 import { Card, CardContent } from "@/components/ui/card";
 import { generateQuotationPDFHTML } from "@/lib/quotationPDFTemplate";
@@ -18,8 +19,12 @@ import {
     X,
     Download,
     Check,
-    ChevronsUpDown
+    Printer,
+    ChevronsUpDown,
+    Loader2
 } from "lucide-react";
+import { useHasPermission } from "@/hooks/usePermissions";
+import Unauthorized from "@/pages/Unauthorized";
 import { TableActionButtons } from "@/components/shared/TableActionButtons";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -67,12 +72,12 @@ import {
 import { cn } from "@/lib/utils";
 import { useToast } from "@/hooks/use-toast";
 import { AppListToolbar } from "@/components/shared/AppListToolbar";
+import { SearchableSelect } from "@/components/shared/SearchableSelect";
 import { mockWarehouses, mockLocations } from "@/lib/masterMockData";
+import { commonApi, salesOrdersApi, salesApi, invoicingApi, inventoryApi } from "@/lib/api";
+import { useCommonStore } from "@/store/commonStore";
 // Updated: Import mock sales order service
 import {
-    getSalesOrders,
-    createSalesOrder,
-    updateSalesOrder,
     changeSOStatus,
     closeSalesOrder,
     type SOData as MockSOData,
@@ -80,9 +85,9 @@ import {
     type PaymentTerm as MockPaymentTerm,
     type SOStatus as MockSOStatus
 } from "@/lib/mockSalesOrders";
-import { getQuotations, updateQuotation, type QuotationData } from "@/lib/mockQuotations";
+import type { QuotationData } from "@/lib/mockQuotations";
 import { createInvoiceFromSO, getInvoices, type InvoiceData } from "@/lib/mockInvoices";
-import { mockCustomers, allMockMaterials, mockFinishedGoods } from "@/lib/masterMockData";
+import { allMockMaterials, mockFinishedGoods } from "@/lib/masterMockData";
 import { getPaymentDataBySONumber } from "@/lib/followUpStore";
 
 // ============================================================================
@@ -127,6 +132,23 @@ interface Customer {
     billingAddress?: string;
 }
 
+type FormCustomer = {
+    customer_id: number;
+    customer_name: string;
+    contact_person_name?: string;
+    mobile_no?: string;
+    shipping_address?: string;
+    billing_address?: string;
+};
+
+type QuotationReference = {
+    id: number;
+    quotationNo: string;
+    customerName: string;
+    statusName?: string;
+    rawData?: any;
+};
+
 // ============================================================================
 // MOCK DATA & STORAGE
 // ============================================================================
@@ -152,21 +174,110 @@ const mockItems = mockFinishedGoods.map(fg => ({
 // ============================================================================
 
 const getCurrencySymbol = (currency: string): string => {
+    if (!currency) return "USD";
+    const clean = currency.trim().toUpperCase();
+    
+    // Check for codes or full names
     const symbols: Record<string, string> = {
         'USD': '$',
+        'US DOLLAR': '$',
         'EUR': '€',
+        'EURO': '€',
         'GBP': '£',
+        'BRITISH POUND': '£',
         'INR': '₹',
+        'INDIAN RUPEE': '₹',
         'JPY': '¥',
+        'JAPANESE YEN': '¥',
         'CNY': '¥',
+        'CHINESE YUAN': '¥',
         'AUD': 'A$',
+        'AUSTRALIAN DOLLAR': 'A$',
         'CAD': 'C$',
+        'CANADIAN DOLLAR': 'C$',
         'CHF': 'CHF',
+        'SWISS FRANC': 'CHF',
         'SEK': 'kr',
+        'SWEDISH KRONA': 'kr',
         'NZD': 'NZ$',
-        'UGX': 'USh'
+        'NEW ZEALAND DOLLAR': 'NZ$',
+        'UGX': 'USh',
+        'UGANDA SHILLING': 'USh'
     };
-    return symbols[currency] || currency;
+    
+    return symbols[clean] || currency;
+};
+
+const normalizeText = (value: any): string => String(value ?? "").trim().toUpperCase().replace(/[\s_-]/g, "");
+
+const normalizeSOStatus = (value: any): SOStatus => {
+    const status = normalizeText(value);
+    if (status === "DRAFT") return "Draft";
+    if (status === "INVOICED") return "Invoiced" as any;
+    if (status.includes("INVOICE") && status.includes("PENDING")) return "Invoice Pending";
+    if (status.includes("DISPATCH") && status.includes("PENDING")) return "Dispatch Pending";
+    if (status === "DISPATCHED") return "Dispatched";
+    if (status.includes("CLOSED") || status.includes("CLOSE")) return "Close";
+    return "Draft";
+};
+
+const extractCustomerRawRecords = (response: any): any[] => {
+    if (!response) return [];
+    if (Array.isArray(response)) return response;
+    if (Array.isArray(response.records)) return response.records;
+    if (Array.isArray(response.customers)) return response.customers;
+    if (response.data) {
+        if (Array.isArray(response.data)) return response.data;
+        if (Array.isArray(response.data.records)) return response.data.records;
+        if (Array.isArray(response.data.customers)) return response.data.customers;
+    }
+    return [];
+};
+
+const normalizeCustomerRecord = (raw: any): FormCustomer | null => {
+    if (!raw) return null;
+    const base = raw.customer && typeof raw.customer === "object" ? raw.customer : raw;
+    const customer_id = Number(base.customer_id ?? raw.customer_id);
+    const customer_name = String(base.customer_name ?? raw.customer_name ?? "").trim();
+    if (!customer_id || !customer_name) return null;
+    return {
+        customer_id,
+        customer_name,
+        contact_person_name: raw.contact_person_name ?? base.contact_person_name ?? "",
+        mobile_no: raw.mobile_no ?? base.mobile_no ?? "",
+        shipping_address: raw.shipping_address ?? base.shipping_address ?? "",
+        billing_address: raw.billing_address ?? base.billing_address ?? "",
+    };
+};
+
+const getEntityId = (item: any): number | undefined => {
+    const id = item?.id ?? item?.value_id ?? item?.status_id;
+    return id != null ? Number(id) : undefined;
+};
+
+const findByCodePriority = (records: any[], candidateCodes: string[], fallbackLabel?: string): any | undefined => {
+    const normalizedCandidates = candidateCodes.map(normalizeText).filter(Boolean);
+    const normalizedFallback = normalizeText(fallbackLabel);
+
+    const byCode = records.find((record: any) => {
+        const code = normalizeText(record?.code || record?.entity_value || record?.value_code);
+        return code && normalizedCandidates.includes(code);
+    });
+    if (byCode) return byCode;
+
+    return records.find((record: any) => normalizeText(record?.name || record?.value_name) === normalizedFallback);
+};
+
+const getPercentOrAmountCodes = (value: string): string[] => {
+    return value === "%"
+        ? ["%", "PERCENT", "PERCENTAGE", "PERCENTAGEVALUE"]
+        : ["AMOUNT", "FIXED", "VALUE"];
+};
+
+const getPaymentTermCodes = (term: string): string[] => {
+    if (term === "Advance") return ["ADVANCE"];
+    if (term === "Delivery") return ["DELIVERY"];
+    return ["DAY", "DAYS"];
 };
 
 // ============================================================================
@@ -214,9 +325,16 @@ function DatePicker({ date, setDate, disabled = false }: {
         const startingDayOfWeek = firstDay.getDay();
 
         const days = [];
-        const prevMonth = new Date(year, month - 1, 0);
+        const prevMonthLastDay = new Date(year, month, 0).getDate();
         for (let i = startingDayOfWeek - 1; i >= 0; i--) {
-            days.push({ date: new Date(year, month - 1, prevMonth.getDate() - i), isCurrentMonth: false });
+            const currentDate = new Date(year, month - 1, prevMonthLastDay - i);
+            const today = new Date();
+            today.setHours(0, 0, 0, 0);
+            days.push({
+                date: currentDate,
+                isCurrentMonth: false,
+                isDisabled: currentDate < today
+            });
         }
 
         for (let day = 1; day <= daysInMonth; day++) {
@@ -246,6 +364,8 @@ function DatePicker({ date, setDate, disabled = false }: {
         return days;
     };
 
+
+
     return (
         <Popover open={isOpen} onOpenChange={setIsOpen}>
             <PopoverTrigger asChild>
@@ -261,7 +381,7 @@ function DatePicker({ date, setDate, disabled = false }: {
                     {date ? formatDisplayDate(date) : <span>Pick a date</span>}
                 </Button>
             </PopoverTrigger>
-            <PopoverContent className="w-auto p-4 shadow-lg border rounded-lg z-[9999]" align="start" side="bottom" sideOffset={4}>
+            <PopoverContent className="w-auto p-4 shadow-lg border rounded-lg z-9999" align="start" side="bottom" sideOffset={4}>
                 <div className="w-80">
                     <div className="flex items-center justify-between mb-4">
                         <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => navigateMonth(-1)}>
@@ -309,18 +429,20 @@ function DatePicker({ date, setDate, disabled = false }: {
 }
 
 // Status badge helper - enforces SO status logic
-const getSOStatusBadge = (status: SOStatus) => {
+const getSOStatusBadge = (status: string) => {
     switch (status) {
         case "Draft":
             return <Badge variant="outline">Draft</Badge>;
+        case "Invoiced":
+            return <Badge variant="default" className="bg-blue-600 hover:bg-blue-700">Invoiced</Badge>;
         case "Invoice Pending":
             return <Badge variant="default">Invoice Pending</Badge>;
         case "Dispatch Pending":
             return <Badge variant="secondary">Dispatch Pending</Badge>;
         case "Dispatched":
             return <Badge variant="default" className="bg-green-600 hover:bg-green-700">Dispatched</Badge>;
-        case "Closed SO":
-            return <Badge variant="outline" className="bg-slate-100">Closed SO</Badge>;
+        case "Close":
+            return <Badge variant="outline" className="bg-slate-100">Close</Badge>;
         default:
             return <Badge variant="outline">{status}</Badge>;
     }
@@ -331,193 +453,650 @@ const getSOStatusBadge = (status: SOStatus) => {
 // ============================================================================
 
 const SalesOrder = () => {
+    const { canCreate, canEdit, canDelete, canView, canPrint } = useHasPermission();
+    const MODULE_KEY = "SALES/SALES_ORDER";
+
+    if (!canView(MODULE_KEY)) {
+        return <Unauthorized />;
+    }
+
     const { toast } = useToast();
+    const salesOrderStatuses = useCommonStore((state) => state.salesOrderStatuses);
+    const currencies = useCommonStore((state) => state.currencies);
+    const paymentTermTypes = useCommonStore((state) => state.paymentTermTypes);
+    const paymentTaxTypes = useCommonStore((state) => state.paymentTaxTypes);
+    const paymentDiscountTypes = useCommonStore((state) => state.paymentDiscountTypes);
+    const itemTypes = useCommonStore((state) => state.itemTypes) || [];
 
     // State management - removed localStorage - using mock store
     const [salesOrders, setSalesOrders] = useState<SOData[]>([]);
-    const [mockQuotations, setMockQuotations] = useState<QuotationData[]>([]);
-
-    useEffect(() => {
-        setSalesOrders(getSalesOrders());
-        setMockQuotations(getQuotations());
-
-        const handleStorageChange = (e: any) => {
-            if (e.key === "erp_mock_sales_orders_v2" || e.type === "erp:sales-orders-updated") {
-                setSalesOrders(getSalesOrders());
-            }
-            if (e.key === "erp_mock_quotations_v2" || e.type === "erp:quotations-updated") {
-                setMockQuotations(getQuotations());
-            }
-        };
-
-        window.addEventListener("storage", handleStorageChange);
-        window.addEventListener("erp:sales-orders-updated", handleStorageChange);
-        window.addEventListener("erp:quotations-updated", handleStorageChange);
-        return () => {
-            window.removeEventListener("storage", handleStorageChange);
-            window.removeEventListener("erp:sales-orders-updated", handleStorageChange);
-            window.removeEventListener("erp:quotations-updated", handleStorageChange);
-        };
-    }, []);
-
-    const refreshSalesOrders = () => {
-        setSalesOrders(getSalesOrders());
-    };
+    const [quotationRefs, setQuotationRefs] = useState<QuotationReference[]>([]);
+    const [formCustomers, setFormCustomers] = useState<FormCustomer[]>([]);
+    const [formItems, setFormItems] = useState<any[]>([]);
+    const [totalRecords, setTotalRecords] = useState(0);
 
     // Filters - cloned from PO implementation
     const [searchTerm, setSearchTerm] = useState("");
+    const debouncedSearchTerm = useDebounce(searchTerm, 500);
     const [filterDate, setFilterDate] = useState<Date | undefined>(undefined);
-    const [filterStatus, setFilterStatus] = useState<string>("Draft");
+    const [filterStatus, setFilterStatus] = useState<string>("all");
+    const [hasDefaultedDraft, setHasDefaultedDraft] = useState(false);
+
+    useEffect(() => {
+        if (!hasDefaultedDraft && salesOrderStatuses?.length > 0) {
+            const draftStatus = salesOrderStatuses.find((s: any) =>
+                normalizeText(s?.name || s?.value_name) === "DRAFT"
+            );
+            if (draftStatus) {
+                const draftId = String(draftStatus.id || draftStatus.value_id || draftStatus.status_id);
+                setFilterStatus(draftId);
+                setHasDefaultedDraft(true);
+            } else {
+                setHasDefaultedDraft(true);
+            }
+        }
+    }, [salesOrderStatuses, hasDefaultedDraft]);
 
     // Pagination - using DataTablePagination with options [10, 15, 30, 50]
+
     const [currentPage, setCurrentPage] = useState(1);
     const [itemsPerPage, setItemsPerPage] = useState(10);
 
     // Dialog states
     const [isSODialogOpen, setIsSODialogOpen] = useState(false);
     const [activeSO, setActiveSO] = useState<SOData | null>(null);
+    const [originalSO, setOriginalSO] = useState<SOData | null>(null);
     const [isSOEdit, setIsSOEdit] = useState(false);
     const [isDeleteAlertOpen, setIsDeleteAlertOpen] = useState(false);
     const [soToDelete, setSoToDelete] = useState<SOData | null>(null);
-    
+
     // PDF Preview state for Invoice Pending status
     const [isPDFPreviewOpen, setIsPDFPreviewOpen] = useState(false);
     const [previewSO, setPreviewSO] = useState<SOData | null>(null);
-    
+
     // PDF Preview state for Dispatch Pending status
     const [isDispatchPDFPreviewOpen, setIsDispatchPDFPreviewOpen] = useState(false);
     const [dispatchPreviewSO, setDispatchPreviewSO] = useState<SOData | null>(null);
-    
+
     // PDF Preview state for Dispatched status
     const [isDispatchedPDFPreviewOpen, setIsDispatchedPDFPreviewOpen] = useState(false);
     const [dispatchedPreviewSO, setDispatchedPreviewSO] = useState<SOData | null>(null);
-    
+
     // Edit Detail Dialog state for Dispatched status (Close SO action)
     const [isDispatchedEditOpen, setIsDispatchedEditOpen] = useState(false);
     const [dispatchedEditSO, setDispatchedEditSO] = useState<SOData | null>(null);
-    
+
     // PDF Preview state for Closed SO status
     const [isClosedSOPDFPreviewOpen, setIsClosedSOPDFPreviewOpen] = useState(false);
     const [closedSOPreviewSO, setClosedSOPreviewSO] = useState<SOData | null>(null);
-    
+
     // PDF Preview state for Draft status
     const [isDraftPDFPreviewOpen, setIsDraftPDFPreviewOpen] = useState(false);
     const [draftPreviewSO, setDraftPreviewSO] = useState<SOData | null>(null);
+
+    // Global loading state for async operations (e.g., fetching invoices for PDF)
+    const [isLoading, setIsLoading] = useState(false);
+    const [isListLoading, setIsListLoading] = useState(true);
+    const [isFormOpening, setIsFormOpening] = useState(false);
+    const [isSavingSO, setIsSavingSO] = useState(false);
+    const [isSubmittingSO, setIsSubmittingSO] = useState(false);
+    const [openingSOId, setOpeningSOId] = useState<number | null>(null);
 
     // Form states for SO modal
     const [selectedQuotation, setSelectedQuotation] = useState<string>("");
     const [selectedCustomer, setSelectedCustomer] = useState<string>("");
     const [isManualEntry, setIsManualEntry] = useState(false);
+    const lastQuotationCustomerIdRef = React.useRef<number | null>(null);
 
-    // Filtering logic - cloned from PO table structure
-    const filteredSOs = salesOrders.filter(so => {
-        const matchesSearch = so.soNumber.toLowerCase().includes(searchTerm.toLowerCase()) ||
-            so.customerName.toLowerCase().includes(searchTerm.toLowerCase());
+    // Reset lastLoadedCustomerId when dialog closes
+    useEffect(() => {
+        if (!isSODialogOpen) {
+            lastQuotationCustomerIdRef.current = null;
+        }
+    }, [isSODialogOpen]);
 
-        const matchesDate = filterDate ? so.soDate === format(filterDate, "yyyy-MM-dd") : true;
-        const matchesStatus = filterStatus === "all" ? true : so.status === filterStatus;
+    // Helper to check if form is valid for submission/saving
+    const isFormValid = () => {
+        if (!activeSO) return false;
 
-        return matchesSearch && matchesDate && matchesStatus;
-    });
+        const hasBasicFields = !!(
+            activeSO.customerName?.trim() &&
+            activeSO.billingAddress?.trim() &&
+            activeSO.mobileNo?.trim() &&
+            activeSO.deliveryDate &&
+            (activeSO.items || []).length > 0 &&
+            (activeSO.terms || []).length > 0
+        );
 
-    // Pagination calculations - cloned from PO implementation
-    const totalPages = Math.ceil(filteredSOs.length / itemsPerPage);
-    const paginatedData = filteredSOs.slice(
-        (currentPage - 1) * itemsPerPage,
-        currentPage * itemsPerPage
-    );
+        if (!hasBasicFields) return false;
+
+        // Validation for Payment Terms
+        const hasInvalidTerms = (activeSO.terms || []).some(term => {
+            if (term.termType === "Days") {
+                const days = parseInt(String(term.days || "0"));
+                return isNaN(days) || days <= 0;
+            }
+            return false;
+        });
+
+        if (hasInvalidTerms) return false;
+
+        // Validation for Items
+        const itemNames = (activeSO.items || []).map(i => i.itemName).filter(Boolean);
+        const hasDuplicates = new Set(itemNames).size !== itemNames.length;
+        if (hasDuplicates) return false;
+
+        const hasInvalidItems = (activeSO.items || []).some(item => {
+            const qty = parseFloat(item.orderedQty?.toString() || "0");
+            const rate = parseFloat(item.rate?.toString() || "0");
+            return !item.itemName || isNaN(qty) || qty <= 0 || isNaN(rate) || rate <= 0;
+        });
+
+        return !hasInvalidItems;
+    };
+
+    const fetchSalesOrdersList = async () => {
+        setIsListLoading(true);
+        try {
+            const res = await salesOrdersApi.getSOList({
+                search: debouncedSearchTerm?.trim() || undefined,
+                date: filterDate ? format(filterDate, "yyyy-MM-dd") : undefined,
+                status_id: filterStatus !== "all" ? Number(filterStatus) : undefined,
+                page: currentPage,
+                limit: itemsPerPage,
+            });
+
+            if (!res?.isSuccessful) {
+                setSalesOrders([]);
+                setTotalRecords(0);
+                return;
+            }
+
+            const records = res?.data?.records || [];
+            const mapped: SOData[] = records.map((record: any) => ({
+                id: Number(record.id),
+                soNumber: record.sales_order_code || `SO-${record.id}`,
+                soDate: record.order_date || "",
+                quotationRef: "",
+                customerName: record.customer_name || "",
+                contactPerson: "",
+                mobileNo: "",
+                shippingAddress: "",
+                billingAddress: "",
+                deliveryDate: "",
+                location: "",
+                warehouse: "",
+                currency: "UGX",
+                remarks: "",
+                terms: [],
+                items: [],
+                dispatches: [],
+                discountValue: 0,
+                discountType: "%",
+                taxValue: 0,
+                taxType: "%",
+                taxPercentage: 0,
+                status: normalizeSOStatus(record.status_name),
+            }));
+
+            const pagination = res?.data?.pagination || {};
+            const total = Number(pagination.totalRecords ?? pagination.totalCount ?? mapped.length ?? 0);
+            setSalesOrders(mapped);
+            setTotalRecords(total);
+        } catch (error) {
+            console.error("Error fetching sales order list:", error);
+            setSalesOrders([]);
+            setTotalRecords(0);
+        } finally {
+            setIsListLoading(false);
+        }
+    };
+
+    const loadFormCustomers = async () => {
+        try {
+            const res = await commonApi.getCustomerWithDetails();
+            if (!res?.isSuccessful) return;
+            const rawRecords = extractCustomerRawRecords(res?.data);
+            const normalized = rawRecords
+                .map(normalizeCustomerRecord)
+                .filter((customer): customer is FormCustomer => Boolean(customer));
+            const deduped = Array.from(new Map(normalized.map((c) => [c.customer_id, c])).values());
+            setFormCustomers(deduped);
+        } catch (error) {
+            console.error("Error loading customers:", error);
+        }
+    };
+
+    const loadFormItems = async () => {
+        try {
+            const finishedGoodsItemType = (itemTypes || []).find((type: any) => {
+                const code = normalizeText(type?.code || type?.value_code || "");
+                const name = normalizeText(type?.name || type?.value_name || "");
+                return code === "FG" || name === "FINISHEDGOODS";
+            });
+            const finishedGoodsItemTypeId = finishedGoodsItemType ? (finishedGoodsItemType.id || finishedGoodsItemType.value_id || finishedGoodsItemType.status_id) : undefined;
+            if (!finishedGoodsItemTypeId) return;
+
+            const res = await commonApi.getItemsDropdown({ item_type_id: finishedGoodsItemTypeId, status: 1 });
+            if (!res?.isSuccessful) return;
+
+            const extractItems = (response: any): any[] => {
+                if (!response) return [];
+                if (Array.isArray(response)) return response;
+                if (Array.isArray(response?.records)) return response.records;
+                if (Array.isArray(response?.items)) return response.items;
+                if (Array.isArray(response?.data)) return response.data;
+                if (Array.isArray(response?.data?.records)) return response.data.records;
+                if (Array.isArray(response?.data?.items)) return response.data.items;
+                return [];
+            };
+
+            const rawRecords = extractItems(res?.data);
+            const mappedItems = rawRecords.map((raw: any) => {
+                const base = raw.item && typeof raw.item === "object" ? raw.item : raw;
+                const item_id = Number(base.item_id ?? raw.item_id ?? base.id ?? raw.id);
+                const item_name = String(base.item_name ?? raw.item_name ?? base.name ?? raw.name ?? base.item_code ?? raw.item_code ?? "").trim();
+                const item_code = String(base.item_code ?? raw.item_code ?? base.code ?? raw.code ?? "").trim();
+                return {
+                    id: item_id,
+                    itemCode: item_code || String(item_id),
+                    name: item_name,
+                    uom: base.uom || "PCS",
+                    rate: Number(base.rate || base.price || 100)
+                };
+            }).filter(i => i.id && i.name);
+
+            // Deduplicate
+            const deduped = Array.from(new Map(mappedItems.map(i => [i.id, i])).values());
+            setFormItems(deduped);
+        } catch (error) {
+            console.error("Error loading finished goods items:", error);
+        }
+    };
+
+    const loadQuotationReferences = async (customerId?: number, customerName?: string) => {
+        try {
+            if (!customerId) {
+                setQuotationRefs([]);
+                lastQuotationCustomerIdRef.current = null;
+                return;
+            }
+
+            // Prevent duplicate calls for the same customer while the dialog is open
+            if (customerId === lastQuotationCustomerIdRef.current) {
+                console.log("Quotation references already loaded or loading for customerId:", customerId);
+                return;
+            }
+            
+            lastQuotationCustomerIdRef.current = customerId;
+            console.log("Loading quotation references for customerId:", customerId, "Type:", typeof customerId);
+            const res = await commonApi.getQuotationWithDetails({ customer_id: Number(customerId) });
+            console.log("Quotation references response:", res);
+            if (!res) return;
+
+            const extractRecords = (response: any): any[] => {
+                if (!response) return [];
+                
+                // If it's directly an array
+                if (Array.isArray(response)) return response;
+                
+                // Check records in response or response.data
+                if (Array.isArray(response?.records)) return response.records;
+                if (Array.isArray(response?.data?.records)) return response.data.records;
+                
+                // Check data as an array
+                if (Array.isArray(response?.data)) return response.data;
+                
+                // Check for common single object patterns
+                const data = response.data || response;
+                
+                // If data has a quotation object
+                if (data?.quotation && typeof data.quotation === 'object') {
+                    return [{ 
+                        ...data.quotation, 
+                        _items: data.items || data.quotation.items, 
+                        _terms: data.terms || data.payment_terms || data.quotation.terms 
+                    }];
+                }
+                
+                // If the response object itself looks like a quotation record
+                if (data?.quotation_id || data?.id || data?.quotation_code) {
+                    return [{
+                        ...data,
+                        _items: data.items || data.quotation?.items,
+                        _terms: data.terms || data.payment_terms || data.quotation?.terms
+                    }];
+                }
+
+                return [];
+            };
+
+            const records = extractRecords(res);
+            const mapped: QuotationReference[] = records.map((record: any) => {
+                // Handle nested quotation object if present in the record
+                const q = record.quotation || record;
+                return {
+                    id: Number(q.id || q.quotation_id || record.id || record.quotation_id),
+                    quotationNo: String(q.quotation_code || q.code || record.quotation_code || record.code || "").trim(),
+                    customerName: String(q.customer_name || q.customer?.name || record.customer_name || record.customer?.name || customerName || selectedCustomer || "").trim(),
+                    statusName: q.status_name || q.status || record.status_name || record.status || "",
+                    rawData: { ...record, ...q }
+                };
+            }).filter((q: QuotationReference) => q.id && q.quotationNo);
+
+            setQuotationRefs(mapped);
+        } catch (error) {
+            console.error("Error loading quotation references:", error);
+        }
+    };
+
+    const mapSOFromApi = (data: any, fallback?: Partial<SOData>): SOData => {
+        const items: SOItem[] = (data?.items || data?.order_items || []).map((apiItem: any, index: number) => ({
+            id: Number(apiItem?.id || Date.now() + index),
+            itemCode: String(apiItem?.item_id || apiItem?.itemCode || apiItem?.item?.id || apiItem?.item?.item_id || ""),
+            itemName: apiItem?.item_name || apiItem?.item?.name || apiItem?.itemName || apiItem?.item?.item_name || "",
+            uom: apiItem?.uom || apiItem?.item?.uom || "PCS",
+            orderedQty: Number(apiItem?.quantity || apiItem?.quantity_ordered || 0),
+            dispatchedQty: Number(
+                apiItem?.dispatch_qty ?? apiItem?.dispatched_qty ?? apiItem?.dispatchedQty ?? 0
+            ),
+            rate: Number(apiItem?.unit_price || apiItem?.price_per_item || apiItem?.rate || apiItem?.price || 0),
+            price: Number(apiItem?.price || apiItem?.amount || apiItem?.price_per_item || 0) || ((apiItem?.quantity || apiItem?.quantity_ordered || 0) * (Number(apiItem?.unit_price || apiItem?.price_per_item || apiItem?.rate || apiItem?.price || 0))),
+        }));
+
+        const terms: PaymentTerm[] = (data?.payment_terms || data?.terms || []).map((term: any, index: number) => {
+            const rawType = normalizeText(term?.term_type_name || term?.term_type_code || term?.terms || "");
+            let termType: "Advance" | "Delivery" | "Days" = "Advance";
+            if (rawType.includes("DELIVERY")) termType = "Delivery";
+            else if (rawType.includes("DAY")) termType = "Days";
+            return {
+                id: Number(term?.id || Date.now() + index),
+                value: Number(term?.percentage || term?.value || 0),
+                percentage: Number(term?.percentage || term?.value || 0),
+                termType,
+                date: term?.date || "",
+                days: Number(term?.days || 0),
+                note: term?.note || "",
+            };
+        });
+
+        const discountObj = data?.discount || {};
+        const rawDiscountType = normalizeText(discountObj?.type_name || discountObj?.type_code || data?.discount_type_name || data?.discount_type_code || data?.discount_type || "");
+        const discountType: "%" | "Amount" = rawDiscountType.includes("PERCENT") || rawDiscountType === "%" || (rawDiscountType === "" && (discountObj?.discount_percent != null || discountObj?.discount_rate != null || data?.discount_percent != null)) ? "%" : "Amount";
+        const discountValue = discountType === "%"
+            ? Number(discountObj?.discount_rate ?? discountObj?.discount_percent ?? data?.discount_percent ?? 0)
+            : Number(discountObj?.amount ?? discountObj?.discount_amount ?? data?.discount_amount ?? 0);
+
+        const taxObj = data?.tax || {};
+        const rawTaxType = normalizeText(taxObj?.type_name || taxObj?.type_code || data?.tax_type_name || data?.tax_type_code || data?.tax_type || "");
+        const taxType: "%" | "Amount" = rawTaxType.includes("PERCENT") || rawTaxType === "%" || (rawTaxType === "" && (taxObj?.tax_rate != null || data?.tax_rate != null)) ? "%" : "Amount";
+        const taxValue = taxType === "%"
+            ? Number(taxObj?.tax_rate ?? taxObj?.tax_percent ?? data?.tax_rate ?? data?.tax_percent ?? 0)
+            : Number(taxObj?.amount ?? taxObj?.tax_amount ?? data?.tax_amount ?? 0);
+
+        const customerDetails = data?.customer_details || data?.customer || {};
+
+        const curMatch = currencies.find((c: any) =>
+            Number(c.id || c.value_id) === Number(data?.currency_id) ||
+            normalizeText(c.name || c.value_name) === normalizeText(data?.currency_name) ||
+            normalizeText(c.code || c.value_code) === normalizeText(data?.currency_name) ||
+            normalizeText(c.code || c.value_code) === normalizeText(data?.currency)
+        );
+        const mappedCurrency = curMatch
+            ? (curMatch.code || curMatch.value_code || curMatch.name || curMatch.value_name)
+            : (data?.currency_code || data?.currency_name || data?.currency || fallback?.currency || "UGX");
+
+        return {
+            id: Number(data?.id || fallback?.id || Date.now()),
+            soNumber: data?.sales_order_code || fallback?.soNumber || "",
+            soDate: data?.order_date || fallback?.soDate || format(new Date(), "yyyy-MM-dd"),
+            quotationRef: data?.quotation_code || fallback?.quotationRef || "",
+            customerName: customerDetails?.name || customerDetails?.customer_name || data?.customer_name || fallback?.customerName || "",
+            contactPerson: customerDetails?.contact_person_name || customerDetails?.contact_person || data?.contact_person_name || data?.contact_person || fallback?.contactPerson || "",
+            mobileNo: customerDetails?.contact_number || customerDetails?.mobile_no || data?.mobile_no || fallback?.mobileNo || "",
+            shippingAddress: customerDetails?.shipping_address || data?.shipping_address || fallback?.shippingAddress || "",
+            billingAddress: customerDetails?.billing_address || data?.billing_address || fallback?.billingAddress || "",
+            deliveryDate: data?.expected_delivery_date || data?.delivery_date || fallback?.deliveryDate || "",
+            location: fallback?.location || "",
+            warehouse: fallback?.warehouse || "",
+            currency: mappedCurrency,
+            remarks: data?.remarks || fallback?.remarks || "",
+            terms,
+            items,
+            dispatches: fallback?.dispatches || [],
+            discountValue,
+            discountType,
+            taxType,
+            taxValue,
+            taxPercentage: taxType === "%" ? taxValue : Number(data?.tax_rate || 0),
+            status: normalizeSOStatus(data?.status_name || fallback?.status || "Draft"),
+            invoiceDueAmount: fallback?.invoiceDueAmount,
+            paymentStatus: fallback?.paymentStatus,
+        };
+    };
+
+    const fetchQuotationByReference = async (quotationRef?: string): Promise<QuotationData | null> => {
+        if (!quotationRef) return null;
+        
+        // 1. Try to find in local refs first (fastest)
+        let ref = quotationRefs.find((q) => q.quotationNo === quotationRef);
+        let quotationId = ref?.id;
+
+        // 2. If not found in local state (common when viewing existing SO), search via API
+        if (!quotationId) {
+            try {
+                const searchRes = await salesApi.getQuotationList({ search: quotationRef, limit: 1 });
+                if (searchRes?.isSuccessful && searchRes.data?.records?.length > 0) {
+                    // Find the exact match in records
+                    const exactMatch = searchRes.data.records.find((r: any) => r.quotation_code === quotationRef);
+                    if (exactMatch) {
+                        quotationId = exactMatch.id;
+                    }
+                }
+            } catch (error) {
+                console.error("Error searching for quotation by ref:", error);
+            }
+        }
+
+        if (!quotationId) return null;
+
+        // 3. Fetch full details using the ID
+        const res = await salesApi.getQuotationById(quotationId);
+        if (!res?.isSuccessful || !res?.data) return null;
+        const d = res.data;
+        return {
+            id: d.id,
+            quotationNo: d.quotation_code || quotationRef,
+            quotationDate: d.quotation_date || "",
+            customerName: d.customer_details?.name || d.customer_name || "",
+            contactPersonName: d.customer_details?.contact_person_name || "",
+            contactNumber: d.customer_details?.contact_number || d.customer_details?.mobile_no || "",
+            billingAddress: d.customer_details?.billing_address || "",
+            shippingAddress: d.customer_details?.shipping_address || "",
+            currency: d.currency_name || d.currency_code || "USD",
+            currencySymbol: getCurrencySymbol(d.currency_name || d.currency_code || "USD"),
+            quotationValidity: d.quotation_validity || "",
+            deliveryTime: d.expected_delivery_date || "",
+            remarks: d.remarks || "",
+            status: normalizeSOStatus(d.status_name || "Draft") as any,
+            items: (d.items || []).map((item: any) => ({
+                id: item.id,
+                itemCode: String(item.item_id || ""),
+                item: item.item_name || "",
+                qty: Number(item.quantity || 0),
+                rate: Number(item.unit_price || item.price_per_item || item.rate || item.price || 0),
+                amount: Number(item.price_per_item || item.price || item.amount || 0) || (Number(item.quantity || item.qty || 0) * Number(item.unit_price || item.price_per_item || item.rate || item.price || 0)),
+            })),
+            paymentTerms: (d.payment_terms || []).map((term: any) => ({
+                id: term.id,
+                terms: normalizeText(term.term_type_name || "").includes("DELIVERY") ? "Delivery" : normalizeText(term.term_type_name || "").includes("DAY") ? "Days" : "Advance",
+                percentage: Number(term.percentage || 0),
+                value: Number(term.percentage || 0),
+                days: Number(term.days || 0),
+                date: "",
+            })),
+            discountType: normalizeText(d.discount?.type_name || d.discount?.type_code || d.discount_type_name || "").includes("PERCENT") || d.discount?.type_code === "%" ? "%" : "Amount",
+            discountValue: (normalizeText(d.discount?.type_name || d.discount?.type_code || d.discount_type_name || "").includes("PERCENT") || d.discount?.type_code === "%")
+                ? Number(d.discount?.discount_rate ?? d.discount?.discount_percent ?? d.discount_percent ?? 0)
+                : Number(d.discount?.amount ?? d.discount_amount ?? 0),
+            taxType: normalizeText(d.tax?.type_name || d.tax?.type_code || d.tax_type_name || "").includes("PERCENT") || d.tax?.type_code === "%" ? "%" : "Amount",
+            taxValue: (normalizeText(d.tax?.type_name || d.tax?.type_code || d.tax_type_name || "").includes("PERCENT") || d.tax?.type_code === "%")
+                ? Number(d.tax?.tax_rate ?? d.tax?.tax_percent ?? d.tax_rate ?? 0)
+                : Number(d.tax?.amount ?? d.tax_amount ?? 0),
+            taxPercentage: Number(d.tax?.tax_rate ?? d.tax_rate ?? 0),
+            subtotal: Number(d.subtotal || 0),
+            discountAmount: Number(d.discount_amount || 0),
+            taxAmount: Number(d.tax_amount || 0),
+            total: Number(d.total_amount || 0),
+        } as any;
+    };
+
+    useEffect(() => {
+        if (hasDefaultedDraft) {
+            fetchSalesOrdersList();
+        }
+    }, [debouncedSearchTerm, filterDate, filterStatus, currentPage, itemsPerPage, hasDefaultedDraft]);
+
+    useEffect(() => {
+        if (isSODialogOpen) {
+            loadFormCustomers();
+            loadFormItems();
+        }
+    }, [isSODialogOpen]);
+
+    useEffect(() => {
+        if (isSODialogOpen && activeSO?.customerName) {
+            const customer = formCustomers.find(c => c.customer_name === activeSO.customerName);
+            if (customer?.customer_id) {
+                loadQuotationReferences(customer.customer_id);
+            }
+        }
+    }, [isSODialogOpen, activeSO?.customerName, formCustomers]);
+
+    // Pagination calculations - server-side
+    const totalPages = Math.ceil((totalRecords || 0) / itemsPerPage) || 1;
+    const paginatedData = salesOrders;
+
+    const isActionBusy =
+        isListLoading ||
+        openingSOId !== null ||
+        isFormOpening ||
+        isSavingSO ||
+        isSubmittingSO ||
+        isLoading;
 
     // Auto-adjust page when data changes
     React.useEffect(() => {
         if (currentPage > totalPages && totalPages > 0) {
             setCurrentPage(totalPages);
         }
-    }, [filteredSOs.length, currentPage, totalPages]);
+    }, [totalRecords, currentPage, totalPages]);
 
     // Reset to page 1 when filters change
     React.useEffect(() => {
         setCurrentPage(1);
-    }, [searchTerm, filterDate, filterStatus]);
+    }, [debouncedSearchTerm, filterDate, filterStatus]);
 
     // Handler to open SO dialog (view or edit)
     // Updated to show PDF preview for Invoice Pending, Dispatch Pending, Dispatched, Closed SO, and Draft statuses when viewing
-    const handleOpenSO = (so: SOData | null, isEdit: boolean) => {
+    const handleOpenSO = async (so: SOData | null, isEdit: boolean) => {
+        if (isActionBusy) return;
+
+        let effectiveSO = so;
+        if (so?.id) {
+            setOpeningSOId(so.id);
+            setIsFormOpening(true);
+            try {
+                const detailRes = await salesOrdersApi.getSOById(so.id);
+                if (detailRes?.isSuccessful && detailRes?.data) {
+                    effectiveSO = mapSOFromApi(detailRes.data, so);
+                }
+            } catch (error) {
+                console.error("Error fetching sales order by id:", error);
+            } finally {
+                setIsFormOpening(false);
+                setOpeningSOId(null);
+            }
+        }
+
         // If viewing a Draft SO, show PDF preview instead
-        if (so && !isEdit && so.status === "Draft") {
-            setDraftPreviewSO(so);
+        if (effectiveSO && !isEdit && effectiveSO.status === "Draft") {
+            setDraftPreviewSO(effectiveSO);
             setIsDraftPDFPreviewOpen(true);
             return;
         }
-        
-        // If viewing an Invoice Pending SO, show PDF preview instead
-        if (so && !isEdit && so.status === "Invoice Pending") {
-            setPreviewSO(so);
+
+        // If viewing an Invoice Pending or Invoiced SO, show PDF preview instead
+        if (effectiveSO && !isEdit && (effectiveSO.status === "Invoice Pending" || effectiveSO.status === "Invoiced")) {
+            setPreviewSO(effectiveSO);
             setIsPDFPreviewOpen(true);
             return;
         }
-        
+
         // If viewing a Dispatch Pending SO, show Dispatch PDF preview instead
-        if (so && !isEdit && so.status === "Dispatch Pending") {
-            setDispatchPreviewSO(so);
+        if (effectiveSO && !isEdit && effectiveSO.status === "Dispatch Pending") {
+            setDispatchPreviewSO(effectiveSO);
             setIsDispatchPDFPreviewOpen(true);
             return;
         }
-        
+
         // If viewing a Dispatched SO, show Dispatched PDF preview instead
-        if (so && !isEdit && so.status === "Dispatched") {
-            setDispatchedPreviewSO(so);
+        if (effectiveSO && !isEdit && effectiveSO.status === "Dispatched") {
+            setDispatchedPreviewSO(effectiveSO);
             setIsDispatchedPDFPreviewOpen(true);
             return;
         }
-        
-        // If viewing a Closed SO, show Closed SO PDF preview instead
-        if (so && !isEdit && so.status === "Closed SO") {
-            setClosedSOPreviewSO(so);
+
+        // If viewing a Close SO, show Close SO PDF preview instead
+        if (effectiveSO && !isEdit && effectiveSO.status === "Close") {
+            setClosedSOPreviewSO(effectiveSO);
             setIsClosedSOPDFPreviewOpen(true);
             return;
         }
 
-            if (so) {
-                const soCopy = JSON.parse(JSON.stringify(so)) as SOData;
-                setActiveSO(soCopy);
-                setSelectedQuotation(soCopy.quotationRef || "");
-                setSelectedCustomer(soCopy.customerName);
-                setIsManualEntry(false);
-            } else {
-                // Create new SO - Changed: Added new fields, removed paymentTerms
-                const newSO: SOData = {
-                    id: Date.now(),
-                    soNumber: `SO-${new Date().getFullYear()}-${String(salesOrders.length + 1).padStart(3, '0')}`,
-                    soDate: format(new Date(), "yyyy-MM-dd"),
-                    quotationRef: "",
-                    customerName: "",
-                    contactPerson: "",
-                    mobileNo: "", // New field
-                    shippingAddress: "",
-                    billingAddress: "",
-                    deliveryDate: "",
-                    location: "",
-                    warehouse: "",
-                    currency: "UGX", // New field: Currency
-                    remarks: "",
-                    terms: [], // New field: Payment terms list
-                    items: [],
-                    dispatches: [], // Required field
-                    discountValue: 0,
-                    discountType: "%",
-                    taxValue: 0,
-                    taxType: "%",
-                    taxPercentage: 0, // New field: Overall tax percentage
-                    status: "Draft"
-                };
-                setActiveSO(newSO);
-                setSelectedQuotation("");
-                setSelectedCustomer("");
-                setIsManualEntry(false);
-            }
-            setIsSOEdit(isEdit);
-            setIsSODialogOpen(true);
-        };
+        if (effectiveSO) {
+            const soCopy = JSON.parse(JSON.stringify(effectiveSO)) as SOData;
+            setActiveSO(soCopy);
+            setOriginalSO(JSON.parse(JSON.stringify(effectiveSO)) as SOData);
+            setSelectedQuotation(soCopy.quotationRef || "");
+            setSelectedCustomer(soCopy.customerName);
+            setIsManualEntry(false);
+        } else {
+            // Create new SO - Changed: Added new fields, removed paymentTerms
+            const newSO: SOData = {
+                id: Date.now(),
+                soNumber: `SO-${new Date().getFullYear()}-${String(salesOrders.length + 1).padStart(3, '0')}`,
+                soDate: format(new Date(), "yyyy-MM-dd"),
+                quotationRef: "",
+                customerName: "",
+                contactPerson: "",
+                mobileNo: "", // New field
+                shippingAddress: "",
+                billingAddress: "",
+                deliveryDate: "",
+                location: "",
+                warehouse: "",
+                currency: "UGX", // New field: Currency
+                remarks: "",
+                terms: [], // New field: Payment terms list
+                items: [],
+                dispatches: [], // Required field
+                discountValue: 0,
+                discountType: "%",
+                taxValue: 0,
+                taxType: "%",
+                taxPercentage: 0, // New field: Overall tax percentage
+                status: "Draft"
+            };
+            setActiveSO(newSO);
+            setOriginalSO(null);
+            setSelectedQuotation("");
+            setSelectedCustomer("");
+            setIsManualEntry(false);
+        }
+        setIsSOEdit(isEdit);
+        setIsSODialogOpen(true);
+    };
 
     // Quotation auto-fill handler
     const handleQuotationSelect = (quotationNo: string) => {
@@ -527,7 +1106,7 @@ const SalesOrder = () => {
         // Handle "none" selection - clear quotation reference
         // Keep customer values only if Customer Select is chosen
         if (quotationNo === "none") {
-            const customerData = mockCustomers.find(c => c.name === selectedCustomer);
+            const customerData = formCustomers.find(c => c.customer_name === selectedCustomer);
 
             if (customerData && selectedCustomer) {
                 // Keep customer data if customer is selected
@@ -535,10 +1114,10 @@ const SalesOrder = () => {
                     ...activeSO,
                     quotationRef: "",
                     customerName: selectedCustomer,
-                    contactPerson: customerData.contactPerson || "",
-                    mobileNo: customerData.mobileNo || "",
-                    shippingAddress: customerData.shippingAddress || "",
-                    billingAddress: customerData.billingAddress || "",
+                    contactPerson: customerData.contact_person_name || "",
+                    mobileNo: customerData.mobile_no || "",
+                    shippingAddress: customerData.shipping_address || "",
+                    billingAddress: customerData.billing_address || "",
                     deliveryDate: "",
                     terms: [],
                     items: [],
@@ -573,53 +1152,79 @@ const SalesOrder = () => {
             return;
         }
 
-        const quotation = mockQuotations.find(q => q.quotationNo === quotationNo);
-        if (quotation) {
+        const quotationRef = quotationRefs.find(q => q.quotationNo === quotationNo);
+        if (quotationRef && quotationRef.rawData && activeSO) {
+            // rawData now contains the individual quotation record
+            const quotation = quotationRef.rawData;
+            
+            console.log("Selected quotation for auto-fill:", quotation);
+            
+            // Find customer details from current form list for fallback if quotation response is missing them
+            const customerFallback = formCustomers.find(c => 
+                normalizeText(c.customer_name) === normalizeText(quotation.customer_name) || 
+                normalizeText(c.customer_name) === normalizeText(quotationRef.customerName)
+            );
+            
             // Auto-fill customer, contact, mobile number, addresses, delivery date, and items from quotation
             // Map quotation items to SO items with dispatchedQty = 0 (read-only)
-            const itemsSource = quotation.items || [];
-            const soItems: SOItem[] = itemsSource.map((qItem, index) => {
+            const itemsSource = quotation._items || quotation.items || [];
+            const soItems: SOItem[] = itemsSource.map((qItem: any, index: number) => {
                 return {
                     id: Date.now() + index,
-                    itemCode: qItem.itemCode || "",
-                    itemName: qItem.item || "Unknown Item",
-                    uom: "PCS",
-                    orderedQty: Number(qItem.qty) || 0,
-                    rate: Number(qItem.rate) || 0,
-                    price: Number(qItem.amount) || (Number(qItem.qty) * Number(qItem.rate)) || 0,
+                    itemCode: String(qItem.item_id || qItem.itemCode || ""),
+                    itemName: qItem.item_name || qItem.item || "Unknown Item",
+                    uom: qItem.uom || "PCS",
+                    orderedQty: Number(qItem.quantity || qItem.qty || 0),
+                    rate: Number(qItem.unit_price || qItem.rate || 0),
+                    price: Number(qItem.price_per_item || qItem.amount || (Number(qItem.quantity || qItem.qty) * Number(qItem.unit_price || qItem.rate))) || 0,
                     dispatchedQty: 0
                 };
             });
 
             // Auto-set Customer Select dropdown to quotation's customer
-            setSelectedCustomer(quotation.customerName || "");
+            const finalCustomerName = quotation.customer_details?.name || quotation.customer_name || quotationRef.customerName || "";
+            setSelectedCustomer(finalCustomerName);
             setIsManualEntry(false);
 
-            const termsSource = quotation.paymentTerms || [];
+            const termsSource = quotation._terms || quotation.payment_terms || quotation.terms || [];
+
+            const curMatch = currencies.find((c: any) =>
+                Number(c.id || c.value_id) === Number(quotation?.currency_id) ||
+                normalizeText(c.name || c.value_name) === normalizeText(quotation?.currency_name) ||
+                normalizeText(c.code || c.value_code) === normalizeText(quotation?.currency_code) ||
+                normalizeText(c.code || c.value_code) === normalizeText(quotation?.currency)
+            );
+            const mappedCurrency = curMatch 
+                ? (curMatch.code || curMatch.value_code || curMatch.name || curMatch.value_name) 
+                : (quotation.currency_code || quotation.currency || "UGX");
 
             setActiveSO({
                 ...activeSO,
-                quotationRef: quotationNo,
-                customerName: quotation.customerName || "",
-                contactPerson: quotation.contactPersonName || "",
-                mobileNo: quotation.contactNumber || "",
-                shippingAddress: quotation.shippingAddress || "",
-                billingAddress: quotation.billingAddress || "",
-                currency: quotation.currency || "UGX",
-                deliveryDate: quotation.deliveryTime || "",
+                quotationRef: quotation.quotation_code || quotationNo,
+                customerName: finalCustomerName,
+                contactPerson: quotation.customer_details?.contact_person_name || customerFallback?.contact_person_name || "",
+                mobileNo: quotation.customer_details?.contact_number || quotation.customer_details?.mobile_no || customerFallback?.mobile_no || "",
+                shippingAddress: quotation.customer_details?.shipping_address || customerFallback?.shipping_address || "",
+                billingAddress: quotation.customer_details?.billing_address || customerFallback?.billing_address || "",
+                currency: mappedCurrency,
+                deliveryDate: quotation.expected_delivery_date || quotation.delivery_date || "",
                 items: soItems,
                 // Properly map all financial fields from quotation
-                discountValue: Number(quotation.discountValue) || 0,
-                discountType: (quotation.discountType as any) || "%",
-                taxValue: Number(quotation.taxValue) || 0,
-                taxType: (quotation.taxType as any) || "%",
-                taxPercentage: Number(quotation.taxPercentage) || 0,
+                discountValue: (normalizeText(quotation.discount?.type_name || quotation.discount?.type_code || quotation.discount_type_name || "").includes("PERCENT") || quotation.discount?.type_code === "%")
+                    ? Number(quotation.discount?.discount_rate ?? quotation.discount?.discount_percent ?? quotation.discount_percent ?? 0)
+                    : Number(quotation.discount?.amount ?? quotation.discount_amount ?? 0),
+                discountType: (normalizeText(quotation.discount?.type_name || quotation.discount?.type_code || quotation.discount_type_name || "").includes("PERCENT") || quotation.discount?.type_code === "%") ? "%" : "Amount",
+                taxValue: (normalizeText(quotation.tax?.type_name || quotation.tax?.type_code || quotation.tax_type_name || "").includes("PERCENT") || quotation.tax?.type_code === "%")
+                    ? Number(quotation.tax?.tax_rate ?? quotation.tax?.tax_percent ?? quotation.tax_rate ?? 0)
+                    : Number(quotation.tax?.amount ?? quotation.tax_amount ?? 0),
+                taxType: (normalizeText(quotation.tax?.type_name || quotation.tax?.type_code || quotation.tax_type_name || "").includes("PERCENT") || quotation.tax?.type_code === "%") ? "%" : "Amount",
+                taxPercentage: Number(quotation.tax?.tax_rate ?? quotation.tax_rate ?? 0),
                 remarks: quotation.remarks || "",
                 // Map payment terms from quotation, ensuring valid termType for Sales Order
-                terms: termsSource.map(t => {
+                terms: termsSource.map((t: any) => {
                     // Force termType to be one of the valid values: "Advance", "Delivery", "Days"
                     let termType: "Advance" | "Delivery" | "Days" = "Advance";
-                    const tTerms = String(t.terms || "").toLowerCase();
+                    const tTerms = String(t.term_type_name || t.term_type_code || t.terms || "").toLowerCase();
                     if (tTerms.includes("advance") || tTerms.includes("cash") || tTerms.includes("receipt")) termType = "Advance";
                     else if (tTerms.includes("delivery")) termType = "Delivery";
                     else if (tTerms.includes("day")) termType = "Days";
@@ -640,113 +1245,24 @@ const SalesOrder = () => {
 
     // Handle customer selection
     const handleCustomerSelect = (customerName: string) => {
-        if (customerName === "Manual Entry / New Customer") {
-            setIsManualEntry(true);
-            setSelectedCustomer("");
-            if (activeSO) {
-                setActiveSO({
-                    ...activeSO,
-                    customerName: "",
-                    contactPerson: "",
-                    mobileNo: "",
-                    shippingAddress: "",
-                    billingAddress: ""
-                });
-            }
-            return;
-        }
-
-        const customer = mockCustomers.find(c => c.name === customerName);
+        const customer = formCustomers.find(c => c.customer_name === customerName);
         if (customer && activeSO) {
             setIsManualEntry(false);
-            setSelectedCustomer(customer.name);
+            setSelectedCustomer(customer.customer_name);
             setActiveSO({
                 ...activeSO,
-                customerName: customer.name,
-                contactPerson: customer.contactPerson || "",
-                mobileNo: customer.mobileNo || "",
-                shippingAddress: customer.shippingAddress || "",
-                billingAddress: customer.billingAddress || ""
+                customerName: customer.customer_name,
+                contactPerson: customer.contact_person_name || "",
+                mobileNo: customer.mobile_no || "",
+                shippingAddress: customer.shipping_address || "",
+                billingAddress: customer.billing_address || ""
             });
+            if (customer.customer_id) {
+                loadQuotationReferences(customer.customer_id, customer.customer_name);
+            } else {
+                setQuotationRefs([]);
+            }
         }
-    };
-
-    // Create new customer
-    const handleCreateCustomer = () => {
-        if (!activeSO) return;
-
-        // Validation
-        if (!activeSO.customerName?.trim()) {
-            toast({
-                title: "Validation Error",
-                description: "Customer Name is required",
-                variant: "destructive"
-            });
-            return;
-        }
-
-        if (!activeSO.mobileNo?.trim()) {
-            toast({
-                title: "Validation Error",
-                description: "Contact Number is required",
-                variant: "destructive"
-            });
-            return;
-        }
-
-        if (!/^\d{10}$/.test(activeSO.mobileNo)) {
-            toast({
-                title: "Validation Error",
-                description: "Contact number must be 10 digits",
-                variant: "destructive"
-            });
-            return;
-        }
-
-        if (!activeSO.billingAddress?.trim()) {
-            toast({
-                title: "Validation Error",
-                description: "Billing Address is required",
-                variant: "destructive"
-            });
-            return;
-        }
-
-        // Check if customer already exists
-        const existingCustomer = mockCustomers.find(
-            c => c.name.toLowerCase() === activeSO.customerName.trim().toLowerCase()
-        );
-
-        if (existingCustomer) {
-            toast({
-                title: "Customer Exists",
-                description: "A customer with this name already exists",
-                variant: "destructive"
-            });
-            return;
-        }
-
-        // Create new customer
-        const newCustomer = {
-            id: `cust-${Date.now()}`,
-            name: activeSO.customerName.trim(),
-            contactPerson: activeSO.contactPerson?.trim() || "",
-            mobileNo: activeSO.mobileNo.trim(),
-            billingAddress: activeSO.billingAddress.trim(),
-            shippingAddress: activeSO.shippingAddress?.trim() || activeSO.billingAddress.trim()
-        };
-
-        // Add to mockCustomers array
-        mockCustomers.push(newCustomer);
-
-        // Switch to non-manual mode and keep the customer selected
-        setIsManualEntry(false);
-        setSelectedCustomer(newCustomer.name);
-
-        toast({
-            title: "Success",
-            description: `Customer "${newCustomer.name}" created successfully`
-        });
     };
 
     // Add new item to SO
@@ -808,7 +1324,7 @@ const SalesOrder = () => {
     // Calculate totals - Support for both discount and tax as % or Amount
     const calculateTotals = (items: SOItem[] = [], discountValue: number = 0, discountType: "%" | "Amount" = "%", taxValue: number = 0, taxType: "%" | "Amount" = "%") => {
         const subtotal = (items || []).reduce((sum, item) => sum + (Number(item.price) || 0), 0);
-        
+
         // Calculate discount with safety checks
         let discountAmount = 0;
         const safeDiscountValue = Number(discountValue) || 0;
@@ -818,9 +1334,9 @@ const SalesOrder = () => {
         } else {
             discountAmount = safeDiscountValue;
         }
-        
+
         const afterDiscount = Math.max(0, subtotal - discountAmount);
-        
+
         // Calculate tax - can be % or fixed amount
         let totalTax = 0;
         const safeTaxValue = Number(taxValue) || 0;
@@ -830,20 +1346,20 @@ const SalesOrder = () => {
         } else {
             totalTax = safeTaxValue;
         }
-        
+
         const grandTotal = afterDiscount + totalTax;
-        
+
         return { subtotal, discountAmount, afterDiscount, totalTax, grandTotal };
     };
 
-    // Save SO (Draft or Submit) - removed localStorage - using mock store
-    const handleSaveSO = (submit: boolean = false) => {
-        if (!activeSO) return;
+    // Save SO (Draft or Submit) - API integrated
+    const handleSaveSO = async (submit: boolean = false) => {
+        if (!activeSO || isActionBusy) return;
 
         // Validation - Cannot save/submit if in manual entry mode
         if (isManualEntry) {
             toast({
-                title: "Validation Error",
+                title: "Please Check",
                 description: submit ? "Please create the customer first before submitting" : "Please create the customer first before saving",
                 variant: "destructive"
             });
@@ -853,7 +1369,7 @@ const SalesOrder = () => {
         // Validation - Customer is required
         if (!activeSO.customerName?.trim()) {
             toast({
-                title: "Validation Error",
+                title: "Please Check",
                 description: "Customer is required",
                 variant: "destructive"
             });
@@ -863,7 +1379,7 @@ const SalesOrder = () => {
         // Validation - Billing Address is required
         if (!activeSO.billingAddress?.trim()) {
             toast({
-                title: "Validation Error",
+                title: "Please Check",
                 description: "Billing Address is required",
                 variant: "destructive"
             });
@@ -873,7 +1389,7 @@ const SalesOrder = () => {
         // Changed: Validation - At least one item required
         if (activeSO.items.length === 0) {
             toast({
-                title: "Validation Error",
+                title: "Please Check",
                 description: "Please add at least one item.",
                 variant: "destructive"
             });
@@ -884,7 +1400,7 @@ const SalesOrder = () => {
         const invalidItems = activeSO.items.filter(item => Number(item.orderedQty) <= 0);
         if (invalidItems.length > 0) {
             toast({
-                title: "Validation Error",
+                title: "Please Check",
                 description: "All items must have Ordered Qty greater than 0.",
                 variant: "destructive"
             });
@@ -897,7 +1413,7 @@ const SalesOrder = () => {
             const totalPercentage = activeSO.terms.reduce((sum, term) => sum + term.percentage, 0);
             if (totalPercentage !== 100) {
                 toast({
-                    title: "Validation Error",
+                    title: "Please Check",
                     description: "Total payment percentage must equal 100%.",
                     variant: "destructive"
                 });
@@ -908,7 +1424,7 @@ const SalesOrder = () => {
             const hasZeroPercentage = activeSO.terms.some(term => term.percentage === 0);
             if (hasZeroPercentage) {
                 toast({
-                    title: "Validation Error",
+                    title: "Please Check",
                     description: "Payment percentage cannot be 0%.",
                     variant: "destructive"
                 });
@@ -916,42 +1432,216 @@ const SalesOrder = () => {
             }
         }
 
-        // Status transition logic enforced here
-        let newStatus: SOStatus = activeSO.status;
-        if (submit && activeSO.status === "Draft") {
-            newStatus = "Invoice Pending"; // Draft → Submit → Invoice Pending
+        const customerMatch = formCustomers.find(c => c.customer_name === activeSO.customerName);
+        const customer_id = customerMatch?.customer_id;
+        const currencyMatch = currencies.find((c: any) =>
+            normalizeText(c?.code || c?.value_code || c?.name || c?.value_name) === normalizeText(activeSO.currency || "UGX")
+        );
+        const currency_id = getEntityId(currencyMatch);
+        const quotationMatch = quotationRefs.find(q => q.quotationNo === activeSO.quotationRef);
+
+        const discountTypeMatch = findByCodePriority(
+            paymentDiscountTypes,
+            getPercentOrAmountCodes(activeSO.discountType || "%"),
+            activeSO.discountType || "%"
+        );
+        const discount_type_id = getEntityId(discountTypeMatch) || 2;
+
+        const taxTypeMatch = findByCodePriority(
+            paymentTaxTypes,
+            getPercentOrAmountCodes(activeSO.taxType || "%"),
+            activeSO.taxType || "%"
+        );
+        const tax_type_id = getEntityId(taxTypeMatch) || 1;
+
+        if (!customer_id || !currency_id || !discount_type_id || !tax_type_id) {
+            toast({
+                title: "Please Check",
+                description: "Customer, currency, discount type, or tax type mapping failed.",
+                variant: "destructive"
+            });
+            return;
         }
 
-        const updatedSO = { ...activeSO, status: newStatus, currency: activeSO.currency || "UGX" };
+         const totals = calculateTotals(activeSO.items, activeSO.discountValue || 0, activeSO.discountType || "%", activeSO.taxValue || 0, activeSO.taxType || "%");
 
-        if (salesOrders.find(so => so.id === updatedSO.id)) {
-            updateSalesOrder(updatedSO.id, updatedSO);
+        const isExisting = salesOrders.some(so => so.id === activeSO.id);
+
+        const originalItems = originalSO ? (originalSO.items || []) : [];
+        const currentItems = activeSO.items || [];
+
+        const deletedItemIds = originalItems
+            .filter(orig => typeof orig.id === "number" && orig.id < 10000000000 && !currentItems.some(curr => curr.id === orig.id))
+            .map(orig => orig.id);
+
+        const updatedItems = currentItems
+            .filter(curr => typeof curr.id === "number" && curr.id < 10000000000 && originalItems.some(orig => orig.id === curr.id))
+            .map((item: any) => ({
+                id: item.id,
+                item_id: Number(item?.itemCode || 0),
+                quantity: Number(item?.orderedQty || 0),
+                unit_price: Number(item?.rate || 0),
+            }));
+
+        const addedItems = currentItems
+            .filter(curr => !curr.id || typeof curr.id !== "number" || curr.id >= 10000000000 || !originalItems.some(orig => orig.id === curr.id))
+            .map((item: any) => ({
+                item_id: Number(item?.itemCode || 0),
+                quantity: Number(item?.orderedQty || 0),
+                unit_price: Number(item?.rate || 0),
+            }));
+
+        const originalTerms = originalSO ? (originalSO.terms || []) : [];
+        const currentTerms = activeSO.terms || [];
+
+        const deletedTermIds = originalTerms
+            .filter(orig => typeof orig.id === "number" && orig.id < 10000000000 && !currentTerms.some(curr => curr.id === orig.id))
+            .map(orig => orig.id);
+
+        const updatedTerms = currentTerms
+            .filter(curr => typeof curr.id === "number" && curr.id < 10000000000 && originalTerms.some(orig => orig.id === curr.id))
+            .map((term: any) => {
+                const termTypeLower = normalizeText(term?.termType || "");
+                let typeMatch = paymentTermTypes.find((t: any) => {
+                    const name = normalizeText(t?.name || t?.value_name || t?.code || t?.value_code || "");
+                    return name.includes(termTypeLower) || termTypeLower.includes(name);
+                });
+                if (!typeMatch && paymentTermTypes.length > 0) {
+                    typeMatch = paymentTermTypes[0];
+                }
+                return {
+                    id: term.id,
+                    term_type_id: getEntityId(typeMatch),
+                    percentage: Number(term?.value || term?.percentage || 0),
+                    days: term?.termType === "Days" ? Number(term?.days || 0) : null,
+                };
+            });
+
+        const addedTerms = currentTerms
+            .filter(curr => !curr.id || typeof curr.id !== "number" || curr.id >= 10000000000 || !originalTerms.some(orig => orig.id === curr.id))
+            .map((term: any) => {
+                const termTypeLower = normalizeText(term?.termType || "");
+                let typeMatch = paymentTermTypes.find((t: any) => {
+                    const name = normalizeText(t?.name || t?.value_name || t?.code || t?.value_code || "");
+                    return name.includes(termTypeLower) || termTypeLower.includes(name);
+                });
+                if (!typeMatch && paymentTermTypes.length > 0) {
+                    typeMatch = paymentTermTypes[0];
+                }
+                return {
+                    term_type_id: getEntityId(typeMatch),
+                    percentage: Number(term?.value || term?.percentage || 0),
+                    days: term?.termType === "Days" ? Number(term?.days || 0) : null,
+                };
+            });
+
+        const apiPayload: any = {
+            sales_order_code: activeSO.soNumber,
+            order_date: activeSO.soDate,
+            quotation_id: quotationMatch?.id || undefined,
+            customer_id,
+            currency_id,
+            expected_delivery_date: activeSO.deliveryDate || null,
+            delivery_date: activeSO.deliveryDate || null,
+            remarks: activeSO.remarks || null,
+            discount_type_id: discount_type_id,
+            discount_percent: activeSO.discountType === "%" ? Number(activeSO.discountValue || 0) : 0,
+            discount_amount: activeSO.discountType === "Amount" ? Number(activeSO.discountValue || 0) : Number(totals.discountAmount || 0),
+            tax_type_id: tax_type_id,
+            tax_rate: activeSO.taxType === "%" ? Number(activeSO.taxValue || 0) : 0,
+            tax_amount: Number(totals.totalTax || 0),
+            subtotal: Number(totals.subtotal || 0),
+            total_amount: Number(totals.grandTotal || 0),
+            items: isExisting ? {
+                add: addedItems,
+                update: updatedItems,
+                delete: deletedItemIds
+            } : (activeSO.items || []).map((item: any) => ({
+                item_id: Number(item?.itemCode || 0),
+                quantity: Number(item?.orderedQty || 0),
+                unit_price: Number(item?.rate || 0),
+                price_per_item: Number(item?.price || 0),
+            })),
+            payment_terms: isExisting ? {
+                add: addedTerms,
+                update: updatedTerms,
+                delete: deletedTermIds
+            } : (activeSO.terms || []).map((term: any) => {
+                const termTypeLower = normalizeText(term?.termType || "");
+                let typeMatch = paymentTermTypes.find((t: any) => {
+                    const name = normalizeText(t?.name || t?.value_name || t?.code || t?.value_code || "");
+                    return name.includes(termTypeLower) || termTypeLower.includes(name);
+                });
+                if (!typeMatch && paymentTermTypes.length > 0) {
+                    typeMatch = paymentTermTypes[0];
+                }
+                return {
+                    term_type_id: getEntityId(typeMatch),
+                    percentage: Number(term?.value || term?.percentage || 0),
+                    days: term?.termType === "Days" ? Number(term?.days || 0) : null,
+                };
+            })
+        };
+
+        if (isExisting && typeof activeSO.id === "number" && activeSO.id < 10000000000) {
+            apiPayload.id = activeSO.id;
+        }
+
+        if (submit) {
+            setIsSubmittingSO(true);
         } else {
-            createSalesOrder(updatedSO);
+            setIsSavingSO(true);
         }
+        try {
+            const response = isExisting
+                ? (submit ? await salesOrdersApi.updateSO({ ...apiPayload, status_code: "INVOICE_PENDING" }) : await salesOrdersApi.updateSO(apiPayload))
+                : (submit ? await salesOrdersApi.submitSO(apiPayload) : await salesOrdersApi.saveAsDraftSO(apiPayload));
 
-        // Auto-create invoice if submitted
-        if (submit && newStatus === "Invoice Pending") {
-            createInvoiceFromSO(updatedSO as any); // Cast because of slight type diffs in mock lib
+            if (!response?.isSuccessful) {
+                toast({
+                    title: submit ? "Submit Failed" : "Save Failed",
+                    description: response?.message || "Unable to save sales order.",
+                    variant: "destructive",
+                });
+                return;
+            }
+
+            if (submit && !isExisting) {
+                createInvoiceFromSO({ ...activeSO, status: "Invoice Pending" } as any);
+            }
+
+            fetchSalesOrdersList();
+            setIsSODialogOpen(false);
+            toast({
+                title: submit ? "SO Submitted" : "SO Saved",
+                description: response?.message || (submit ? "Sales order submitted successfully." : "Sales order saved as draft."),
+                variant: "success"
+            });
+        } catch (error: any) {
+            toast({
+                title: submit ? "Submit Failed" : "Save Failed",
+                description: error?.message || "Unable to save sales order.",
+                variant: "destructive",
+            });
+        } finally {
+            if (submit) {
+                setIsSubmittingSO(false);
+            } else {
+                setIsSavingSO(false);
+            }
         }
-
-        setSalesOrders(getSalesOrders()); // Refresh list
-        setIsSODialogOpen(false);
-        toast({
-            title: submit ? "SO Submitted" : "SO Saved",
-            description: submit ? `Sales Order ${updatedSO.soNumber} submitted successfully.` : `Sales Order ${updatedSO.soNumber} saved as draft.`
-        });
     };
 
     // Process to Invoice (Invoice Pending → Dispatch Pending) - removed localStorage - using mock store
     const handleProcessToInvoice = () => {
         if (!activeSO || activeSO.status !== "Invoice Pending") return;
         changeSOStatus(activeSO.id, "Dispatch Pending");
-        setSalesOrders(getSalesOrders()); // Refresh list
+        fetchSalesOrdersList();
         setIsSODialogOpen(false);
         toast({
             title: "Processed to Invoice",
-            description: `Sales Order ${activeSO.soNumber} is now in Dispatch Pending status.`
+            description: `Sales Order ${activeSO.soNumber} is now in Dispatch Pending status.`,
+            variant: "success"
         });
     };
 
@@ -959,11 +1649,11 @@ const SalesOrder = () => {
     const handleCloseSO = (so?: SOData) => {
         const soToClose = so || activeSO || dispatchedEditSO;
         if (!soToClose) return;
-        
+
         const result = closeSalesOrder(soToClose.id);
-        
+
         if (result.success) {
-            refreshSalesOrders();
+            fetchSalesOrdersList();
             if (activeSO) {
                 setActiveSO(result.so || null);
             }
@@ -972,7 +1662,8 @@ const SalesOrder = () => {
             }
             toast({
                 title: "Success",
-                description: result.message
+                description: result.message,
+                variant: "success"
             });
         } else {
             toast({
@@ -984,19 +1675,43 @@ const SalesOrder = () => {
     };
 
     // Delete SO (only allowed when status = Draft) - removed localStorage - using mock store
-    const handleDeleteSO = (soId: number) => {
-        // Filter out the SO to delete
-        setSalesOrders(salesOrders.filter(so => so.id !== soId));
-        setIsDeleteAlertOpen(false);
-        setIsSODialogOpen(false);
-        toast({
-            title: "SO Deleted",
-            description: "Sales Order has been deleted successfully."
-        });
+    const handleDeleteClick = (so: SOData) => {
+        setSoToDelete(so);
+        setIsDeleteAlertOpen(true);
+    };
+
+    const handleDeleteSO = async (soId: number) => {
+        try {
+            const response = await salesOrdersApi.deleteSO(soId);
+            if (response.isSuccessful) {
+                toast({
+                    title: "SO Deleted",
+                    description: response.message || "Sales Order has been deleted successfully.",
+                    variant: "success"
+                });
+                fetchSalesOrdersList();
+            } else {
+                toast({
+                    title: "Delete Failed",
+                    description: response.message || "Unable to delete sales order.",
+                    variant: "destructive"
+                });
+            }
+        } catch (error: any) {
+            toast({
+                title: "Delete Failed",
+                description: error.message || "An error occurred while deleting the sales order.",
+                variant: "destructive"
+            });
+        } finally {
+            setIsDeleteAlertOpen(false);
+            setIsSODialogOpen(false);
+            setSoToDelete(null);
+        }
     };
 
     // Download Quotation PDF - Opens print dialog
-    const handleDownloadQuotation = () => {
+    const handleDownloadQuotation = async () => {
         if (!activeSO || !activeSO.quotationRef) {
             toast({
                 title: "No Quotation",
@@ -1006,9 +1721,7 @@ const SalesOrder = () => {
             return;
         }
 
-        // Find the quotation data
-        const quotations = getQuotations();
-        const quotation = quotations.find(q => q.quotationNo === activeSO.quotationRef);
+        const quotation = await fetchQuotationByReference(activeSO.quotationRef);
 
         if (!quotation) {
             toast({
@@ -1030,191 +1743,14 @@ const SalesOrder = () => {
             iframe.style.border = "none";
             document.body.appendChild(iframe);
         }
+        // Use unified quotation PDF template
+        const pdfContent = generateQuotationPDFHTML(quotation as any);
 
-        const formattedQuotationDate = format(new Date(quotation.quotationDate), "dd-MM-yyyy");
-
-        const htmlContent = `
-            <html>
-                <head>
-                    <title>Quotation - ${quotation.quotationNo}</title>
-                    <style>
-                        @page { size: A4; margin: 10mm; }
-                        body { font-family: 'Inter', system-ui, sans-serif; padding: 0; color: #111; line-height: 1.4; font-size: 11px; }
-                        .container { width: 100%; max-width: 100%; margin: 0 auto; }
-                        
-                        .header { display: flex; justify-content: space-between; align-items: flex-start; border-bottom: 2px solid #1e40af; padding-bottom: 10px; margin-bottom: 15px; }
-                        .company-info h1 { margin: 0; color: #1e40af; font-size: 22px; font-weight: 800; text-transform: uppercase; }
-                        .company-info p { margin: 2px 0; color: #64748b; font-size: 10px; }
-                        
-                        .document-title { text-align: right; }
-                        .document-title h2 { margin: 0; font-size: 18px; color: #1e293b; }
-                        .document-title p { margin: 2px 0; font-weight: 700; color: #1e40af; font-size: 12px; }
-
-                        .details-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-bottom: 20px; }
-                        .info-box { border: 1px solid #e2e8f0; padding: 10px; border-radius: 6px; }
-                        .info-box h3 { margin: 0 0 6px 0; font-size: 9px; text-transform: uppercase; color: #64748b; letter-spacing: 0.05em; border-bottom: 1px solid #f1f5f9; padding-bottom: 4px; }
-                        .info-item { margin-bottom: 4px; display: flex; }
-                        .info-item strong { width: 110px; color: #475569; font-size: 10px; flex-shrink: 0; }
-                        .info-item span { color: #1e293b; font-weight: 500; }
-
-                        table { width: 100%; border-collapse: collapse; margin-top: 5px; }
-                        th { background-color: #f8fafc; color: #475569; font-size: 9px; text-transform: uppercase; padding: 8px 10px; border: 1px solid #e2e8f0; text-align: left; }
-                        td { padding: 8px 10px; border: 1px solid #e2e8f0; font-size: 10px; }
-                        .text-right { text-align: right; }
-                        .font-bold { font-weight: 700; }
-
-                        .totals-section { margin-top: 15px; display: flex; justify-content: flex-end; }
-                        .totals-box { width: 300px; border: 1px solid #e2e8f0; border-radius: 6px; overflow: hidden; }
-                        .totals-row { display: flex; justify-content: space-between; padding: 8px 12px; border-bottom: 1px solid #e2e8f0; }
-                        .totals-row:last-child { border-bottom: none; background-color: #f8fafc; font-weight: 700; }
-                        .totals-label { color: #475569; font-size: 10px; }
-                        .totals-value { color: #1e293b; font-weight: 600; }
-
-                        .payment-terms { margin-top: 15px; }
-                        .payment-terms h3 { font-size: 9px; font-weight: bold; text-transform: uppercase; color: #64748b; margin-bottom: 6px; }
-                        .payment-terms table { margin-top: 0; }
-
-                        .remarks-section { margin-top: 15px; }
-                        .remarks-section h3 { font-size: 9px; font-weight: bold; text-transform: uppercase; color: #64748b; margin-bottom: 4px; }
-                        .remarks-box { border: 1px solid #e2e8f0; padding: 8px; border-radius: 4px; min-height: 40px; background: #f8fafc; }
-
-                        .signatures { display: grid; grid-template-columns: 1fr 1fr; gap: 60px; margin-top: 60px; max-width: 500px; }
-                        .sig-line { border-top: 1px solid #cbd5e1; padding-top: 6px; text-align: left; font-weight: 600; font-size: 10px; color: #475569; }
-                        
-                        .footer { margin-top: 40px; padding-top: 10px; border-top: 1px solid #f1f5f9; text-align: center; font-size: 9px; color: #94a3b8; }
-                        
-                        @media print {
-                            body { -webkit-print-color-adjust: exact; }
-                        }
-                    </style>
-                </head>
-                <body>
-                    <div class="container">
-                        <div class="header">
-                            <div class="company-info">
-                                <h1>MASTER-ERP</h1>
-                                <p>Industrial Solutions & Services</p>
-                                <p>Ahmedabad, Gujarat, India</p>
-                            </div>
-                            <div class="document-title">
-                                <h2>QUOTATION</h2>
-                                <p>${quotation.quotationNo}</p>
-                            </div>
-                        </div>
-
-                        <div class="details-grid">
-                            <div class="info-box">
-                                <h3>Customer Details</h3>
-                                <div class="info-item"><strong>Customer</strong><span>${quotation.customerName}</span></div>
-                                <div class="info-item"><strong>Contact Person</strong><span>${quotation.contactPersonName}</span></div>
-                                <div class="info-item"><strong>Contact Number</strong><span>${quotation.contactNumber}</span></div>
-                                <div class="info-item"><strong>Billing Address</strong><span>${quotation.billingAddress}</span></div>
-                                <div class="info-item"><strong>Shipping Address</strong><span>${quotation.shippingAddress}</span></div>
-                            </div>
-                            <div class="info-box">
-                                <h3>Quotation Details</h3>
-                                <div class="info-item"><strong>Quotation Date</strong><span>${formattedQuotationDate}</span></div>
-                                <div class="info-item"><strong>Currency</strong><span>${quotation.currency}</span></div>
-                                <div class="info-item"><strong>Delivery Time</strong><span>${quotation.deliveryTime ? format(new Date(quotation.deliveryTime), "dd-MM-yyyy") : "N/A"}</span></div>
-                                <div class="info-item"><strong>Validity</strong><span>${quotation.quotationValidity ? format(new Date(quotation.quotationValidity), "dd-MM-yyyy") : "N/A"}</span></div>
-                                <div class="info-item"><strong>Status</strong><span>${quotation.status}</span></div>
-                            </div>
-                        </div>
-
-                        <table>
-                            <thead>
-                                <tr>
-                                    <th width="50">#</th>
-                                    <th>Item</th>
-                                    <th width="80" class="text-right">Quantity</th>
-                                    <th width="100" class="text-right">Rate</th>
-                                    <th width="120" class="text-right">Amount</th>
-                                </tr>
-                            </thead>
-                            <tbody>
-                                ${quotation.items.map((item, index) => `
-                                    <tr>
-                                        <td class="text-right">${index + 1}</td>
-                                        <td class="font-bold">${item.item}</td>
-                                        <td class="text-right">${item.qty}</td>
-                                        <td class="text-right">${getCurrencySymbol(quotation.currency)} ${Number().toFixed(2)}</td>
-                                        <td class="text-right font-bold">${getCurrencySymbol(quotation.currency)} ${Number().toFixed(2)}</td>
-                                    </tr>
-                                `).join("")}
-                            </tbody>
-                        </table>
-
-                        <div class="totals-section">
-                            <div class="totals-box">
-                                <div class="totals-row">
-                                    <span class="totals-label">Subtotal</span>
-                                    <span class="totals-value">${getCurrencySymbol(quotation.currency)} ${quotation.subtotal.toFixed(2)}</span>
-                                </div>
-                                <div class="totals-row">
-                                    <span class="totals-label">Tax (${quotation.taxPercentage}%)</span>
-                                    <span class="totals-value">${getCurrencySymbol(quotation.currency)} ${quotation.taxAmount.toFixed(2)}</span>
-                                </div>
-                                <div class="totals-row">
-                                    <span class="totals-label">Total</span>
-                                    <span class="totals-value">${getCurrencySymbol(quotation.currency)} ${quotation.total.toFixed(2)}</span>
-                                </div>
-                            </div>
-                        </div>
-
-                        ${quotation.paymentTerms.length > 0 ? `
-                            <div class="payment-terms">
-                                <h3>Payment Terms</h3>
-                                 <table>
-                                    <thead>
-                                        <tr>
-                                            <th width="40">#</th>
-                                            <th width="90">Percentage</th>
-                                            <th width="100">Terms</th>
-                                            <th width="80">Days</th>
-                                            <th>Date</th>
-                                        </tr>
-                                    </thead>
-                                    <tbody>
-                                        ${quotation.paymentTerms.map((term, index) => `
-                                            <tr>
-                                                <td class="text-right">${index + 1}</td>
-                                                <td>${term.value || term.percentage || 0}</td>
-                                                <td>${term.terms}</td>
-                                                <td>${term.terms === "Days" ? (term.days || "-") : "-"}</td>
-                                                <td>${term.date ? format(new Date(term.date), "dd-MM-yyyy") : "-"}</td>
-                                            </tr>
-                                        `).join("")}
-                                    </tbody>
-                                </table>
-                            </div>
-                        ` : ""}
-
-                        ${quotation.remarks ? `
-                            <div class="remarks-section">
-                                <h3>Remarks</h3>
-                                <div class="remarks-box">${quotation.remarks}</div>
-                            </div>
-                        ` : ""}
-
-                        <div class="signatures">
-                            <div class="sig-line">Prepared By</div>
-                            <div class="sig-line">Authorized Signatory</div>
-                        </div>
-
-                        <div class="footer">
-                            <p>This is a computer generated document. Generated on ${format(new Date(), "dd-MM-yyyy, HH:mm")}</p>
-                            <p>Tassos Consultancy Services | Govt IT Solutions | Ahmedabad</p>
-                        </div>
-                    </div>
-                </body>
-            </html>
-        `;
-
-        const doc = iframe.contentWindow?.document || iframe.contentDocument;
-        if (doc) {
-            doc.open();
-            doc.write(htmlContent);
-            doc.close();
+        const iframeDoc = iframe.contentWindow?.document || iframe.contentDocument;
+        if (iframeDoc) {
+            iframeDoc.open();
+            iframeDoc.write(pdfContent);
+            iframeDoc.close();
 
             // Wait for styles and fonts to load
             setTimeout(() => {
@@ -1223,6 +1759,8 @@ const SalesOrder = () => {
             }, 500);
         }
     };
+
+
 
     // Download Invoice PDF (reused from Invoicing.tsx)
     const handleDownloadInvoice = () => {
@@ -1321,7 +1859,7 @@ const SalesOrder = () => {
                             </div>
                             <div class="info-box">
                                 <h3>Invoice Details</h3>
-                                <div class="info-item"><strong>SO Number</strong><span>${activeSO.soNumber}</span></div>
+                                <div class="info-item"><strong>SO Code</strong><span>${activeSO.soNumber}</span></div>
                                 <div class="info-item"><strong>SO Date</strong><span>${formattedSODate}</span></div>
                                 <div class="info-item"><strong>Delivery Date</strong><span>${formattedDeliveryDate}</span></div>
                                 <div class="info-item"><strong>Currency</strong><span style="font-weight: 700; color: #1e40af;">${activeSO.currency || "USD"}</span></div>
@@ -1335,7 +1873,7 @@ const SalesOrder = () => {
                                     <th width="50">#</th>
                                     <th>Item Name</th>
                                     <th width="80" class="text-right">Qty</th>
-                                    <th width="80" class="text-right">Rate</th>
+                                    <th width="80" class="text-right">Unit Price</th>
                                     <th width="100" class="text-right">Amount</th>
                                 </tr>
                             </thead>
@@ -1345,8 +1883,8 @@ const SalesOrder = () => {
                                         <td class="text-center">${index + 1}</td>
                                         <td class="font-bold">${item.itemName}</td>
                                         <td class="text-right">${item.orderedQty}</td>
-                                        <td class="text-right">USh ${Number(item.rate).toFixed(2)}</td>
-                                        <td class="text-right font-bold" style="color: #1e40af;">USh ${Number(item.price).toFixed(2)}</td>
+                                        <td class="text-right">${getCurrencySymbol(activeSO.currency || "USD")} ${Number(item.rate).toFixed(2)}</td>
+                                        <td class="text-right font-bold" style="color: #1e40af;">${getCurrencySymbol(activeSO.currency || "USD")} ${Number(item.price).toFixed(2)}</td>
                                     </tr>
                                 `).join("")}
                             </tbody>
@@ -1389,19 +1927,19 @@ const SalesOrder = () => {
                             <div class="totals-box">
                                 <div class="total-row">
                                     <span>Subtotal:</span>
-                                    <span class="font-bold">USh ${subtotal.toFixed(2)}</span>
+                                    <span class="font-bold">${getCurrencySymbol(activeSO.currency || "USD")} ${subtotal.toFixed(2)}</span>
                                 </div>
                                 <div class="total-row">
                                     <span>Discount (${activeSO.discountValue || 0}${activeSO.discountType === "%" ? "%" : ""}):</span>
-                                    <span class="font-bold" style="color: #dc2626;">-USh ${discountAmount.toFixed(2)}</span>
+                                    <span class="font-bold" style="color: #dc2626;">-${getCurrencySymbol(activeSO.currency || "USD")} ${discountAmount.toFixed(2)}</span>
                                 </div>
                                 <div class="total-row">
                                     <span>Tax (${activeSO.taxPercentage}%):</span>
-                                    <span class="font-bold" style="color: #16a34a;">+USh ${totalTax.toFixed(2)}</span>
+                                    <span class="font-bold" style="color: #16a34a;">+${getCurrencySymbol(activeSO.currency || "USD")} ${totalTax.toFixed(2)}</span>
                                 </div>
                                 <div class="total-row grand">
                                     <span>Grand Total:</span>
-                                    <span>USh ${grandTotal.toFixed(2)}</span>
+                                    <span>${getCurrencySymbol(activeSO.currency || "USD")} ${grandTotal.toFixed(2)}</span>
                                 </div>
                             </div>
                         </div>
@@ -1518,7 +2056,7 @@ const SalesOrder = () => {
                             </div>
                             <div class="info-box">
                                 <h3>Order Details</h3>
-                                <div class="info-item"><strong>SO Number</strong><span>${activeSO.soNumber}</span></div>
+                                <div class="info-item"><strong>SO Code</strong><span>${activeSO.soNumber}</span></div>
                                 <div class="info-item"><strong>Warehouse</strong><span>${activeSO.warehouse || "Main Warehouse"}</span></div>
                                 <div class="info-item"><strong>Dispatch Date</strong><span>${formattedSODate}</span></div>
                             </div>
@@ -1583,24 +2121,53 @@ const SalesOrder = () => {
     };
 
     // Download Dispatch Note from preview - accepts SO parameter
-    const handleDownloadDispatchNoteFromPreview = (so: SOData) => {
+    const handleDownloadDispatchNoteFromPreview = async (so: SOData) => {
         if (!so) return;
 
-        // Use a hidden iframe to print/download
-        let iframe = document.getElementById("so-dispatch-print-iframe-preview") as HTMLIFrameElement;
-        if (!iframe) {
-            iframe = document.createElement("iframe");
-            iframe.id = "so-dispatch-print-iframe-preview";
-            iframe.style.position = "absolute";
-            iframe.style.width = "0px";
-            iframe.style.height = "0px";
-            iframe.style.border = "none";
-            document.body.appendChild(iframe);
-        }
+        try {
+            setIsLoading(true);
 
-        const formattedSODate = format(new Date(so.soDate), "dd/MM/yyyy");
+            // 1. Find the linked dispatch for this SO
+            const searchRes = await inventoryApi.getDispatchList({ search: so.soNumber, page: 1, limit: 1 });
+            const linkedDispatch = searchRes?.data?.records?.find(d => d.so_code === so.soNumber);
 
-        const htmlContent = `
+            if (!linkedDispatch) {
+                toast({
+                    title: "Dispatch Not Found",
+                    description: `No dispatch record found for Sales Order ${so.soNumber}`,
+                    variant: "destructive"
+                });
+                return;
+            }
+
+            // 2. Fetch full dispatch details
+            const detailRes = await inventoryApi.getDispatchById(linkedDispatch.dispatch_id);
+            if (!detailRes?.isSuccessful || !detailRes?.data) {
+                toast({
+                    title: "Error",
+                    description: "Failed to load dispatch details.",
+                    variant: "destructive"
+                });
+                return;
+            }
+
+            const dispatch = detailRes.data;
+
+            // Use a hidden iframe to print/download
+            let iframe = document.getElementById("so-dispatch-print-iframe-preview") as HTMLIFrameElement;
+            if (!iframe) {
+                iframe = document.createElement("iframe");
+                iframe.id = "so-dispatch-print-iframe-preview";
+                iframe.style.position = "absolute";
+                iframe.style.width = "0px";
+                iframe.style.height = "0px";
+                iframe.style.border = "none";
+                document.body.appendChild(iframe);
+            }
+
+            const formattedDispatchDate = format(new Date(dispatch.dispatch_date), "dd/MM/yyyy");
+
+            const htmlContent = `
             <html>
                 <head>
                     <title>Dispatch Note - ${so.soNumber}</title>
@@ -1617,7 +2184,7 @@ const SalesOrder = () => {
                         .document-title h2 { margin: 0; font-size: 18px; color: #1e293b; }
                         .document-title p { margin: 2px 0; font-weight: 700; color: #1e40af; font-size: 12px; }
 
-                        .details-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-bottom: 20px; }
+                        .details-section { margin-bottom: 20px; }
                         .info-box { border: 1px solid #e2e8f0; padding: 10px; border-radius: 6px; }
                         .info-box h3 { margin: 0 0 6px 0; font-size: 9px; text-transform: uppercase; color: #64748b; letter-spacing: 0.05em; border-bottom: 1px solid #f1f5f9; padding-bottom: 4px; }
                         .info-item { margin-bottom: 4px; display: flex; }
@@ -1628,14 +2195,13 @@ const SalesOrder = () => {
                         th { background-color: #f8fafc; color: #475569; font-size: 9px; text-transform: uppercase; padding: 8px 10px; border: 1px solid #e2e8f0; text-align: left; }
                         td { padding: 8px 10px; border: 1px solid #e2e8f0; font-size: 10px; }
                         .text-right { text-align: right; }
+                        .text-center { text-align: center; }
                         .font-bold { font-weight: 700; }
+                        .text-primary { color: #1e40af; }
 
                         .remarks-section { margin-top: 15px; }
                         .remarks-section h3 { font-size: 9px; font-weight: bold; text-transform: uppercase; color: #64748b; margin-bottom: 4px; }
                         .remarks-box { border: 1px solid #e2e8f0; padding: 8px; border-radius: 4px; min-height: 40px; background: #f8fafc; }
-
-                        .signatures { display: grid; grid-template-columns: 1fr 1fr; gap: 60px; margin-top: 60px; max-width: 500px; }
-                        .sig-line { border-top: 1px solid #cbd5e1; padding-top: 6px; text-align: left; font-weight: 600; font-size: 10px; color: #475569; }
                         
                         .footer { margin-top: 40px; padding-top: 10px; border-top: 1px solid #f1f5f9; text-align: center; font-size: 9px; color: #94a3b8; }
                         
@@ -1654,21 +2220,21 @@ const SalesOrder = () => {
                             </div>
                             <div class="document-title">
                                 <h2>DISPATCH NOTE</h2>
-                                <p># DSP-${so.id}</p>
+                                <p># DSP-${dispatch.dispatch_id}</p>
                             </div>
                         </div>
 
-                        <div class="details-grid">
-                            <div class="info-box">
+                        <div class="details-section">
+                            <div class="info-box" style="margin-bottom: 15px;">
                                 <h3>Customer Details</h3>
-                                <div class="info-item"><strong>Customer</strong><span>${so.customerName}</span></div>
-                                <div class="info-item"><strong>Address</strong><span>${so.shippingAddress || "N/A"}</span></div>
+                                <div class="info-item"><strong>Customer</strong><span>${dispatch.customer_name}</span></div>
+                                <div class="info-item"><strong>Address</strong><span>${dispatch.shipping_address || "N/A"}</span></div>
                             </div>
                             <div class="info-box">
                                 <h3>Order Details</h3>
-                                <div class="info-item"><strong>SO Number</strong><span>${so.soNumber}</span></div>
-                                <div class="info-item"><strong>Warehouse</strong><span>${so.warehouse || "Main Warehouse"}</span></div>
-                                <div class="info-item"><strong>Dispatch Date</strong><span>${formattedSODate}</span></div>
+                                <div class="info-item"><strong>SO Code</strong><span>${dispatch.so_code}</span></div>
+                                <div class="info-item"><strong>Warehouse</strong><span>${dispatch.warehouse_name || "Main Warehouse"}</span></div>
+                                <div class="info-item"><strong>Dispatch Date</strong><span>${formattedDispatchDate}</span></div>
                             </div>
                         </div>
 
@@ -1676,154 +2242,156 @@ const SalesOrder = () => {
                             <thead>
                                 <tr>
                                     <th width="50">#</th>
-                                    <th>Item Name</th>
-                                    <th width="60">UOM</th>
-                                    <th width="80" class="text-right">Ordered</th>
-                                    <th width="80" class="text-right">Dispatched</th>
+                                    <th>ITEM NAME</th>
+                                    <th width="80" class="text-center">UOM</th>
+                                    <th width="80" class="text-right">ORDERED</th>
+                                    <th width="80" class="text-right">DISPATCHED</th>
                                 </tr>
                             </thead>
                             <tbody>
-                                ${so.items.map((item, index) => `
+                                ${dispatch.dispatch_items.map((item, index) => `
                                     <tr>
-                                        <td class="text-right">${index + 1}</td>
-                                        <td class="font-bold">${item.itemName}</td>
-                                        <td>${item.uom}</td>
-                                        <td class="text-right">${item.orderedQty}</td>
-                                        <td class="text-right font-bold" style="color: #1e40af;">${item.dispatchedQty}</td>
+                                        <td class="text-center">${index + 1}</td>
+                                        <td>${item.item_name}</td>
+                                        <td class="text-center">${item.uom || 'PCS'}</td>
+                                        <td class="text-right">${item.ordered_qty}</td>
+                                        <td class="text-right font-bold text-primary">${item.dispatched_qty}</td>
                                     </tr>
-                                `).join("")}
+                                `).join('')}
                             </tbody>
                         </table>
 
-                        ${so.remarks ? `
+                        ${dispatch.remarks ? `
                             <div class="remarks-section">
-                                <h3>Remarks / Special Instructions</h3>
-                                <div class="remarks-box">${so.remarks}</div>
+                                <h3>Remarks</h3>
+                                <div class="remarks-box">${dispatch.remarks}</div>
                             </div>
-                        ` : ""}
-
-                        <div class="signatures">
-                            <div class="sig-line">Prepared By</div>
-                            <div class="sig-line">Authorized Signatory</div>
-                        </div>
+                        ` : ''}
 
                         <div class="footer">
-                            <p>This is a computer generated document. Generated on ${format(new Date(), "PPpp")}</p>
+                            <p>This is a computer generated document. Generated on ${format(new Date(), "MMMM dd, yyyy, h:mm a")}</p>
                             <p>Tassos Consultancy Services | Govt IT Solutions | Ahmedabad</p>
                         </div>
                     </div>
                 </body>
             </html>
-        `;
+            `;
 
-        const doc = iframe.contentWindow?.document || iframe.contentDocument;
-        if (doc) {
-            doc.open();
-            doc.write(htmlContent);
-            doc.close();
+            const doc = iframe.contentWindow?.document || iframe.contentDocument;
+            if (doc) {
+                doc.open();
+                doc.write(htmlContent);
+                doc.close();
 
-            // Wait for styles and fonts to load
-            setTimeout(() => {
-                iframe.contentWindow?.focus();
-                iframe.contentWindow?.print();
-            }, 500);
+                setTimeout(() => {
+                    iframe.contentWindow?.focus();
+                    iframe.contentWindow?.print();
+                }, 500);
+            }
+        } catch (error: any) {
+            console.error("Error downloading dispatch note:", error);
+            toast({
+                title: "Error",
+                description: `Failed to generate Dispatch Note: ${error.message || "Unexpected error"}`,
+                variant: "destructive"
+            });
+        } finally {
+            setIsLoading(false);
         }
     };
 
     // Download Quotation from preview - Using unified template
-        const handleDownloadQuotationFromPreview = (quotationRef?: string) => {
-            const refToUse = quotationRef || previewSO?.quotationRef;
+    const handleDownloadQuotationFromPreview = async (quotationRef?: string) => {
+        const refToUse = quotationRef || previewSO?.quotationRef;
 
-            if (!refToUse) {
-                toast({
-                    title: "No Quotation",
-                    description: "This Sales Order does not have a linked quotation.",
-                    variant: "destructive"
-                });
-                return;
-            }
-
-            // Find the quotation data
-            const quotations = getQuotations();
-            const quotation = quotations.find(q => q.quotationNo === refToUse);
-
-            if (!quotation) {
-                toast({
-                    title: "Quotation Not Found",
-                    description: `Could not find quotation ${refToUse}`,
-                    variant: "destructive"
-                });
-                return;
-            }
-
-            // Use unified quotation PDF template
-            const pdfContent = generateQuotationPDFHTML(quotation);
-
-            // Create a hidden iframe for printing
-            const iframe = document.createElement('iframe');
-            iframe.style.display = 'none';
-            document.body.appendChild(iframe);
-
-            const iframeDoc = iframe.contentWindow?.document || iframe.contentDocument;
-            if (iframeDoc) {
-                iframeDoc.open();
-                iframeDoc.write(pdfContent);
-                iframeDoc.close();
-
-                // Wait for images and resources to load
-                const printIframe = () => {
-                    const win = iframe.contentWindow;
-                    if (win) {
-                        win.focus();
-                        win.print();
-                        // Clean up after printing
-                        setTimeout(() => {
-                            document.body.removeChild(iframe);
-                        }, 1000);
-                    }
-                };
-
-                if (iframe.contentWindow) {
-                    // Some browsers need a small delay
-                    setTimeout(printIframe, 500);
-                }
-            } else {
-                toast({
-                    title: "Error",
-                    description: "Could not initialize printing",
-                    variant: "destructive"
-                });
-                document.body.removeChild(iframe);
-            }
-
+        if (!refToUse) {
             toast({
-                title: "Printing",
-                description: "Preparing quotation for print..."
+                title: "No Quotation",
+                description: "This Sales Order does not have a linked quotation.",
+                variant: "destructive"
             });
+            return;
         }
 
-    // Download Sales Order PDF from preview
-    // Download Sales Order PDF from preview
-        const handleDownloadSOPDF = (so: SOData) => {
-            if (!so) return;
+        const quotation = await fetchQuotationByReference(refToUse);
 
-            // Use a hidden iframe to print/download
-            let iframe = document.getElementById("so-pdf-preview-print-iframe") as HTMLIFrameElement;
-            if (!iframe) {
-                iframe = document.createElement("iframe");
-                iframe.id = "so-pdf-preview-print-iframe";
-                iframe.style.position = "absolute";
-                iframe.style.width = "0px";
-                iframe.style.height = "0px";
-                iframe.style.border = "none";
-                document.body.appendChild(iframe);
+        if (!quotation) {
+            toast({
+                title: "Quotation Not Found",
+                description: `Could not find quotation ${refToUse}`,
+                variant: "destructive"
+            });
+            return;
+        }
+
+        // Use unified quotation PDF template
+        const pdfContent = generateQuotationPDFHTML(quotation);
+
+        // Create a hidden iframe for printing
+        const iframe = document.createElement('iframe');
+        iframe.style.display = 'none';
+        document.body.appendChild(iframe);
+
+        const iframeDoc = iframe.contentWindow?.document || iframe.contentDocument;
+        if (iframeDoc) {
+            iframeDoc.open();
+            iframeDoc.write(pdfContent);
+            iframeDoc.close();
+
+            // Wait for images and resources to load
+            const printIframe = () => {
+                const win = iframe.contentWindow;
+                if (win) {
+                    win.focus();
+                    win.print();
+                    // Clean up after printing
+                    setTimeout(() => {
+                        document.body.removeChild(iframe);
+                    }, 1000);
+                }
+            };
+
+            if (iframe.contentWindow) {
+                // Some browsers need a small delay
+                setTimeout(printIframe, 500);
             }
+        } else {
+            toast({
+                title: "Error",
+                description: "Could not initialize printing",
+                variant: "destructive"
+            });
+            document.body.removeChild(iframe);
+        }
 
-            const { subtotal, discountAmount, totalTax, grandTotal } = calculateTotals(so.items, so.discountValue || 0, so.discountType || "%", so.taxValue || 0, so.taxType || "%");
-            const formattedSODate = format(new Date(so.soDate), "dd-MM-yyyy");
-            const formattedDeliveryDate = so.deliveryDate ? format(new Date(so.deliveryDate), "dd-MM-yyyy") : "N/A";
+        toast({
+            title: "Printing",
+            description: "Preparing quotation for print..."
+        });
+    }
 
-            const htmlContent = `
+    // Download Sales Order PDF from preview
+    // Download Sales Order PDF from preview
+    const handleDownloadSOPDF = (so: SOData) => {
+        if (!so) return;
+
+        // Use a hidden iframe to print/download
+        let iframe = document.getElementById("so-pdf-preview-print-iframe") as HTMLIFrameElement;
+        if (!iframe) {
+            iframe = document.createElement("iframe");
+            iframe.id = "so-pdf-preview-print-iframe";
+            iframe.style.position = "absolute";
+            iframe.style.width = "0px";
+            iframe.style.height = "0px";
+            iframe.style.border = "none";
+            document.body.appendChild(iframe);
+        }
+
+        const { subtotal, discountAmount, totalTax, grandTotal } = calculateTotals(so.items, so.discountValue || 0, so.discountType || "%", so.taxValue || 0, so.taxType || "%");
+        const formattedSODate = format(new Date(so.soDate), "dd-MM-yyyy");
+        const formattedDeliveryDate = so.deliveryDate ? format(new Date(so.deliveryDate), "dd-MM-yyyy") : "N/A";
+
+        const htmlContent = `
                 <html>
                     <head>
                         <title>Sales Order - ${so.soNumber}</title>
@@ -1899,7 +2467,7 @@ const SalesOrder = () => {
                             <div class="section-title">Sales Order Details</div>
                             <div class="info-grid">
                                 <div class="info-item">
-                                    <div class="info-label">SO Number</div>
+                                    <div class="info-label">SO Code</div>
                                     <div class="info-value">${so.soNumber}</div>
                                 </div>
                                 <div class="info-item">
@@ -1908,7 +2476,7 @@ const SalesOrder = () => {
                                 </div>
                                 ${so.quotationRef ? `
                                 <div class="info-item">
-                                    <div class="info-label">Quotation Reference</div>
+                                    <div class="info-label">Quotation Code Reference</div>
                                     <div class="info-value">${so.quotationRef}</div>
                                 </div>
                                 ` : ''}
@@ -1964,25 +2532,25 @@ const SalesOrder = () => {
                             <div class="section-title">Payment Terms</div>
                             <div>
                                 ${so.terms.map(term => {
-                                    const value = term.value || term.percentage || 0;
-                                    const displayValue = `${value}%`;
+            const value = term.value || term.percentage || 0;
+            const displayValue = `${value}%`;
 
-                                    let termText = "";
-                                    if (term.termType === "Advance") {
-                                        termText = `${displayValue} payment required at order confirmation.`;
-                                    } else if (term.termType === "Delivery") {
-                                        termText = `${displayValue} payment due at the time of delivery.`;
-                                    } else if (term.termType === "Days") {
-                                        termText = `${displayValue} payment due within ${term.days || 0} days.`;
-                                    }
+            let termText = "";
+            if (term.termType === "Advance") {
+                termText = `${displayValue} payment required at order confirmation.`;
+            } else if (term.termType === "Delivery") {
+                termText = `${displayValue} payment due at the time of delivery.`;
+            } else if (term.termType === "Days") {
+                termText = `${displayValue} payment due within ${term.days || 0} days.`;
+            }
 
-                                    return `
+            return `
                                         <div class="bullet-item">
                                             <span class="bullet-point">•</span>
                                             <span class="bullet-text">${termText}</span>
                                         </div>
                                     `;
-                                }).join('')}
+        }).join('')}
                             </div>
                         </div>
                         ` : ''}
@@ -1996,7 +2564,7 @@ const SalesOrder = () => {
                                         <th style="width: 8%;">#</th>
                                         <th style="width: ${so.status === 'Dispatched' ? '32%' : '42%'};">Item</th>
                                         <th class="text-right" style="width: 12%;">Qty</th>
-                                        <th class="text-right" style="width: ${so.status === 'Dispatched' ? '14%' : '18%'};">Rate</th>
+                                        <th class="text-right" style="width: ${so.status === 'Dispatched' ? '14%' : '18%'};">Unit Price</th>
                                         <th class="text-right" style="width: ${so.status === 'Dispatched' ? '16%' : '20%'};">Price</th>
                                         ${so.status === 'Dispatched' ? '<th class="text-right" style="width: 18%;">Dispatched Qty</th>' : ''}
                                     </tr>
@@ -2049,31 +2617,35 @@ const SalesOrder = () => {
                 </html>
             `;
 
-            const doc = iframe.contentWindow?.document || iframe.contentDocument;
-            if (doc) {
-                doc.open();
-                doc.write(htmlContent);
-                doc.close();
+        const doc = iframe.contentWindow?.document || iframe.contentDocument;
+        if (doc) {
+            doc.open();
+            doc.write(htmlContent);
+            doc.close();
 
-                // Wait for styles and fonts to load
-                setTimeout(() => {
-                    iframe.contentWindow?.focus();
-                    iframe.contentWindow?.print();
-                }, 500);
-            }
+            // Wait for styles and fonts to load
+            setTimeout(() => {
+                iframe.contentWindow?.focus();
+                iframe.contentWindow?.print();
+            }, 500);
         }
+    }
 
     // Download Invoice PDF from Dispatch Pending Preview
     // This handler is specifically for the Invoice button in Dispatch Pending PDF preview modal
     // Uses the unified Accounting Invoice template for consistency
-    const handleDownloadInvoiceFromDispatchPreview = (so: SOData) => {
-            if (!so) return;
+    const handleDownloadInvoiceFromDispatchPreview = async (so: SOData) => {
+        if (!so) return;
 
-            // Find the linked invoice for this SO
-            const allInvoices = getInvoices();
-            const linkedInvoice = allInvoices.find(inv => inv.soNumber === so.soNumber);
+        try {
+            setIsLoading(true);
+            // 1. Find the linked invoice for this SO using search
+            const searchRes = await invoicingApi.getInvoicesList({ search: so.soNumber, limit: 1 });
+            
+            // Check if search results exist and find exact match for SO code
+            const linkedRecord = searchRes?.data?.records?.find(inv => inv.so_code === so.soNumber);
 
-            if (!linkedInvoice) {
+            if (!linkedRecord) {
                 toast({
                     title: "Invoice Not Found",
                     description: `No invoice found for Sales Order ${so.soNumber}`,
@@ -2082,30 +2654,69 @@ const SalesOrder = () => {
                 return;
             }
 
-            // Map invoice data to InvoicePDFData format
-            const invoicePDFData: InvoicePDFData = {
-                invoiceNumber: linkedInvoice.invoiceNumber,
-                invoiceDate: linkedInvoice.invoiceDate,
-                status: linkedInvoice.status,
-                customerName: linkedInvoice.customerName,
-                contactPerson: linkedInvoice.contactPerson,
-                mobileNo: linkedInvoice.mobileNo,
-                billingAddress: linkedInvoice.billingAddress,
-                shippingAddress: linkedInvoice.shippingAddress,
-                soNumber: linkedInvoice.soNumber,
-                soDate: linkedInvoice.soDate,
-                deliveryDate: linkedInvoice.deliveryDate,
-                currency: linkedInvoice.currency,
-                remarks: linkedInvoice.remarks,
-                terms: linkedInvoice.terms,
-                items: linkedInvoice.items,
-                taxPercentage: linkedInvoice.taxPercentage
+            // 2. Fetch full invoice details to get items, terms, etc.
+            const detailRes = await invoicingApi.getInvoiceById(linkedRecord.invoice_id);
+            if (!detailRes?.isSuccessful || !detailRes?.data) {
+                toast({
+                    title: "Error",
+                    description: "Failed to load invoice details.",
+                    variant: "destructive"
+                });
+                return;
+            }
+
+            const inv = detailRes.data;
+
+            // Date helper to prevent format() crashes
+            const safeDate = (dateStr: any) => {
+                if (!dateStr) return new Date().toISOString();
+                const d = new Date(dateStr);
+                return isNaN(d.getTime()) ? new Date().toISOString() : dateStr;
             };
 
-            // Generate HTML using the unified invoice template
-            const htmlContent = generateInvoicePDFHTML(invoicePDFData);
+            // 3. Map backend invoice data to InvoicePDFData format
+            // IMPORTANT: Fields must match the provided JSON structure
+            const invoicePDFData: InvoicePDFData = {
+                companyName: inv.company_name || "MASTER-ERP",
+                companyAddress: inv.company_address || "Industrial Solutions & Services\nAhmedabad, Gujarat, India",
+                invoiceNumber: inv.invoice_code || linkedRecord.invoice_code || "",
+                invoiceDate: safeDate(inv.invoice_date || linkedRecord.invoice_date),
+                status: inv.status_name || linkedRecord.status_name || "Open",
+                customerName: inv.customer_name || linkedRecord.customer_name || "",
+                contactPerson: inv.contact_person || "",
+                mobileNo: inv.mobile_no || "",
+                billingAddress: inv.billing_address || "",
+                shippingAddress: inv.shipping_address || "",
+                currency: inv.currency_name || linkedRecord.currency_name || "USD",
+                currencySymbol: getCurrencySymbol(inv.currency_name || linkedRecord.currency_name || "USD"),
+                soNumber: inv.so_code || so.soNumber,
+                soDate: inv.order_date || so.soDate || "",
+                deliveryDate: inv.delivery_date || so.deliveryDate || "",
+                taxPercentage: Number(inv.summary?.tax_percent || 0),
+                taxValue: Number(inv.summary?.tax_percent || 0),
+                taxType: "%",
+                discountValue: Number(inv.summary?.discount_percent || 0),
+                discountType: "%",
+                items: (inv.items || []).map((item: any) => ({
+                    id: Number(item.item_id || Math.random()),
+                    itemName: item.item_name || "",
+                    uom: item.uom || "PCS",
+                    orderedQty: Number(item.ordered_qty || 0),
+                    rate: Number(item.unit_price || 0),
+                    price: Number(item.price_per_item || 0)
+                })),
+                terms: (inv.terms || []).map((term: any) => ({
+                    id: Number(term.term_id || Math.random()),
+                    termType: term.term_type_name || "",
+                    percentage: Number(term.percentage || 0),
+                    days: Number(term.days || 0),
+                    date: ""
+                }))
+            };
 
-            // Use a hidden iframe to print/download
+            // 4. Generate and print PDF
+            const pdfContent = generateInvoicePDFHTML(invoicePDFData);
+            
             let iframe = document.getElementById("dispatch-invoice-print-iframe") as HTMLIFrameElement;
             if (!iframe) {
                 iframe = document.createElement("iframe");
@@ -2120,16 +2731,25 @@ const SalesOrder = () => {
             const doc = iframe.contentWindow?.document || iframe.contentDocument;
             if (doc) {
                 doc.open();
-                doc.write(htmlContent);
+                doc.write(pdfContent);
                 doc.close();
 
-                // Wait for styles and fonts to load
                 setTimeout(() => {
                     iframe.contentWindow?.focus();
                     iframe.contentWindow?.print();
                 }, 500);
             }
+        } catch (error: any) {
+            console.error("Error downloading invoice:", error);
+            toast({
+                title: "Download Error",
+                description: `Failed to generate PDF: ${error.message || "Unexpected error"}`,
+                variant: "destructive"
+            });
+        } finally {
+            setIsLoading(false);
         }
+    };
 
     return (
         <div className="h-full flex flex-col gap-6 animate-in fade-in duration-500">
@@ -2142,7 +2762,7 @@ const SalesOrder = () => {
                         setSearchTerm(val);
                         setCurrentPage(1);
                     },
-                    placeholder: "Search by SO No, Customer..."
+                    placeholder: "Search by SO Code, Customer..."
                 }}
                 filters={[
                     {
@@ -2166,21 +2786,23 @@ const SalesOrder = () => {
                         searchable: true,
                         options: [
                             { label: "All Status", value: "all" },
-                            { label: "Draft", value: "Draft" },
-                            { label: "Invoice Pending", value: "Invoice Pending" },
-                            { label: "Dispatch Pending", value: "Dispatch Pending" },
-                            { label: "Dispatched", value: "Dispatched" },
-                            { label: "Closed SO", value: "Closed SO" }
+                            ...salesOrderStatuses.map((status: any) => ({
+                                label: status?.name || status?.value_name || "Unknown",
+                                value: String(status?.id || status?.value_id || status?.status_id),
+                            }))
                         ]
                     }
                 ]}
-                actions={[
+                actions={canCreate(MODULE_KEY) ? [
                     {
                         label: "New Sales Order",
-                        onClick: () => handleOpenSO(null, true),
+                        onClick: () => {
+                            if (isActionBusy) return;
+                            handleOpenSO(null, true);
+                        },
                         icon: <Plus className="h-4 w-4" />
                     }
-                ]}
+                ] : []}
             />
             {/* SO Table - Matching WarrantyService layout */}
             <Card>
@@ -2189,7 +2811,7 @@ const SalesOrder = () => {
                         <Table>
                             <TableHeader>
                                 <TableRow className="bg-muted/50 hover:bg-muted/50">
-                                    <TableHead className="font-semibold text-xs uppercase tracking-wider py-4 pl-6">SO No</TableHead>
+                                    <TableHead className="font-semibold text-xs uppercase tracking-wider py-4 pl-6">SO Code</TableHead>
                                     <TableHead className="font-semibold text-xs uppercase tracking-wider">SO Date</TableHead>
                                     <TableHead className="font-semibold text-xs uppercase tracking-wider">Customer</TableHead>
                                     <TableHead className="font-semibold text-xs uppercase tracking-wider text-center">Status</TableHead>
@@ -2197,7 +2819,16 @@ const SalesOrder = () => {
                                 </TableRow>
                             </TableHeader>
                             <TableBody>
-                                {paginatedData.length === 0 ? (
+                                {isListLoading ? (
+                                    <TableRow>
+                                        <TableCell colSpan={5} className="h-32 text-center">
+                                            <div className="flex flex-col items-center justify-center gap-3">
+                                                <Loader2 className="h-8 w-8 animate-spin text-primary" />
+                                                <p className="text-sm text-muted-foreground">Loading...</p>
+                                            </div>
+                                        </TableCell>
+                                    </TableRow>
+                                ) : paginatedData.length === 0 ? (
                                     <TableRow>
                                         <TableCell colSpan={5} className="h-32 text-center text-muted-foreground italic">
                                             No Sales Orders found
@@ -2216,11 +2847,11 @@ const SalesOrder = () => {
                                             </TableCell>
                                             <TableCell className="py-4 text-center">
                                                 <TableActionButtons
-                                                    onView={() => handleOpenSO(so, false)}
+                                                    onView={canView(MODULE_KEY) && !isActionBusy ? () => handleOpenSO(so, false) : undefined}
                                                     onEdit={
-                                                        so.status === "Draft"
+                                                        canEdit(MODULE_KEY) && !isActionBusy && so.status === "Draft"
                                                             ? () => handleOpenSO(so, true)
-                                                            : (so.status === "Dispatched" ? () => { setDispatchedEditSO(so); setIsDispatchedEditOpen(true); } : undefined)
+                                                            : undefined
                                                     }
                                                     onDelete={undefined}
                                                 />
@@ -2232,41 +2863,51 @@ const SalesOrder = () => {
                         </Table>
                     </div>
 
-                    {/* DataTablePagination - matching Materials pagination position */}
-                    <div className="px-4 py-2 border-t">
-                        <DataTablePagination
-                            currentPage={currentPage}
-                            totalPages={totalPages}
-                            totalItems={filteredSOs.length}
-                            itemsPerPage={itemsPerPage}
-                            onPageChange={setCurrentPage}
-                            onItemsPerPageChange={setItemsPerPage}
-                            options={[10, 15, 30, 50]}
-                        />
-                    </div>
+                    {totalRecords > 0 && !isListLoading && (
+                        <div className="px-4 py-2 border-t">
+                            <DataTablePagination
+                                currentPage={currentPage}
+                                totalPages={totalPages}
+                                totalItems={totalRecords}
+                                itemsPerPage={itemsPerPage}
+                                onPageChange={setCurrentPage}
+                                onItemsPerPageChange={setItemsPerPage}
+                                options={[10, 15, 30, 50]}
+                            />
+                        </div>
+                    )}
                 </CardContent>
             </Card>
 
             {/* SO DIALOG - Modal with all required fields */}
             <Dialog open={isSODialogOpen} onOpenChange={setIsSODialogOpen}>
-                <DialogContent className="sm:max-w-[1200px] max-h-[95vh] flex flex-col p-0">
-                    <DialogHeader className="p-6 pb-2">
-                        <DialogTitle className="text-2xl font-bold">
+                <DialogContent
+                    className="flex! min-h-0 w-[95%] max-h-[82vh] flex-col gap-0 overflow-hidden bg-white p-0 sm:max-w-3xl md:max-w-4xl lg:max-w-5xl xl:max-w-6xl"
+                    onInteractOutside={(e) => e.preventDefault()}
+                    onEscapeKeyDown={(e) => e.preventDefault()}
+                >
+                    <DialogHeader className="shrink-0 space-y-1 p-4 pb-2 sm:p-5 sm:pb-3">
+                        <DialogTitle className="text-lg font-bold sm:text-xl">
                             {activeSO?.id && salesOrders.find(so => so.id === activeSO.id) ?
                                 (isSOEdit ? "Edit Sales Order" : "View Sales Order") :
                                 "Create Sales Order"}
                         </DialogTitle>
-                        <DialogDescription>
+                        <DialogDescription className="text-xs leading-snug text-muted-foreground sm:text-sm">
                             {activeSO?.status === "Draft" ? "Fill in the details to create or update a sales order." : "Review sales order details."}
                         </DialogDescription>
                     </DialogHeader>
 
-                    <div className="flex-1 overflow-y-auto px-6 py-4 space-y-6">
+                    <div className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto px-4 py-3 sm:px-5 sm:py-4 space-y-6 relative">
+                        {isFormOpening && (
+                            <div className="absolute inset-0 z-10 flex items-center justify-center bg-background/60">
+                                <Loader2 className="h-8 w-8 animate-spin text-primary" />
+                            </div>
+                        )}
                         {/* Header Info - Changed: Only show in Edit/View mode, not in Create mode */}
                         {activeSO?.id && salesOrders.find(so => so.id === activeSO.id) && (
                             <div className="grid grid-cols-3 gap-4 p-4 bg-muted/30 rounded-lg border">
                                 <div className="space-y-1">
-                                    <Label className="text-[10px] uppercase font-bold text-muted-foreground">SO Number</Label>
+                                    <Label className="text-[10px] uppercase font-bold text-muted-foreground">SO Code</Label>
                                     <p className="text-sm font-bold text-primary">{activeSO?.soNumber}</p>
                                 </div>
                                 <div className="space-y-1">
@@ -2277,8 +2918,8 @@ const SalesOrder = () => {
                                     <Label className="text-[10px] uppercase font-bold text-muted-foreground">Status</Label>
                                     {activeSO && getSOStatusBadge(activeSO.status)}
                                 </div>
-                                {/* Payment Information - Show for Dispatched and Closed SO */}
-                                {activeSO && (activeSO.status === "Dispatched" || activeSO.status === "Closed SO") && (
+                                {/* Payment Information - Show for Dispatched and Close SO */}
+                                {activeSO && (activeSO.status === "Dispatched" || activeSO.status === "Close") && (
                                     <>
                                         <div className="space-y-1">
                                             <Label className="text-[10px] uppercase font-bold text-muted-foreground">Payment Status</Label>
@@ -2286,7 +2927,7 @@ const SalesOrder = () => {
                                                 {(() => {
                                                     const dueAmount = activeSO.invoiceDueAmount ?? 0;
                                                     const { grandTotal } = calculateTotals(activeSO.items, activeSO.discountValue || 0, activeSO.discountType || "%", activeSO.taxValue || 0, activeSO.taxType || "%");
-                                                    
+
                                                     if (dueAmount === 0) {
                                                         return <span className="text-green-600 font-bold">Completed</span>;
                                                     } else if (dueAmount < grandTotal) {
@@ -2309,148 +2950,61 @@ const SalesOrder = () => {
                         )}
 
                         {/* Modal Fields */}
-                        <div className="grid grid-cols-2 gap-4">
+                        <div className="grid grid-cols-1 gap-4 md:grid-cols-2 md:items-start">
                             {/* Customer Select - Searchable Select (Required) - MOVED TO TOP */}
-                            <div className="space-y-2">
-                                <Label className="text-[10px] uppercase font-bold text-muted-foreground">Customer <span className="text-red-500">*</span></Label>
-                                <Popover>
-                                    <PopoverTrigger asChild>
-                                        <Button
-                                            variant="outline"
-                                            role="combobox"
-                                            disabled={activeSO?.status !== "Draft"}
-                                            className={cn(
-                                                "w-full h-10 justify-between font-normal",
-                                                !selectedCustomer && !isManualEntry && "text-muted-foreground"
-                                            )}
-                                        >
-                                            {isManualEntry ? "Manual Entry / New Customer" : (selectedCustomer || "Select Customer")}
-                                            <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
-                                        </Button>
-                                    </PopoverTrigger>
-                                    <PopoverContent className="w-[var(--radix-popover-trigger-width)] p-0" align="start" side="bottom" sideOffset={4}>
-                                        <Command>
-                                            <CommandInputBorderless placeholder="Search customer..." />
-                                            <CommandList className="max-h-[200px] overflow-y-auto">
-                                                <CommandEmpty>No customer found.</CommandEmpty>
-                                                <CommandGroup>
-                                                    <CommandItem
-                                                        value="Manual Entry / New Customer"
-                                                        onSelect={() => handleCustomerSelect("Manual Entry / New Customer")}
-                                                    >
-                                                        <Check
-                                                            className={cn(
-                                                                "mr-2 h-4 w-4",
-                                                                isManualEntry ? "opacity-100" : "opacity-0"
-                                                            )}
-                                                        />
-                                                        Manual Entry / New Customer
-                                                    </CommandItem>
-                                                    {mockCustomers.map((c) => (
-                                                        <CommandItem
-                                                            key={c.id}
-                                                            value={c.name}
-                                                            onSelect={(val) => handleCustomerSelect(val)}
-                                                        >
-                                                            <Check
-                                                                className={cn(
-                                                                    "mr-2 h-4 w-4",
-                                                                    selectedCustomer === c.name ? "opacity-100" : "opacity-0"
-                                                                )}
-                                                            />
-                                                            {c.name}
-                                                        </CommandItem>
-                                                    ))}
-                                                </CommandGroup>
-                                            </CommandList>
-                                        </Command>
-                                    </PopoverContent>
-                                </Popover>
+                            <div className="min-w-0 space-y-1.5">
+                                <SearchableSelect
+                                    label="Customer"
+                                    required
+                                    disabled={activeSO?.status !== "Draft"}
+                                    value={selectedCustomer}
+                                    options={[
+                                        ...formCustomers.map((c) => ({ label: c.customer_name, value: c.customer_name }))
+                                    ]}
+                                    onChange={handleCustomerSelect}
+                                    className="h-9"
+                                />
                             </div>
 
-                            {/* Quotation Reference - Searchable Select (Optional) - MOVED BELOW CUSTOMER */}
-                            <div className="space-y-2">
-                                <Label className="text-[10px] uppercase font-bold text-muted-foreground">Quotation Reference (Optional)</Label>
-                                <Popover>
-                                    <PopoverTrigger asChild>
-                                        <Button
-                                            variant="outline"
-                                            role="combobox"
-                                            disabled={activeSO?.status !== "Draft" || !selectedCustomer}
-                                            className={cn(
-                                                "w-full h-10 justify-between font-normal",
-                                                !selectedQuotation && "text-muted-foreground"
-                                            )}
-                                        >
-                                            {(() => {
-                                                if (!selectedQuotation || selectedQuotation === "none") {
-                                                    return selectedCustomer ? "Select Quotation (Optional)" : "Select Customer First";
-                                                }
-                                                const q = mockQuotations.find(item => item.quotationNo === selectedQuotation);
-                                                return q ? `${q.quotationNo} - ${q.customerName}` : selectedQuotation;
-                                            })()}
-                                            <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
-                                        </Button>
-                                    </PopoverTrigger>
-                                    <PopoverContent className="w-[var(--radix-popover-trigger-width)] p-0" align="start" side="bottom" sideOffset={4}>
-                                        <Command>
-                                            <CommandInputBorderless placeholder="Search quotation..." />
-                                            <CommandList className="max-h-[200px] overflow-y-auto">
-                                                <CommandEmpty>No quotation found.</CommandEmpty>
-                                                <CommandGroup>
-                                                    <CommandItem
-                                                        value="none"
-                                                        onSelect={() => {
-                                                            handleQuotationSelect("none");
-                                                        }}
-                                                    >
-                                                        <Check
-                                                            className={cn(
-                                                                "mr-2 h-4 w-4",
-                                                                selectedQuotation === "none" ? "opacity-100" : "opacity-0"
-                                                            )}
-                                                        />
-                                                        None
-                                                    </CommandItem>
-                                                    {mockQuotations
-                                                        .filter(q => q.status === "Submitted Quote")
-                                                        .filter(q => !salesOrders.some(so => so.quotationRef === q.quotationNo))
-                                                        .filter(q => selectedCustomer && q.customerName === selectedCustomer)
-                                                        .map((q) => (
-                                                            <CommandItem
-                                                                key={q.id}
-                                                                value={`${q.quotationNo} ${q.customerName}`}
-                                                                onSelect={() => {
-                                                                    handleQuotationSelect(q.quotationNo!);
-                                                                }}
-                                                            >
-                                                                <Check
-                                                                    className={cn(
-                                                                        "mr-2 h-4 w-4",
-                                                                        (selectedQuotation && selectedQuotation === q.quotationNo) ? "opacity-100" : "opacity-0"
-                                                                    )}
-                                                                />
-                                                                {q.quotationNo} - {q.customerName}
-                                                            </CommandItem>
-                                                        ))}
-                                                </CommandGroup>
-                                            </CommandList>
-                                        </Command>
-                                    </PopoverContent>
-                                </Popover>
+                            {/* Quotation Code Reference - Searchable Select (Optional) - MOVED BELOW CUSTOMER */}
+                            <div className="min-w-0 space-y-1.5">
+                                <SearchableSelect
+                                    label="Quotation Code Reference (Optional)"
+                                    disabled={activeSO?.status !== "Draft" || !selectedCustomer}
+                                    value={selectedQuotation || "none"}
+                                    placeholder={selectedCustomer ? "Select Quotation (Optional)" : "Select Customer First"}
+                                    options={[
+                                        { label: "None", value: "none" },
+                                        ...quotationRefs
+                                            .filter(q => {
+                                                if (!q.statusName) return true;
+                                                const status = normalizeText(q.statusName);
+                                                return status.includes("SUBMITTED") || 
+                                                       status.includes("OPEN") || 
+                                                       status.includes("APPROVED") || 
+                                                       status.includes("SENT") ||
+                                                       status === "1"; // Handle numeric status if applicable
+                                            })
+                                            .filter(q => !salesOrders.some(so => so.quotationRef === q.quotationNo))
+                                            .filter(q => !selectedCustomer || normalizeText(q.customerName) === normalizeText(selectedCustomer))
+                                            .map(q => ({ label: q.quotationNo, value: q.quotationNo }))
+                                    ]}
+                                    onChange={handleQuotationSelect}
+                                    className="h-9"
+                                />
                             </div>
 
                             {/* Customer Name - Editable when manual entry */}
-                            <div className="space-y-2">
+                            <div className="min-w-0 space-y-1.5">
                                 <Label className="text-[10px] uppercase font-bold text-muted-foreground">
-                                    Customer Name <span className="text-red-500">*</span>
+                                    Customer Name
                                     {!isManualEntry && <span className="text-xs text-muted-foreground ml-1">(Auto-filled)</span>}
                                 </Label>
                                 <Input
                                     value={activeSO?.customerName || ""}
                                     onChange={(e) => activeSO && setActiveSO({ ...activeSO, customerName: e.target.value })}
                                     disabled={!isManualEntry || activeSO?.status !== "Draft"}
-                                    className={cn("h-10", !isManualEntry && "bg-muted/50")}
+                                    className={cn("h-9", !isManualEntry && "bg-muted/50")}
                                     placeholder="Auto-filled from Quotation or Customer"
                                 />
                             </div>
@@ -2472,7 +3026,7 @@ const SalesOrder = () => {
                             {/* Mobile No - Required when manual entry */}
                             <div className="space-y-2">
                                 <Label className="text-[10px] uppercase font-bold text-muted-foreground">
-                                    Mobile No <span className="text-red-500">*</span>
+                                    Mobile No
                                     {!isManualEntry && <span className="text-xs text-muted-foreground ml-1">(Auto-filled)</span>}
                                 </Label>
                                 <Input
@@ -2507,7 +3061,7 @@ const SalesOrder = () => {
                             {/* Billing Address - Required */}
                             <div className="space-y-2">
                                 <Label className="text-[10px] uppercase font-bold text-muted-foreground">
-                                    Billing Address <span className="text-red-500">*</span>
+                                    Billing Address
                                     {!isManualEntry && <span className="text-xs text-muted-foreground ml-1">(Auto-filled)</span>}
                                 </Label>
                                 <Input
@@ -2518,59 +3072,26 @@ const SalesOrder = () => {
                                 />
                             </div>
 
-                            {/* Currency */}
                             <div className="space-y-2">
-                                <Label className="text-[10px] uppercase font-bold text-muted-foreground">Currency</Label>
-                                <Popover>
-                                    <PopoverTrigger asChild>
-                                        <Button
-                                            variant="outline"
-                                            role="combobox"
-                                            disabled={activeSO?.status !== "Draft" || !!(selectedQuotation && selectedQuotation !== "none")}
-                                            className={cn(
-                                                "w-full h-10 justify-between font-normal",
-                                                !activeSO?.currency && "text-muted-foreground"
-                                            )}
-                                        >
-                                            {activeSO?.currency || "Select Currency"}
-                                            <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
-                                        </Button>
-                                    </PopoverTrigger>
-                                    <PopoverContent className="w-[var(--radix-popover-trigger-width)] p-0" align="start" side="bottom" sideOffset={4}>
-                                        <Command>
-                                            <CommandInputBorderless placeholder="Search currency..." />
-                                            <CommandList className="max-h-[200px] overflow-y-auto">
-                                                <CommandEmpty>No currency found.</CommandEmpty>
-                                                <CommandGroup>
-                                                    {["USD", "EUR", "GBP", "INR", "JPY", "CNY", "AUD", "CAD"].map((curr) => (
-                                                        <CommandItem
-                                                            key={curr}
-                                                            value={curr}
-                                                            onSelect={(val) => {
-                                                                if (activeSO) {
-                                                                    setActiveSO({ ...activeSO, currency: val.toUpperCase() });
-                                                                }
-                                                            }}
-                                                        >
-                                                            <Check
-                                                                className={cn(
-                                                                    "mr-2 h-4 w-4",
-                                                                    activeSO?.currency === curr ? "opacity-100" : "opacity-0"
-                                                                )}
-                                                            />
-                                                            {curr}
-                                                        </CommandItem>
-                                                    ))}
-                                                </CommandGroup>
-                                            </CommandList>
-                                        </Command>
-                                    </PopoverContent>
-                                </Popover>
+                                <SearchableSelect
+                                    label="Currency"
+                                    required
+                                    disabled={activeSO?.status !== "Draft" || !!(selectedQuotation && selectedQuotation !== "none")}
+                                    value={activeSO?.currency}
+                                    options={currencies && currencies.length > 0 ? currencies.map((c: any) => c.code || c.value_code || c.name || c.value_name || "").filter(Boolean) : ["USD", "EUR", "GBP", "INR", "JPY", "CNY", "AUD", "CAD", "UGX"]}
+                                    onChange={(val) => {
+                                        if (activeSO) {
+                                            setActiveSO({ ...activeSO, currency: val });
+                                        }
+                                    }}
+                                />
                             </div>
 
                             {/* Delivery Date */}
                             <div className="space-y-2">
-                                <Label className="text-[10px] uppercase font-bold text-muted-foreground">Delivery Date</Label>
+                                <Label className="text-[10px] uppercase font-bold text-muted-foreground">
+                                    Delivery Date <span className="text-destructive font-bold">*</span>
+                                </Label>
                                 <DatePicker
                                     date={activeSO?.deliveryDate ? new Date(activeSO.deliveryDate) : undefined}
                                     setDate={(d) => activeSO && setActiveSO({ ...activeSO, deliveryDate: d ? format(d, "yyyy-MM-dd") : "" })}
@@ -2584,16 +3105,15 @@ const SalesOrder = () => {
                                 <Textarea
                                     value={activeSO?.remarks || ""}
                                     onChange={(e) => {
-                                        // Changed: Validation - Max 500 characters
-                                        const value = e.target.value.slice(0, 500);
+                                        const value = e.target.value.slice(0, 200);
                                         if (activeSO) setActiveSO({ ...activeSO, remarks: value });
                                     }}
                                     disabled={activeSO?.status !== "Draft"}
                                     className="min-h-[60px]"
-                                    maxLength={500}
+                                    maxLength={200}
                                 />
                                 <p className="text-xs text-muted-foreground text-right">
-                                    {activeSO?.remarks?.length || 0}/500 characters
+                                    {activeSO?.remarks?.length || 0}/200 characters
                                 </p>
                             </div>
                         </div>
@@ -2614,10 +3134,9 @@ const SalesOrder = () => {
                                     <Table>
                                         <TableHeader>
                                             <TableRow className="bg-muted/50 text-[10px] uppercase font-bold text-muted-foreground whitespace-nowrap">
-                                                <TableCell className="py-2 pl-6">Value</TableCell>
+                                                <TableCell className="py-2 pl-6">Percentage</TableCell>
                                                 <TableCell className="py-2">Term Type</TableCell>
                                                 <TableCell className="py-2 text-center">Days</TableCell>
-                                                <TableCell className="py-2 text-center">Date</TableCell>
                                                 {activeSO?.status === "Draft" && (
                                                     <TableCell className="py-2 text-right pr-6">Actions</TableCell>
                                                 )}
@@ -2626,7 +3145,7 @@ const SalesOrder = () => {
                                         <TableBody>
                                             {activeSO.terms.length === 0 ? (
                                                 <TableRow>
-                                                    <TableCell colSpan={activeSO.status === "Draft" ? 5 : 4} className="text-center py-8 text-muted-foreground italic">
+                                                    <TableCell colSpan={activeSO.status === "Draft" ? 4 : 3} className="text-center py-8 text-muted-foreground italic">
                                                         No terms added yet
                                                     </TableCell>
                                                 </TableRow>
@@ -2649,18 +3168,18 @@ const SalesOrder = () => {
                                                                         onChange={(e) => {
                                                                             let val = parseFloat(e.target.value) || 0;
                                                                             if (val < 0) val = 0;
+                                                                            if (val > 100) val = 100;
 
-                                                                            if (val < 0) val = 0;
-
-                                                                            const updated = activeSO.terms.map(t => 
-                                                                                t.id === term.id 
-                                                                                    ? { ...t, value: val, percentage: val } 
+                                                                            const updated = activeSO.terms.map(t =>
+                                                                                t.id === term.id
+                                                                                    ? { ...t, value: val, percentage: val }
                                                                                     : t
                                                                             );
                                                                             setActiveSO({ ...activeSO, terms: updated });
                                                                         }}
                                                                         className="h-8 w-28 text-center"
                                                                         min="0"
+                                                                        max="100"
                                                                         step="0.01"
                                                                     />
                                                                 ) : (
@@ -2694,7 +3213,20 @@ const SalesOrder = () => {
                                                                             <SelectValue />
                                                                         </SelectTrigger>
                                                                         <SelectContent>
-                                                                            <SelectItem value="Advance" disabled={usedTermTypes.includes("Advance")}>
+                                                                            {((paymentTermTypes && paymentTermTypes.length > 0)
+                                                                                ? paymentTermTypes.map((t: any) => {
+                                                                                    const name = String(t.name || t.value_name || t.code || t.value_code || "").toUpperCase().trim();
+                                                                                    if (name.includes("DELIVERY")) return "Delivery";
+                                                                                    if (name.includes("DAY")) return "Days";
+                                                                                    return "Advance";
+                                                                                }).filter((v, i, arr) => arr.indexOf(v) === i)
+                                                                                : ["Advance", "Delivery", "Days"]
+                                                                            ).map((opt) => (
+                                                                                <SelectItem key={opt} value={opt} disabled={usedTermTypes.includes(opt as any)}>
+                                                                                    {opt}
+                                                                                </SelectItem>
+                                                                            ))}
+                                                                            {/*
                                                                                 Advance
                                                                             </SelectItem>
                                                                             <SelectItem value="Delivery" disabled={usedTermTypes.includes("Delivery")}>
@@ -2703,7 +3235,7 @@ const SalesOrder = () => {
                                                                             <SelectItem value="Days" disabled={usedTermTypes.includes("Days")}>
                                                                                 Days
                                                                             </SelectItem>
-                                                                        </SelectContent>
+                                                                        */}</SelectContent>
                                                                     </Select>
                                                                 ) : (
                                                                     <span className="font-medium">{term.termType}</span>
@@ -2713,31 +3245,28 @@ const SalesOrder = () => {
                                                             {/* Days Column */}
                                                             <TableCell className="py-4 text-center">
                                                                 {activeSO.status === "Draft" && term.termType === "Days" ? (
-                                                                    <Input
-                                                                        type="number"
-                                                                        value={term.days || ""}
-                                                                        onChange={(e) => {
-                                                                            const val = parseInt(e.target.value) || 0;
-                                                                            const updated = activeSO.terms.map(t => t.id === term.id ? { ...t, days: val } : t);
-                                                                            setActiveSO({ ...activeSO, terms: updated });
-                                                                        }}
-                                                                        className="h-8 w-16 text-center mx-auto"
-                                                                        placeholder="-"
-                                                                        min="1"
-                                                                    />
+                                                                    <div className="space-y-1">
+                                                                        <Input
+                                                                            type="number"
+                                                                            value={term.days || ""}
+                                                                            onChange={(e) => {
+                                                                                const val = e.target.value === "" ? "" : parseInt(e.target.value);
+                                                                                const updated = activeSO.terms.map(t => t.id === term.id ? { ...t, days: val } : t);
+                                                                                setActiveSO({ ...activeSO, terms: updated });
+                                                                            }}
+                                                                            className={cn("h-8 w-24 text-center mx-auto", (!term.days || Number(term.days) <= 0) && "border-red-500 focus-visible:ring-red-500")}
+                                                                            placeholder="Enter days"
+                                                                        />
+                                                                        {(!term.days || Number(term.days) <= 0) && (
+                                                                            <p className="text-[10px] text-red-500 font-medium text-center">Days must be greater than 0</p>
+                                                                        )}
+                                                                    </div>
                                                                 ) : (
                                                                     <span className="font-medium text-muted-foreground">{term.termType === "Days" ? (term.days || "-") : "-"}</span>
                                                                 )}
                                                             </TableCell>
 
-                                                            {/* Date Column - Auto-filled after dispatch */}
-                                                            <TableCell className="py-4 text-center">
-                                                                <span className="font-medium text-muted-foreground">
-                                                                    {activeSO.status === "Dispatched" && activeSO.dispatches && activeSO.dispatches.length > 0
-                                                                        ? format(new Date(activeSO.dispatches[activeSO.dispatches.length - 1].dispatchDate), "dd-MM-yyyy")
-                                                                        : "-"}
-                                                                </span>
-                                                            </TableCell>
+
 
                                                             {/* Actions Column */}
                                                             {activeSO.status === "Draft" && (
@@ -2774,12 +3303,20 @@ const SalesOrder = () => {
                                 )}
                             </div>
                             <div className="rounded-xl border shadow-sm overflow-hidden bg-white">
-                                <Table>
+                                <div className="overflow-x-auto">
+                                <Table className={cn("w-full table-fixed", activeSO?.status === "Dispatched" ? "min-w-[980px]" : "min-w-[880px]")}>
+                                    <colgroup>
+                                        <col className="w-[52%]" />
+                                        <col className="w-[12%]" />
+                                        <col className="w-[16%]" />
+                                        <col className="w-[14%]" />
+                                        {(activeSO?.status === "Dispatched" || activeSO?.status === "Draft") && <col className="w-[6%]" />}
+                                    </colgroup>
                                     <TableHeader>
                                         <TableRow className="bg-muted/50">
                                             <TableHead className="text-[10px] font-bold uppercase py-3 pl-6">Item Name</TableHead>
                                             <TableHead className="text-[10px] font-bold uppercase py-3 text-center">Ordered Qty</TableHead>
-                                            <TableHead className="text-[10px] font-bold uppercase py-3 text-center">Rate</TableHead>
+                                            <TableHead className="text-[10px] font-bold uppercase py-3 text-center">Unit Price</TableHead>
                                             <TableHead className="text-[10px] font-bold uppercase py-3 text-center">Price</TableHead>
                                             {/* Dispatched Qty column only shown when status = Dispatched */}
                                             {activeSO?.status === "Dispatched" && (
@@ -2801,145 +3338,145 @@ const SalesOrder = () => {
                                                 </TableCell>
                                             </TableRow>
                                         ) : (
-                                            activeSO?.items.map((item) => (
-                                                <TableRow key={item.id} className="hover:bg-muted/20">
-                                                    <TableCell className="py-4 pl-6 min-w-[200px]">
-                                                        {activeSO.status === "Draft" ? (
-                                                            <Popover>
-                                                                <PopoverTrigger asChild>
-                                                                    <Button
-                                                                        variant="outline"
-                                                                        role="combobox"
-                                                                        className={cn(
-                                                                            "w-full h-9 justify-between font-normal",
-                                                                            !item.itemName && "text-muted-foreground"
-                                                                        )}
-                                                                    >
-                                                                        {item.itemName || "Select Item"}
-                                                                        <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
-                                                                    </Button>
-                                                                </PopoverTrigger>
-                                                                <PopoverContent className="w-[var(--radix-popover-trigger-width)] p-0" align="start" side="bottom" sideOffset={4}>
-                                                                    <Command>
-                                                                        <CommandInputBorderless placeholder="Search item..." />
-                                                                        <CommandList className="max-h-[200px] overflow-y-auto">
-                                                                            <CommandEmpty>No item found.</CommandEmpty>
-                                                                            <CommandGroup>
-                                                                                {mockItems.map((mi) => (
-                                                                                    <CommandItem
-                                                                                        key={mi.id}
-                                                                                        value={mi.name}
-                                                                                        onSelect={(val) => {
-                                                                                            const selectedItem = mockItems.find(mockItem => mockItem.name.toLowerCase() === val.toLowerCase());
-                                                                                            if (selectedItem) {
-                                                                                                const updated = activeSO.items.map(i =>
-                                                                                                    i.id === item.id ? {
-                                                                                                        ...i,
-                                                                                                        itemCode: selectedItem.itemCode,
-                                                                                                        itemName: selectedItem.name,
-                                                                                                        uom: selectedItem.uom,
-                                                                                                        rate: selectedItem.rate,
-                                                                                                        price: 0
-                                                                                                    } : i
-                                                                                                );
-                                                                                                setActiveSO({ ...activeSO, items: updated });
-                                                                                            }
-                                                                                        }}
-                                                                                    >
-                                                                                        <Check
-                                                                                            className={cn(
-                                                                                                "mr-2 h-4 w-4",
-                                                                                                item.itemName === mi.name ? "opacity-100" : "opacity-0"
-                                                                                            )}
-                                                                                        />
-                                                                                        {mi.name}
-                                                                                    </CommandItem>
-                                                                                ))}
-                                                                            </CommandGroup>
-                                                                        </CommandList>
-                                                                    </Command>
-                                                                </PopoverContent>
-                                                            </Popover>
-                                                        ) : (
-                                                            <div className="font-bold text-sm text-primary">{item.itemName}</div>
-                                                        )}
-                                                    </TableCell>
-                                                    <TableCell className="text-center">
-                                                        {/* Ordered Qty editable in Draft only - Changed: Auto-calculate price */}
-                                                        {activeSO.status === "Draft" ? (
-                                                            <Input
-                                                                type="text"
-                                                                inputMode="decimal"
-                                                                value={item.orderedQty}
-                                                                onChange={(e) => {
-                                                                    const value = e.target.value.replace(/[^0-9.]/g, '');
-                                                                    const parts = value.split('.');
-                                                                    const cleanValue = parts[0].slice(0, 6) + (parts.length > 1 ? '.' + parts[1].slice(0, 2) : '');
-                                                                    
-                                                                    const updated = activeSO.items.map(i =>
-                                                                        i.id === item.id ? {
-                                                                            ...i,
-                                                                            orderedQty: cleanValue,
-                                                                            price: (parseFloat(cleanValue) || 0) * (Number(i.rate) || 0)
-                                                                        } : i
-                                                                    );
-                                                                    setActiveSO({ ...activeSO, items: updated });
-                                                                }}
-                                                                className="h-8 w-20 text-center"
-                                                            />
-                                                        ) : (
-                                                            <span className="font-bold text-primary">{item.orderedQty}</span>
-                                                        )}
-                                                    </TableCell>
-                                                    {/* Changed: Rate column instead of Price */}
-                                                    <TableCell className="text-center">
-                                                        {activeSO.status === "Draft" ? (
-                                                            <Input
-                                                                type="text"
-                                                                inputMode="decimal"
-                                                                value={item.rate}
-                                                                onChange={(e) => {
-                                                                    const value = e.target.value.replace(/[^0-9.]/g, '');
-                                                                    const parts = value.split('.');
-                                                                    const cleanValue = parts[0].slice(0, 6) + (parts.length > 1 ? '.' + parts[1].slice(0, 2) : '');
-                                                                    
-                                                                    const updated = activeSO.items.map(i =>
-                                                                        i.id === item.id ? {
-                                                                            ...i,
-                                                                            rate: cleanValue,
-                                                                            price: (Number(i.orderedQty) || 0) * (parseFloat(cleanValue) || 0)
-                                                                        } : i
-                                                                    );
-                                                                    setActiveSO({ ...activeSO, items: updated });
-                                                                }}
-                                                                className="h-8 w-24 text-center"
-                                                            />
-                                                        ) : (
-                                                            <span className="font-medium">{getCurrencySymbol(activeSO.currency)} {Number(item.rate).toFixed(2)}</span>
-                                                        )}
-                                                    </TableCell>
-                                                    {/* Changed: Price column (auto-calculated, read-only) */}
-                                                    <TableCell className="text-center">
-                                                        <span className="font-bold text-primary">USh {(Number(item.price) || 0).toFixed(2)}</span>
-                                                    </TableCell>
-                                                    {/* Dispatched Qty column only shown when status = Dispatched */}
-                                                    {activeSO.status === "Dispatched" && (
-                                                        <TableCell className="text-center">
-                                                            <span className="font-medium text-slate-600">{item.dispatchedQty}</span>
+                                            activeSO?.items.map((item) => {
+                                                const usedItems = activeSO.items.filter(it => it.id !== item.id).map(it => it.itemName) || [];
+                                                const qty = parseFloat(item.orderedQty?.toString() || "0");
+                                                const rate = parseFloat(item.rate?.toString() || "0");
+                                                const isQtyInvalid = (item.orderedQty as any) !== "" && (isNaN(qty) || qty <= 0);
+                                                const isRateInvalid = (item.rate as any) !== "" && (isNaN(rate) || rate <= 0);
+
+                                                return (
+                                                    <TableRow key={item.id} className="hover:bg-muted/20 align-top">
+                                                        <TableCell className="max-w-0 py-4 pl-6 align-top">
+                                                            {activeSO.status === "Draft" ? (
+                                                                <SearchableSelect
+                                                                    value={item.itemName}
+                                                                    options={((formItems && formItems.length > 0 ? formItems : mockItems) || []).map(mi => ({
+                                                                        label: `${mi.name}${mi.itemCode ? ` — ${mi.itemCode}` : ""}`,
+                                                                        value: mi.name,
+                                                                        primaryText: mi.name,
+                                                                        secondaryText: mi.itemCode,
+                                                                        disabled: usedItems.includes(mi.name)
+                                                                    }))}
+                                                                    onChange={(val) => {
+                                                                        const allItems = formItems && formItems.length > 0 ? formItems : mockItems;
+                                                                        const selectedItem = allItems.find(mi => mi.name === val);
+                                                                        if (selectedItem) {
+                                                                            const updated = activeSO.items.map(i =>
+                                                                                i.id === item.id ? {
+                                                                                    ...i,
+                                                                                    itemCode: selectedItem.itemCode,
+                                                                                    itemName: selectedItem.name,
+                                                                                    uom: selectedItem.uom,
+                                                                                    rate: selectedItem.rate,
+                                                                                    price: (Number(i.orderedQty) || 0) * (Number(selectedItem.rate) || 0)
+                                                                                } : i
+                                                                            );
+                                                                            setActiveSO({ ...activeSO, items: updated });
+                                                                        }
+                                                                    }}
+                                                                    placeholder="Select Item"
+                                                                    showSelectedTitle
+                                                                    compactStackedSelected
+                                                                    listClassName="max-h-[220px]"
+                                                                />
+                                                            ) : (
+                                                                <div className="font-bold text-sm text-primary">{item.itemName}</div>
+                                                            )}
                                                         </TableCell>
-                                                    )}
-                                                    {activeSO.status === "Draft" && (
-                                                        <TableCell className="text-center">
-                                                            <TableActionButtons
-                                                                onDelete={() => handleRemoveItem(item.id)}
-                                                            />
+                                                        <TableCell className="text-center align-top pt-4">
+                                                            <div className="space-y-1">
+                                                                {activeSO.status === "Draft" ? (
+                                                                    <Input
+                                                                        type="text"
+                                                                        inputMode="decimal"
+                                                                        value={item.orderedQty}
+                                                                        onChange={(e) => {
+                                                                            const value = e.target.value.replace(/[^0-9.]/g, '');
+                                                                            const parts = value.split('.');
+                                                                            const cleanValue = parts[0].slice(0, 12) + (parts.length > 1 ? '.' + parts[1].slice(0, 2) : '');
+
+                                                                            const updated = activeSO.items.map(i =>
+                                                                                i.id === item.id ? {
+                                                                                    ...i,
+                                                                                    orderedQty: parseFloat(cleanValue) || 0,
+                                                                                    price: (parseFloat(cleanValue) || 0) * (Number(i.rate) || 0)
+                                                                                } : i
+                                                                            );
+                                                                            setActiveSO({ ...activeSO, items: updated });
+                                                                        }}
+                                                                        className={cn("h-9 w-24 text-center mx-auto", isQtyInvalid && "border-red-500 focus-visible:ring-red-500")}
+                                                                    />
+                                                                ) : (
+                                                                    <span className="font-bold text-primary">{item.orderedQty}</span>
+                                                                )}
+                                                                {activeSO.status === "Draft" && isQtyInvalid && (
+                                                                    <p className="text-[10px] text-red-500 font-medium">Qty must be greater than 0</p>
+                                                                )}
+                                                            </div>
                                                         </TableCell>
-                                                    )}
-                                                </TableRow>
-                                            ))
+                                                        <TableCell className="text-center align-top pt-4">
+                                                            <div className="space-y-1">
+                                                                {activeSO.status === "Draft" ? (
+                                                                    <Input
+                                                                        type="text"
+                                                                        inputMode="decimal"
+                                                                        value={item.rate}
+                                                                        onChange={(e) => {
+                                                                            const value = e.target.value.replace(/[^0-9.]/g, '');
+                                                                            const parts = value.split('.');
+                                                                            const cleanValue = parts[0].slice(0, 12) + (parts.length > 1 ? '.' + parts[1].slice(0, 2) : '');
+
+                                                                            const updated = activeSO.items.map(i =>
+                                                                                i.id === item.id ? {
+                                                                                    ...i,
+                                                                                    rate: parseFloat(cleanValue) || 0,
+                                                                                    price: (Number(i.orderedQty) || 0) * (parseFloat(cleanValue) || 0)
+                                                                                } : i
+                                                                            );
+                                                                            setActiveSO({ ...activeSO, items: updated });
+                                                                        }}
+                                                                        className={cn("h-9 w-28 text-center mx-auto", isRateInvalid && "border-red-500 focus-visible:ring-red-500")}
+                                                                    />
+                                                                ) : (
+                                                                    <span className="font-medium">{getCurrencySymbol(activeSO.currency)} {Number(item.rate).toFixed(2)}</span>
+                                                                )}
+                                                                {activeSO.status === "Draft" && isRateInvalid && (
+                                                                    <p className="text-[10px] text-red-500 font-medium">Unit price must be greater than 0</p>
+                                                                )}
+                                                            </div>
+                                                        </TableCell>
+                                                        <TableCell className="text-center align-middle">
+                                                            <div className="flex h-full items-center justify-center">
+                                                                <span className="font-bold text-primary">
+                                                                    {getCurrencySymbol(activeSO.currency)} {(Number(item.price) || 0).toFixed(2)}
+                                                                </span>
+                                                            </div>
+                                                        </TableCell>
+                                                        {/* Dispatched Qty column only shown when status = Dispatched */}
+                                                        {activeSO.status === "Dispatched" && (
+                                                            <TableCell className="text-center align-middle">
+                                                                <div className="flex h-full items-center justify-center">
+                                                                    <span className="font-medium text-slate-600">{item.dispatchedQty}</span>
+                                                                </div>
+                                                            </TableCell>
+                                                        )}
+                                                        {activeSO.status === "Draft" && (
+                                                            <TableCell className="text-center align-middle">
+                                                                <div className="flex h-full items-center justify-center">
+                                                                    <TableActionButtons
+                                                                        onDelete={() => handleRemoveItem(item.id)}
+                                                                    />
+                                                                </div>
+                                                            </TableCell>
+                                                        )}
+                                                    </TableRow>
+                                                );
+                                            })
                                         )}
                                     </TableBody>
                                 </Table>
+                                </div>
                             </div>
                         </div>
 
@@ -2949,9 +3486,9 @@ const SalesOrder = () => {
                                 <div className="w-80 space-y-2 p-4 bg-muted/30 rounded-lg border">
                                     <div className="flex justify-between text-sm">
                                         <span className="font-medium text-muted-foreground">Subtotal:</span>
-                                        <span className="font-bold">USh {(calculateTotals(activeSO.items, activeSO.discountValue || 0, activeSO.discountType || "%", activeSO.taxValue || 0, activeSO.taxType || "%").subtotal || 0).toFixed(2)}</span>
+                                        <span className="font-bold">{getCurrencySymbol(activeSO.currency)} {(calculateTotals(activeSO.items, activeSO.discountValue || 0, activeSO.discountType || "%", activeSO.taxValue || 0, activeSO.taxType || "%").subtotal || 0).toFixed(2)}</span>
                                     </div>
-                                    
+
                                     {/* Discount Row - Improved Layout */}
                                     <div className="space-y-1">
                                         <div className="flex justify-between items-center text-sm">
@@ -2964,7 +3501,7 @@ const SalesOrder = () => {
                                                         onChange={(e) => {
                                                             const val = parseFloat(e.target.value) || 0;
                                                             const subtotal = calculateTotals(activeSO.items, 0, "%", 0, "%").subtotal;
-                                                            
+
                                                             // Validation
                                                             if (activeSO.discountType === "%") {
                                                                 if (val < 0 || val > 100) {
@@ -2985,7 +3522,7 @@ const SalesOrder = () => {
                                                                     return;
                                                                 }
                                                             }
-                                                            
+
                                                             setActiveSO({ ...activeSO, discountValue: val });
                                                         }}
                                                         className="h-8 w-20 text-center"
@@ -3001,8 +3538,19 @@ const SalesOrder = () => {
                                                             <SelectValue />
                                                         </SelectTrigger>
                                                         <SelectContent>
-                                                            <SelectItem value="%">%</SelectItem>
-                                                            <SelectItem value="Amount">Amount</SelectItem>
+                                                            {((paymentDiscountTypes && paymentDiscountTypes.length > 0)
+                                                                ? paymentDiscountTypes.map((t: any) => {
+                                                                    const name = String(t.name || t.value_name || t.code || t.value_code || "").toUpperCase().trim();
+                                                                    return name.includes("PERCENT") || name === "%" ? "%" : "Amount";
+                                                                }).filter((v, i, arr) => arr.indexOf(v) === i)
+                                                                : ["%", "Amount"]
+                                                            ).map((opt) => (
+                                                                <SelectItem key={opt} value={opt}>
+                                                                    {opt}
+                                                                </SelectItem>
+                                                            ))}
+
+
                                                         </SelectContent>
                                                     </Select>
                                                 </div>
@@ -3011,10 +3559,10 @@ const SalesOrder = () => {
                                             )}
                                         </div>
                                         <div className="flex justify-end">
-                                            <span className="font-bold text-slate-700 text-sm">-USh {(calculateTotals(activeSO.items, activeSO.discountValue || 0, activeSO.discountType || "%", 0, "%").discountAmount || 0).toFixed(2)}</span>
+                                            <span className="font-bold text-slate-700 text-sm">-{getCurrencySymbol(activeSO.currency)} {(calculateTotals(activeSO.items, activeSO.discountValue || 0, activeSO.discountType || "%", 0, "%").discountAmount || 0).toFixed(2)}</span>
                                         </div>
                                     </div>
-                                    
+
                                     {/* Tax Row - Similar to Discount with % or Amount support */}
                                     <div className="space-y-1">
                                         <div className="flex justify-between items-center text-sm">
@@ -3027,7 +3575,7 @@ const SalesOrder = () => {
                                                         onChange={(e) => {
                                                             const val = parseFloat(e.target.value) || 0;
                                                             const afterDiscount = calculateTotals(activeSO.items, activeSO.discountValue || 0, activeSO.discountType || "%", 0, "%").afterDiscount;
-                                                            
+
                                                             // Validation
                                                             if (activeSO.taxType === "%") {
                                                                 if (val < 0 || val > 100) {
@@ -3048,7 +3596,7 @@ const SalesOrder = () => {
                                                                     return;
                                                                 }
                                                             }
-                                                            
+
                                                             setActiveSO({ ...activeSO, taxValue: val });
                                                         }}
                                                         className="h-8 w-20 text-center"
@@ -3064,8 +3612,17 @@ const SalesOrder = () => {
                                                             <SelectValue />
                                                         </SelectTrigger>
                                                         <SelectContent>
-                                                            <SelectItem value="%">%</SelectItem>
-                                                            <SelectItem value="Amount">Amount</SelectItem>
+                                                            {((paymentTaxTypes && paymentTaxTypes.length > 0)
+                                                                ? paymentTaxTypes.map((t: any) => {
+                                                                    const name = String(t.name || t.value_name || t.code || t.value_code || "").toUpperCase().trim();
+                                                                    return name.includes("PERCENT") || name === "%" ? "%" : "Amount";
+                                                                }).filter((v, i, arr) => arr.indexOf(v) === i)
+                                                                : ["%", "Amount"]
+                                                            ).map((opt) => (
+                                                                <SelectItem key={opt} value={opt}>
+                                                                    {opt}
+                                                                </SelectItem>
+                                                            ))}
                                                         </SelectContent>
                                                     </Select>
                                                 </div>
@@ -3074,13 +3631,13 @@ const SalesOrder = () => {
                                             )}
                                         </div>
                                         <div className="flex justify-end">
-                                            <span className="font-bold text-green-600 text-sm">+USh {(calculateTotals(activeSO.items, activeSO.discountValue || 0, activeSO.discountType || "%", activeSO.taxValue || 0, activeSO.taxType || "%").totalTax || 0).toFixed(2)}</span>
+                                            <span className="font-bold text-green-600 text-sm">+{getCurrencySymbol(activeSO.currency)} {(calculateTotals(activeSO.items, activeSO.discountValue || 0, activeSO.discountType || "%", activeSO.taxValue || 0, activeSO.taxType || "%").totalTax || 0).toFixed(2)}</span>
                                         </div>
                                     </div>
-                                    
+
                                     <div className="flex justify-between text-lg border-t pt-2">
                                         <span className="font-bold">Grand Total:</span>
-                                        <span className="font-bold text-primary">USh {(calculateTotals(activeSO.items, activeSO.discountValue || 0, activeSO.discountType || "%", activeSO.taxValue || 0, activeSO.taxType || "%").grandTotal || 0).toFixed(2)}</span>
+                                        <span className="font-bold text-primary">{getCurrencySymbol(activeSO.currency)} {(calculateTotals(activeSO.items, activeSO.discountValue || 0, activeSO.discountType || "%", activeSO.taxValue || 0, activeSO.taxType || "%").grandTotal || 0).toFixed(2)}</span>
                                     </div>
                                 </div>
                             </div>
@@ -3088,12 +3645,12 @@ const SalesOrder = () => {
                     </div>
 
                     {/* Dialog Footer - Buttons based on status */}
-                    <DialogFooter className="p-6 border-t mt-auto gap-2">
+                    <DialogFooter className="shrink-0 gap-2 border-t bg-muted/20 p-4 sm:p-5">
                         {/* Status-based button logic enforced here */}
                         {activeSO?.status === "Draft" && (
                             <>
                                 <div className="mr-auto">
-                                    {activeSO.id && salesOrders.some(so => so.id === activeSO.id) && (
+                                    {canDelete(MODULE_KEY) && activeSO.id && salesOrders.some(so => so.id === activeSO.id) && (
                                         <Button
                                             variant="destructive"
                                             onClick={() => {
@@ -3108,70 +3665,87 @@ const SalesOrder = () => {
                                     )}
                                 </div>
                                 <Button variant="outline" onClick={() => setIsSODialogOpen(false)}>Close</Button>
-                                {isManualEntry && (
-                                    <Button
-                                        variant="secondary"
-                                        onClick={handleCreateCustomer}
-                                    >
-                                        Create Customer
-                                    </Button>
-                                )}
-                                <Button variant="secondary" onClick={() => handleSaveSO(false)}>Save</Button>
-                                <Button onClick={() => handleSaveSO(true)} className="bg-emerald-600 hover:bg-emerald-700">Submit</Button>
+                                <Button
+                                    variant="default"
+                                    onClick={() => handleSaveSO(false)}
+                                    loading={isSavingSO}
+                                    className={cn(
+                                        "disabled:bg-muted disabled:text-muted-foreground disabled:border-muted disabled:opacity-100",
+                                        isFormValid() ? "bg-[#0056B8] text-white hover:bg-[#0056B8]/90" : ""
+                                    )}
+                                    disabled={!isFormValid() || isFormOpening || isSavingSO || isSubmittingSO}
+                                >
+                                    Save as Draft
+                                </Button>
+                                <Button
+                                    variant="default"
+                                    onClick={() => handleSaveSO(true)}
+                                    loading={isSubmittingSO}
+                                    className={cn(
+                                        "disabled:bg-muted disabled:text-muted-foreground disabled:border-muted disabled:opacity-100",
+                                        isFormValid() ? "bg-[#0056B8] text-white hover:bg-[#0056B8]/90" : "bg-emerald-600 hover:bg-emerald-700"
+                                    )}
+                                    disabled={!isFormValid() || isFormOpening || isSavingSO || isSubmittingSO}
+                                >
+                                    Submit
+                                </Button>
                             </>
                         )}
                         {activeSO?.status === "Invoice Pending" && (
                             <>
-                                {/* Changed: Download button with icon and document name only */}
-                                <div className="flex gap-2 mr-auto">
-                                    <Button variant="outline" size="sm" className="gap-2" onClick={handleDownloadQuotation}>
-                                        <Download className="h-4 w-4" />
-                                        Quotation
-                                    </Button>
-                                </div>
+                                {canPrint(MODULE_KEY) && (
+                                    <div className="flex gap-2 mr-auto">
+                                        <Button variant="outline" size="sm" className="gap-2" onClick={handleDownloadQuotation}>
+                                            <Download className="h-4 w-4" />
+                                            Quotation
+                                        </Button>
+                                    </div>
+                                )}
                                 <Button variant="outline" onClick={() => setIsSODialogOpen(false)}>Close</Button>
                             </>
                         )}
                         {activeSO?.status === "Dispatch Pending" && (
                             <>
-                                {/* Download buttons with icon and document name only */}
-                                <div className="flex gap-2 mr-auto">
-                                    <Button variant="outline" size="sm" className="gap-2" onClick={handleDownloadQuotation}>
-                                        <Download className="h-4 w-4" />
-                                        Quotation
-                                    </Button>
-                                    <Button variant="outline" size="sm" className="gap-2" onClick={handleDownloadInvoice}>
-                                        <Download className="h-4 w-4" />
-                                        Invoice
-                                    </Button>
-                                    <Button variant="outline" size="sm" className="gap-2" onClick={() => activeSO && handleDownloadSOPDF(activeSO)}>
-                                        <Download className="h-4 w-4" />
-                                        SO PDF
-                                    </Button>
-                                </div>
+                                {canPrint(MODULE_KEY) && (
+                                    <div className="flex gap-2 mr-auto">
+                                        <Button variant="outline" size="sm" className="gap-2" onClick={handleDownloadQuotation}>
+                                            <Download className="h-4 w-4" />
+                                            Quotation
+                                        </Button>
+                                        <Button variant="outline" size="sm" className="gap-2" onClick={handleDownloadInvoice}>
+                                            <Download className="h-4 w-4" />
+                                            Invoice
+                                        </Button>
+                                        <Button variant="outline" size="sm" className="gap-2" onClick={() => activeSO && handleDownloadSOPDF(activeSO)}>
+                                            <Download className="h-4 w-4" />
+                                            SO PDF
+                                        </Button>
+                                    </div>
+                                )}
                                 <Button variant="outline" onClick={() => setIsSODialogOpen(false)}>Close</Button>
                             </>
                         )}
                         {activeSO?.status === "Dispatched" && (
                             <>
-                                {/* Changed: Download buttons with icon and document name only */}
-                                <div className="flex gap-2 mr-auto">
-                                    <Button variant="outline" size="sm" className="gap-2" onClick={handleDownloadQuotation}>
-                                        <Download className="h-4 w-4" />
-                                        Quotation
-                                    </Button>
-                                    <Button variant="outline" size="sm" className="gap-2" onClick={handleDownloadInvoice}>
-                                        <Download className="h-4 w-4" />
-                                        Invoice
-                                    </Button>
-                                    <Button variant="outline" size="sm" className="gap-2" onClick={handleDownloadDispatchNote}>
-                                        <Download className="h-4 w-4" />
-                                        Dispatch Note
-                                    </Button>
-                                </div>
+                                {canPrint(MODULE_KEY) && (
+                                    <div className="flex gap-2 mr-auto">
+                                        <Button variant="outline" size="sm" className="gap-2" onClick={handleDownloadQuotation}>
+                                            <Download className="h-4 w-4" />
+                                            Quotation
+                                        </Button>
+                                        <Button variant="outline" size="sm" className="gap-2" onClick={handleDownloadInvoice}>
+                                            <Download className="h-4 w-4" />
+                                            Invoice
+                                        </Button>
+                                        <Button variant="outline" size="sm" className="gap-2" onClick={handleDownloadDispatchNote}>
+                                            <Download className="h-4 w-4" />
+                                            Dispatch Note
+                                        </Button>
+                                    </div>
+                                )}
                                 {/* Close SO button - only show if payment is completed and due amount is 0 */}
                                 {activeSO.paymentStatus === "Completed" && (activeSO.invoiceDueAmount === 0 || !activeSO.invoiceDueAmount) && (
-                                    <Button 
+                                    <Button
                                         onClick={() => handleCloseSO()}
                                         className="bg-gray-700 hover:bg-gray-800"
                                     >
@@ -3181,23 +3755,24 @@ const SalesOrder = () => {
                                 <Button variant="outline" onClick={() => setIsSODialogOpen(false)}>Close</Button>
                             </>
                         )}
-                        {activeSO?.status === "Closed SO" && (
+                        {activeSO?.status === "Close" && (
                             <>
-                                {/* Closed SO - Read-only, only download buttons */}
-                                <div className="flex gap-2 mr-auto">
-                                    <Button variant="outline" size="sm" className="gap-2" onClick={handleDownloadQuotation}>
-                                        <Download className="h-4 w-4" />
-                                        Quotation
-                                    </Button>
-                                    <Button variant="outline" size="sm" className="gap-2" onClick={handleDownloadInvoice}>
-                                        <Download className="h-4 w-4" />
-                                        Invoice
-                                    </Button>
-                                    <Button variant="outline" size="sm" className="gap-2" onClick={handleDownloadDispatchNote}>
-                                        <Download className="h-4 w-4" />
-                                        Dispatch Note
-                                    </Button>
-                                </div>
+                                {canPrint(MODULE_KEY) && (
+                                    <div className="flex gap-2 mr-auto">
+                                        <Button variant="outline" size="sm" className="gap-2" onClick={handleDownloadQuotation}>
+                                            <Download className="h-4 w-4" />
+                                            Quotation
+                                        </Button>
+                                        <Button variant="outline" size="sm" className="gap-2" onClick={handleDownloadInvoice}>
+                                            <Download className="h-4 w-4" />
+                                            Invoice
+                                        </Button>
+                                        <Button variant="outline" size="sm" className="gap-2" onClick={handleDownloadDispatchNote}>
+                                            <Download className="h-4 w-4" />
+                                            Dispatch Note
+                                        </Button>
+                                    </div>
+                                )}
                                 <Button variant="outline" onClick={() => setIsSODialogOpen(false)}>Close</Button>
                             </>
                         )}
@@ -3266,7 +3841,7 @@ const SalesOrder = () => {
                                         </h3>
                                         <div className="grid grid-cols-2 gap-x-8 gap-y-3">
                                             <div>
-                                                <p className="text-xs text-slate-500 uppercase tracking-wide mb-1">SO Number</p>
+                                                <p className="text-xs text-slate-500 uppercase tracking-wide mb-1">SO Code</p>
                                                 <p className="text-sm font-semibold text-slate-800">{previewSO.soNumber}</p>
                                             </div>
                                             <div>
@@ -3275,7 +3850,7 @@ const SalesOrder = () => {
                                             </div>
                                             {previewSO.quotationRef && (
                                                 <div>
-                                                    <p className="text-xs text-slate-500 uppercase tracking-wide mb-1">Quotation Reference</p>
+                                                    <p className="text-xs text-slate-500 uppercase tracking-wide mb-1">Quotation Code Reference</p>
                                                     <p className="text-sm font-semibold text-slate-800">{previewSO.quotationRef}</p>
                                                 </div>
                                             )}
@@ -3312,7 +3887,7 @@ const SalesOrder = () => {
                                                 {previewSO.terms.map((term, index) => {
                                                     const value = term.value || term.percentage || 0;
                                                     const displayValue = `${value}%`;
-                                                    
+
                                                     let termText = "";
                                                     if (term.termType === "Advance") {
                                                         termText = `${displayValue} payment required at order confirmation.`;
@@ -3321,7 +3896,7 @@ const SalesOrder = () => {
                                                     } else if (term.termType === "Days") {
                                                         termText = `${displayValue} payment due within ${term.days || 0} days.`;
                                                     }
-                                                    
+
                                                     return (
                                                         <div key={term.id} className="flex items-start gap-2">
                                                             <span className="text-slate-700 font-bold mt-0.5">•</span>
@@ -3348,7 +3923,7 @@ const SalesOrder = () => {
                                                         Quantity
                                                     </th>
                                                     <th className="text-right text-xs font-bold text-slate-600 uppercase tracking-wide py-3 px-4 border-b-2 border-slate-200">
-                                                        Rate
+                                                        Unit Price
                                                     </th>
                                                     <th className="text-right text-xs font-bold text-slate-600 uppercase tracking-wide py-3 px-4 border-b-2 border-slate-200">
                                                         Amount
@@ -3365,10 +3940,10 @@ const SalesOrder = () => {
                                                             {item.orderedQty}
                                                         </td>
                                                         <td className="text-sm text-slate-800 text-right py-3 px-4 border-b border-slate-100">
-                                                            {getCurrencySymbol(previewSO.currency)} {Number().toFixed(2)}
+                                                            {getCurrencySymbol(previewSO.currency)} {Number(item.rate || 0).toFixed(2)}
                                                         </td>
                                                         <td className="text-sm font-semibold text-slate-800 text-right py-3 px-4 border-b border-slate-100">
-                                                            {getCurrencySymbol(previewSO.currency)} {Number().toFixed(2)}
+                                                            {getCurrencySymbol(previewSO.currency)} {Number(item.price || 0).toFixed(2)}
                                                         </td>
                                                     </tr>
                                                 ))}
@@ -3430,23 +4005,27 @@ const SalesOrder = () => {
 
                     {/* Action Buttons - Outside Document */}
                     <div className="flex justify-end gap-2 p-4 border-t bg-white">
-                        {previewSO?.quotationRef && (
-                            <Button 
-                                variant="outline"
-                                onClick={() => handleDownloadQuotationFromPreview(previewSO.quotationRef)} 
-                                className="gap-2"
-                            >
-                                <Download className="h-4 w-4" />
-                                Download Quotation
-                            </Button>
+                        {canPrint(MODULE_KEY) && (
+                            <>
+                                {previewSO?.quotationRef && (
+                                    <Button
+                                        variant="outline"
+                                        onClick={() => handleDownloadQuotationFromPreview(previewSO.quotationRef)}
+                                        className="gap-2"
+                                    >
+                                        <Download className="h-4 w-4" />
+                                        Download Quotation
+                                    </Button>
+                                )}
+                                <Button
+                                    onClick={() => previewSO && handleDownloadSOPDF(previewSO)}
+                                    className="gap-2 "
+                                >
+                                    <Download className="h-4 w-4" />
+                                    Download SO PDF
+                                </Button>
+                            </>
                         )}
-                        <Button 
-                            onClick={() => previewSO && handleDownloadSOPDF(previewSO)} 
-                            className="gap-2 "
-                        >
-                            <Download className="h-4 w-4" />
-                            Download SO PDF
-                        </Button>
                     </div>
                 </DialogContent>
             </Dialog>
@@ -3513,7 +4092,7 @@ const SalesOrder = () => {
                                         </h3>
                                         <div className="grid grid-cols-2 gap-x-8 gap-y-3">
                                             <div>
-                                                <p className="text-xs text-slate-500 uppercase tracking-wide mb-1">SO Number</p>
+                                                <p className="text-xs text-slate-500 uppercase tracking-wide mb-1">SO Code</p>
                                                 <p className="text-sm font-semibold text-slate-800">{dispatchPreviewSO.soNumber}</p>
                                             </div>
                                             <div>
@@ -3522,7 +4101,7 @@ const SalesOrder = () => {
                                             </div>
                                             {dispatchPreviewSO.quotationRef && (
                                                 <div>
-                                                    <p className="text-xs text-slate-500 uppercase tracking-wide mb-1">Quotation Reference</p>
+                                                    <p className="text-xs text-slate-500 uppercase tracking-wide mb-1">Quotation Code Reference</p>
                                                     <p className="text-sm font-semibold text-slate-800">{dispatchPreviewSO.quotationRef}</p>
                                                 </div>
                                             )}
@@ -3559,7 +4138,7 @@ const SalesOrder = () => {
                                                 {dispatchPreviewSO.terms.map((term, index) => {
                                                     const value = term.value || term.percentage || 0;
                                                     const displayValue = `${value}%`;
-                                                    
+
                                                     let termText = "";
                                                     if (term.termType === "Advance") {
                                                         termText = `${displayValue} payment required at order confirmation.`;
@@ -3568,7 +4147,7 @@ const SalesOrder = () => {
                                                     } else if (term.termType === "Days") {
                                                         termText = `${displayValue} payment due within ${term.days || 0} days.`;
                                                     }
-                                                    
+
                                                     return (
                                                         <div key={term.id} className="flex items-start gap-2">
                                                             <span className="text-slate-700 font-bold mt-0.5">•</span>
@@ -3595,7 +4174,7 @@ const SalesOrder = () => {
                                                         Quantity
                                                     </th>
                                                     <th className="text-right text-xs font-bold text-slate-600 uppercase tracking-wide py-3 px-4 border-b-2 border-slate-200">
-                                                        Rate
+                                                        Unit Price
                                                     </th>
                                                     <th className="text-right text-xs font-bold text-slate-600 uppercase tracking-wide py-3 px-4 border-b-2 border-slate-200">
                                                         Amount
@@ -3612,10 +4191,10 @@ const SalesOrder = () => {
                                                             {item.orderedQty}
                                                         </td>
                                                         <td className="text-sm text-slate-800 text-right py-3 px-4 border-b border-slate-100">
-                                                            {getCurrencySymbol(dispatchPreviewSO.currency)} {Number().toFixed(2)}
+                                                            {getCurrencySymbol(dispatchPreviewSO.currency)} {Number(item.rate || 0).toFixed(2)}
                                                         </td>
                                                         <td className="text-sm font-semibold text-slate-800 text-right py-3 px-4 border-b border-slate-100">
-                                                            {getCurrencySymbol(dispatchPreviewSO.currency)} {Number().toFixed(2)}
+                                                            {getCurrencySymbol(dispatchPreviewSO.currency)} {Number(item.price || 0).toFixed(2)}
                                                         </td>
                                                     </tr>
                                                 ))}
@@ -3678,33 +4257,38 @@ const SalesOrder = () => {
                     {/* Action Buttons - Outside Document */}
                     {/* For Dispatch Pending: Show Quotation, Invoice, Download SO PDF buttons */}
                     <div className="flex justify-end gap-2 p-4 border-t bg-white">
-                        {/* Quotation Button - Opens/downloads linked quotation PDF */}
-                        <Button 
-                            variant="outline"
-                            onClick={() => dispatchPreviewSO?.quotationRef && handleDownloadQuotationFromPreview(dispatchPreviewSO.quotationRef)} 
-                            className="gap-2"
-                            disabled={!dispatchPreviewSO?.quotationRef}
-                        >
-                            <Download className="h-4 w-4" />
-                            Quotation
-                        </Button>
-                        {/* Invoice Button - Opens/downloads linked invoice PDF */}
-                        <Button 
-                            variant="outline"
-                            onClick={() => dispatchPreviewSO && handleDownloadInvoiceFromDispatchPreview(dispatchPreviewSO)} 
-                            className="gap-2"
-                        >
-                            <Download className="h-4 w-4" />
-                            Invoice
-                        </Button>
-                        {/* Download SO PDF Button - Downloads the Sales Order PDF preview */}
-                        <Button 
-                            onClick={() => dispatchPreviewSO && handleDownloadSOPDF(dispatchPreviewSO)} 
-                            className="gap-2 "
-                        >
-                            <Download className="h-4 w-4" />
-                            Download SO PDF
-                        </Button>
+                        {canPrint(MODULE_KEY) && (
+                            <>
+                                {/* Quotation Button - Opens/downloads linked quotation PDF */}
+                                <Button
+                                    variant="outline"
+                                    onClick={() => dispatchPreviewSO?.quotationRef && handleDownloadQuotationFromPreview(dispatchPreviewSO.quotationRef)}
+                                    className="gap-2"
+                                    disabled={!dispatchPreviewSO?.quotationRef}
+                                >
+                                    <Download className="h-4 w-4" />
+                                    Quotation
+                                </Button>
+                                {/* Invoice Button - Opens/downloads linked invoice PDF */}
+                                <Button
+                                    variant="outline"
+                                    onClick={() => dispatchPreviewSO && handleDownloadInvoiceFromDispatchPreview(dispatchPreviewSO)}
+                                    className="gap-2"
+                                    disabled={isLoading}
+                                >
+                                    <Download className="h-4 w-4" />
+                                    {isLoading ? "Loading..." : "Invoice"}
+                                </Button>
+                                {/* Download SO PDF Button - Downloads the Sales Order PDF preview */}
+                                <Button
+                                    onClick={() => dispatchPreviewSO && handleDownloadSOPDF(dispatchPreviewSO)}
+                                    className="gap-2 "
+                                >
+                                    <Download className="h-4 w-4" />
+                                    Download SO PDF
+                                </Button>
+                            </>
+                        )}
                     </div>
                 </DialogContent>
             </Dialog>
@@ -3771,7 +4355,7 @@ const SalesOrder = () => {
                                         </h3>
                                         <div className="grid grid-cols-2 gap-x-8 gap-y-3">
                                             <div>
-                                                <p className="text-xs text-slate-500 uppercase tracking-wide mb-1">SO Number</p>
+                                                <p className="text-xs text-slate-500 uppercase tracking-wide mb-1">SO Code</p>
                                                 <p className="text-sm font-semibold text-slate-800">{dispatchedPreviewSO.soNumber}</p>
                                             </div>
                                             <div>
@@ -3780,7 +4364,7 @@ const SalesOrder = () => {
                                             </div>
                                             {dispatchedPreviewSO.quotationRef && (
                                                 <div>
-                                                    <p className="text-xs text-slate-500 uppercase tracking-wide mb-1">Quotation Reference</p>
+                                                    <p className="text-xs text-slate-500 uppercase tracking-wide mb-1">Quotation Code Reference</p>
                                                     <p className="text-sm font-semibold text-slate-800">{dispatchedPreviewSO.quotationRef}</p>
                                                 </div>
                                             )}
@@ -3817,7 +4401,7 @@ const SalesOrder = () => {
                                                 {dispatchedPreviewSO.terms.map((term, index) => {
                                                     const value = term.value || term.percentage || 0;
                                                     const displayValue = `${value}%`;
-                                                    
+
                                                     let termText = "";
                                                     if (term.termType === "Advance") {
                                                         termText = `${displayValue} payment required at order confirmation.`;
@@ -3826,7 +4410,7 @@ const SalesOrder = () => {
                                                     } else if (term.termType === "Days") {
                                                         termText = `${displayValue} payment due within ${term.days || 0} days.`;
                                                     }
-                                                    
+
                                                     return (
                                                         <div key={term.id} className="flex items-start gap-2">
                                                             <span className="text-slate-700 font-bold mt-0.5">•</span>
@@ -3853,7 +4437,7 @@ const SalesOrder = () => {
                                                         Quantity
                                                     </th>
                                                     <th className="text-right text-xs font-bold text-slate-600 uppercase tracking-wide py-3 px-4 border-b-2 border-slate-200">
-                                                        Rate
+                                                        Unit Price
                                                     </th>
                                                     <th className="text-right text-xs font-bold text-slate-600 uppercase tracking-wide py-3 px-4 border-b-2 border-slate-200">
                                                         Amount
@@ -3873,10 +4457,10 @@ const SalesOrder = () => {
                                                             {item.orderedQty}
                                                         </td>
                                                         <td className="text-sm text-slate-800 text-right py-3 px-4 border-b border-slate-100">
-                                                            {getCurrencySymbol(dispatchedPreviewSO.currency)} {Number().toFixed(2)}
+                                                            {getCurrencySymbol(dispatchedPreviewSO.currency)} {Number(item.rate || 0).toFixed(2)}
                                                         </td>
                                                         <td className="text-sm font-semibold text-slate-800 text-right py-3 px-4 border-b border-slate-100">
-                                                            {getCurrencySymbol(dispatchedPreviewSO.currency)} {Number().toFixed(2)}
+                                                            {getCurrencySymbol(dispatchedPreviewSO.currency)} {Number(item.price || 0).toFixed(2)}
                                                         </td>
                                                         <td className="text-sm font-semibold text-blue-600 text-right py-3 px-4 border-b border-slate-100">
                                                             {item.dispatchedQty}
@@ -3942,42 +4526,48 @@ const SalesOrder = () => {
                     {/* Action Buttons - Outside Document */}
                     {/* For Dispatched: Show Quotation, Invoice, Dispatch Note, Download SO PDF buttons */}
                     <div className="flex justify-end gap-2 p-4 border-t bg-white">
-                        {/* Quotation Button - Opens/downloads linked quotation PDF */}
-                        <Button 
-                            variant="outline"
-                            onClick={() => dispatchedPreviewSO?.quotationRef && handleDownloadQuotationFromPreview(dispatchedPreviewSO.quotationRef)} 
-                            className="gap-2"
-                            disabled={!dispatchedPreviewSO?.quotationRef}
-                        >
-                            <Download className="h-4 w-4" />
-                            Quotation
-                        </Button>
-                        {/* Invoice Button - Opens/downloads linked invoice PDF */}
-                        <Button 
-                            variant="outline"
-                            onClick={() => dispatchedPreviewSO && handleDownloadInvoiceFromDispatchPreview(dispatchedPreviewSO)} 
-                            className="gap-2"
-                        >
-                            <Download className="h-4 w-4" />
-                            Invoice
-                        </Button>
-                        {/* Dispatch Note Button - Downloads dispatch note */}
-                        <Button 
-                            variant="outline"
-                            onClick={() => dispatchedPreviewSO && handleDownloadDispatchNoteFromPreview(dispatchedPreviewSO)} 
-                            className="gap-2"
-                        >
-                            <Download className="h-4 w-4" />
-                            Dispatch Note
-                        </Button>
-                        {/* Download SO PDF Button - Downloads the Sales Order PDF preview */}
-                        <Button 
-                            onClick={() => dispatchedPreviewSO && handleDownloadSOPDF(dispatchedPreviewSO)} 
-                            className="gap-2 "
-                        >
-                            <Download className="h-4 w-4" />
-                            Download SO PDF
-                        </Button>
+                        {canPrint(MODULE_KEY) && (
+                            <>
+                                {/* Quotation Button - Opens/downloads linked quotation PDF */}
+                                <Button
+                                    variant="outline"
+                                    onClick={() => dispatchedPreviewSO?.quotationRef && handleDownloadQuotationFromPreview(dispatchedPreviewSO.quotationRef)}
+                                    className="gap-2"
+                                    disabled={!dispatchedPreviewSO?.quotationRef}
+                                >
+                                    <Download className="h-4 w-4" />
+                                    Quotation
+                                </Button>
+                                {/* Invoice Button - Opens/downloads linked invoice PDF */}
+                                <Button
+                                    variant="outline"
+                                    onClick={() => dispatchedPreviewSO && handleDownloadInvoiceFromDispatchPreview(dispatchedPreviewSO)}
+                                    className="gap-2"
+                                    disabled={isLoading}
+                                >
+                                    <Download className="h-4 w-4" />
+                                    {isLoading ? "Loading..." : "Invoice"}
+                                </Button>
+                                {/* Dispatch Note Button - Downloads dispatch note */}
+                                <Button
+                                    variant="outline"
+                                    onClick={() => dispatchedPreviewSO && handleDownloadDispatchNoteFromPreview(dispatchedPreviewSO)}
+                                    className="gap-2"
+                                    disabled={isLoading}
+                                >
+                                    <Download className="h-4 w-4" />
+                                    {isLoading ? "Loading..." : "Dispatch Note"}
+                                </Button>
+                                {/* Download SO PDF Button - Downloads the Sales Order PDF preview */}
+                                <Button
+                                    onClick={() => dispatchedPreviewSO && handleDownloadSOPDF(dispatchedPreviewSO)}
+                                    className="gap-2 "
+                                >
+                                    <Download className="h-4 w-4" />
+                                    Download SO PDF
+                                </Button>
+                            </>
+                        )}
                     </div>
                 </DialogContent>
             </Dialog>
@@ -4044,7 +4634,7 @@ const SalesOrder = () => {
                                         </h3>
                                         <div className="grid grid-cols-2 gap-x-8 gap-y-3">
                                             <div>
-                                                <p className="text-xs text-slate-500 uppercase tracking-wide mb-1">SO Number</p>
+                                                <p className="text-xs text-slate-500 uppercase tracking-wide mb-1">SO Code</p>
                                                 <p className="text-sm font-semibold text-slate-800">{closedSOPreviewSO.soNumber}</p>
                                             </div>
                                             <div>
@@ -4053,7 +4643,7 @@ const SalesOrder = () => {
                                             </div>
                                             {closedSOPreviewSO.quotationRef && (
                                                 <div>
-                                                    <p className="text-xs text-slate-500 uppercase tracking-wide mb-1">Quotation Reference</p>
+                                                    <p className="text-xs text-slate-500 uppercase tracking-wide mb-1">Quotation Code Reference</p>
                                                     <p className="text-sm font-semibold text-slate-800">{closedSOPreviewSO.quotationRef}</p>
                                                 </div>
                                             )}
@@ -4090,7 +4680,7 @@ const SalesOrder = () => {
                                                 {closedSOPreviewSO.terms.map((term, index) => {
                                                     const value = term.value || term.percentage || 0;
                                                     const displayValue = `${value}%`;
-                                                    
+
                                                     let termText = "";
                                                     if (term.termType === "Advance") {
                                                         termText = `${displayValue} payment required at order confirmation.`;
@@ -4099,7 +4689,7 @@ const SalesOrder = () => {
                                                     } else if (term.termType === "Days") {
                                                         termText = `${displayValue} payment due within ${term.days || 0} days.`;
                                                     }
-                                                    
+
                                                     return (
                                                         <div key={term.id} className="flex items-start gap-2">
                                                             <span className="text-slate-700 font-bold mt-0.5">•</span>
@@ -4126,7 +4716,7 @@ const SalesOrder = () => {
                                                         Quantity
                                                     </th>
                                                     <th className="text-right text-xs font-bold text-slate-600 uppercase tracking-wide py-3 px-4 border-b-2 border-slate-200">
-                                                        Rate
+                                                        Unit Price
                                                     </th>
                                                     <th className="text-right text-xs font-bold text-slate-600 uppercase tracking-wide py-3 px-4 border-b-2 border-slate-200">
                                                         Amount
@@ -4146,10 +4736,10 @@ const SalesOrder = () => {
                                                             {item.orderedQty}
                                                         </td>
                                                         <td className="text-sm text-slate-800 text-right py-3 px-4 border-b border-slate-100">
-                                                            {getCurrencySymbol(closedSOPreviewSO.currency)} {Number().toFixed(2)}
+                                                            {getCurrencySymbol(closedSOPreviewSO.currency)} {Number(item.rate || 0).toFixed(2)}
                                                         </td>
                                                         <td className="text-sm font-semibold text-slate-800 text-right py-3 px-4 border-b border-slate-100">
-                                                            {getCurrencySymbol(closedSOPreviewSO.currency)} {Number().toFixed(2)}
+                                                            {getCurrencySymbol(closedSOPreviewSO.currency)} {Number(item.price || 0).toFixed(2)}
                                                         </td>
                                                         <td className="text-sm font-semibold text-blue-600 text-right py-3 px-4 border-b border-slate-100">
                                                             {item.dispatchedQty}
@@ -4215,44 +4805,48 @@ const SalesOrder = () => {
                     {/* Action Buttons - Outside Document */}
                     {/* For Closed SO: Show only document download buttons - fully read-only */}
                     <div className="flex justify-end items-center p-4 border-t bg-white">
-                        <div className="flex gap-2">
-                            {/* Quotation Button - Opens/downloads linked quotation PDF */}
-                            <Button 
-                                variant="outline"
-                                onClick={() => closedSOPreviewSO?.quotationRef && handleDownloadQuotationFromPreview(closedSOPreviewSO.quotationRef)} 
-                                className="gap-2"
-                                disabled={!closedSOPreviewSO?.quotationRef}
-                            >
-                                <Download className="h-4 w-4" />
-                                Quotation
-                            </Button>
-                            {/* Invoice Button - Opens/downloads linked invoice PDF */}
-                            <Button 
-                                variant="outline"
-                                onClick={() => closedSOPreviewSO && handleDownloadInvoiceFromDispatchPreview(closedSOPreviewSO)} 
-                                className="gap-2"
-                            >
-                                <Download className="h-4 w-4" />
-                                Invoice
-                            </Button>
-                            {/* Dispatch Note Button - Downloads dispatch note */}
-                            <Button 
-                                variant="outline"
-                                onClick={() => closedSOPreviewSO && handleDownloadDispatchNoteFromPreview(closedSOPreviewSO)} 
-                                className="gap-2"
-                            >
-                                <Download className="h-4 w-4" />
-                                Dispatch Note
-                            </Button>
-                            {/* Download SO PDF Button - Downloads the Sales Order PDF preview */}
-                            <Button 
-                                onClick={() => closedSOPreviewSO && handleDownloadSOPDF(closedSOPreviewSO)} 
-                                className="gap-2 "
-                            >
-                                <Download className="h-4 w-4" />
-                                Download SO PDF
-                            </Button>
-                        </div>
+                        {canPrint(MODULE_KEY) && (
+                            <div className="flex gap-2">
+                                {/* Quotation Button - Opens/downloads linked quotation PDF */}
+                                <Button
+                                    variant="outline"
+                                    onClick={() => closedSOPreviewSO?.quotationRef && handleDownloadQuotationFromPreview(closedSOPreviewSO.quotationRef)}
+                                    className="gap-2"
+                                    disabled={!closedSOPreviewSO?.quotationRef}
+                                >
+                                    <Download className="h-4 w-4" />
+                                    Quotation
+                                </Button>
+                                {/* Invoice Button - Opens/downloads linked invoice PDF */}
+                                <Button
+                                    variant="outline"
+                                    onClick={() => closedSOPreviewSO && handleDownloadInvoiceFromDispatchPreview(closedSOPreviewSO)}
+                                    className="gap-2"
+                                    disabled={isLoading}
+                                >
+                                    <Download className="h-4 w-4" />
+                                    {isLoading ? "Loading..." : "Invoice"}
+                                </Button>
+                                {/* Dispatch Note Button - Downloads dispatch note */}
+                                <Button
+                                    variant="outline"
+                                    onClick={() => closedSOPreviewSO && handleDownloadDispatchNoteFromPreview(closedSOPreviewSO)}
+                                    className="gap-2"
+                                    disabled={isLoading}
+                                >
+                                    <Download className="h-4 w-4" />
+                                    {isLoading ? "Loading..." : "Dispatch Note"}
+                                </Button>
+                                {/* Download SO PDF Button - Downloads the Sales Order PDF preview */}
+                                <Button
+                                    onClick={() => closedSOPreviewSO && handleDownloadSOPDF(closedSOPreviewSO)}
+                                    className="gap-2 "
+                                >
+                                    <Download className="h-4 w-4" />
+                                    Download SO PDF
+                                </Button>
+                            </div>
+                        )}
                     </div>
                 </DialogContent>
             </Dialog>
@@ -4319,7 +4913,7 @@ const SalesOrder = () => {
                                         </h3>
                                         <div className="grid grid-cols-2 gap-x-8 gap-y-3">
                                             <div>
-                                                <p className="text-xs text-slate-500 uppercase tracking-wide mb-1">SO Number</p>
+                                                <p className="text-xs text-slate-500 uppercase tracking-wide mb-1">SO Code</p>
                                                 <p className="text-sm font-semibold text-slate-800">{draftPreviewSO.soNumber}</p>
                                             </div>
                                             <div>
@@ -4328,7 +4922,7 @@ const SalesOrder = () => {
                                             </div>
                                             {draftPreviewSO.quotationRef && (
                                                 <div>
-                                                    <p className="text-xs text-slate-500 uppercase tracking-wide mb-1">Quotation Reference</p>
+                                                    <p className="text-xs text-slate-500 uppercase tracking-wide mb-1">Quotation Code Reference</p>
                                                     <p className="text-sm font-semibold text-slate-800">{draftPreviewSO.quotationRef}</p>
                                                 </div>
                                             )}
@@ -4365,7 +4959,7 @@ const SalesOrder = () => {
                                                 {draftPreviewSO.terms.map((term, index) => {
                                                     const value = term.value || term.percentage || 0;
                                                     const displayValue = `${value}%`;
-                                                    
+
                                                     let termText = "";
                                                     if (term.termType === "Advance") {
                                                         termText = `${displayValue} payment required at order confirmation.`;
@@ -4374,7 +4968,7 @@ const SalesOrder = () => {
                                                     } else if (term.termType === "Days") {
                                                         termText = `${displayValue} payment due within ${term.days || 0} days.`;
                                                     }
-                                                    
+
                                                     return (
                                                         <div key={term.id} className="flex items-start gap-2">
                                                             <span className="text-slate-700 font-bold mt-0.5">•</span>
@@ -4401,7 +4995,7 @@ const SalesOrder = () => {
                                                         Quantity
                                                     </th>
                                                     <th className="text-right text-xs font-bold text-slate-600 uppercase tracking-wide py-3 px-4 border-b-2 border-slate-200">
-                                                        Rate
+                                                        Unit Price
                                                     </th>
                                                     <th className="text-right text-xs font-bold text-slate-600 uppercase tracking-wide py-3 px-4 border-b-2 border-slate-200">
                                                         Amount
@@ -4418,10 +5012,10 @@ const SalesOrder = () => {
                                                             {item.orderedQty}
                                                         </td>
                                                         <td className="text-sm text-slate-800 text-right py-3 px-4 border-b border-slate-100">
-                                                            {getCurrencySymbol(draftPreviewSO.currency)} {Number().toFixed(2)}
+                                                            {getCurrencySymbol(draftPreviewSO.currency)} {Number(item.rate || 0).toFixed(2)}
                                                         </td>
                                                         <td className="text-sm font-semibold text-slate-800 text-right py-3 px-4 border-b border-slate-100">
-                                                            {getCurrencySymbol(draftPreviewSO.currency)} {Number().toFixed(2)}
+                                                            {getCurrencySymbol(draftPreviewSO.currency)} {Number(item.price || 0).toFixed(2)}
                                                         </td>
                                                     </tr>
                                                 ))}
@@ -4484,26 +5078,28 @@ const SalesOrder = () => {
                     {/* Action Buttons - Outside Document */}
                     {/* For Draft: Show only download button and close */}
                     <div className="flex justify-end items-center p-4 border-t bg-white">
-                        <div className="flex gap-2">
-                            {/* Quotation Button - Opens/downloads linked quotation PDF if available */}
-                            <Button 
-                                variant="outline"
-                                onClick={() => draftPreviewSO?.quotationRef && handleDownloadQuotationFromPreview(draftPreviewSO.quotationRef)} 
-                                className="gap-2"
-                                disabled={!draftPreviewSO?.quotationRef}
-                            >
-                                <Download className="h-4 w-4" />
-                                Quotation
-                            </Button>
-                            {/* Download SO PDF Button - Downloads the Sales Order PDF preview */}
-                            <Button 
-                                onClick={() => draftPreviewSO && handleDownloadSOPDF(draftPreviewSO)} 
-                                className="gap-2 "
-                            >
-                                <Download className="h-4 w-4" />
-                                Download SO PDF
-                            </Button>
-                        </div>
+                        {canPrint(MODULE_KEY) && (
+                            <div className="flex gap-2">
+                                {/* Quotation Button - Opens/downloads linked quotation PDF if available */}
+                                <Button
+                                    variant="outline"
+                                    onClick={() => draftPreviewSO?.quotationRef && handleDownloadQuotationFromPreview(draftPreviewSO.quotationRef)}
+                                    className="gap-2"
+                                    disabled={!draftPreviewSO?.quotationRef}
+                                >
+                                    <Download className="h-4 w-4" />
+                                    Quotation
+                                </Button>
+                                {/* Download SO PDF Button - Downloads the Sales Order PDF preview */}
+                                <Button
+                                    onClick={() => draftPreviewSO && handleDownloadSOPDF(draftPreviewSO)}
+                                    className="gap-2 "
+                                >
+                                    <Download className="h-4 w-4" />
+                                    Download SO PDF
+                                </Button>
+                            </div>
+                        )}
                     </div>
                 </DialogContent>
             </Dialog>
@@ -4519,10 +5115,10 @@ const SalesOrder = () => {
                     </DialogHeader>
 
                     <div className="flex-1 overflow-y-auto px-6 py-4 space-y-6">
-                        {/* 1. Top Summary - SO Number, Date, Status */}
+                        {/* 1. Top Summary - SO Code, Date, Status */}
                         <div className="grid grid-cols-3 gap-4 p-4 bg-slate-50 rounded-lg border">
                             <div className="space-y-1">
-                                <Label className="text-[10px] uppercase font-bold text-muted-foreground">SO Number</Label>
+                                <Label className="text-[10px] uppercase font-bold text-muted-foreground">SO Code</Label>
                                 <p className="text-sm font-bold text-primary">{dispatchedEditSO?.soNumber}</p>
                             </div>
                             <div className="space-y-1">
@@ -4591,10 +5187,10 @@ const SalesOrder = () => {
                                                     <TableCell className="py-3">{term.termType}</TableCell>
                                                     <TableCell className="text-center py-3">{term.termType === "Days" ? (term.days || "-") : "-"}</TableCell>
                                                     <TableCell className="py-3">
-                                                        {term.date ? format(new Date(term.date), "dd-MM-yyyy") : 
-                                                         term.termType === "Days" && term.days ? `${term.days} days from SO date` : 
-                                                         term.termType === "Delivery" ? "On delivery" : 
-                                                         term.termType === "Advance" ? "Advance payment" : "-"}
+                                                        {term.date ? format(new Date(term.date), "dd-MM-yyyy") :
+                                                            term.termType === "Days" && term.days ? `${term.days} days from SO date` :
+                                                                term.termType === "Delivery" ? "On delivery" :
+                                                                    term.termType === "Advance" ? "Advance payment" : "-"}
                                                     </TableCell>
                                                 </TableRow>
                                             ))}
@@ -4615,7 +5211,7 @@ const SalesOrder = () => {
                                             <TableHead className="font-bold text-[10px] uppercase py-3 text-center">UOM</TableHead>
                                             <TableHead className="font-bold text-[10px] uppercase py-3 text-center">Ordered Qty</TableHead>
                                             <TableHead className="font-bold text-[10px] uppercase py-3 text-center">Dispatched Qty</TableHead>
-                                            <TableHead className="font-bold text-[10px] uppercase py-3 text-right">Rate</TableHead>
+                                            <TableHead className="font-bold text-[10px] uppercase py-3 text-right">Unit Price</TableHead>
                                             <TableHead className="font-bold text-[10px] uppercase py-3 text-right">Amount</TableHead>
                                         </TableRow>
                                     </TableHeader>
@@ -4626,8 +5222,8 @@ const SalesOrder = () => {
                                                 <TableCell className="text-center text-xs uppercase py-3">{item.uom}</TableCell>
                                                 <TableCell className="text-center font-medium py-3">{item.orderedQty}</TableCell>
                                                 <TableCell className="text-center font-bold text-green-600 py-3">{item.dispatchedQty}</TableCell>
-                                                <TableCell className="text-right py-3">${Number().toFixed(2)}</TableCell>
-                                                <TableCell className="text-right font-bold text-primary py-3">${Number().toFixed(2)}</TableCell>
+                                                <TableCell className="text-right py-3">${Number(item.rate || 0).toFixed(2)}</TableCell>
+                                                <TableCell className="text-right font-bold text-primary py-3">${Number(item.price || 0).toFixed(2)}</TableCell>
                                             </TableRow>
                                         ))}
                                     </TableBody>
@@ -4659,21 +5255,21 @@ const SalesOrder = () => {
                                                 <>
                                                     <div className="flex justify-between text-sm">
                                                         <span className="text-slate-600">Subtotal:</span>
-                                                        <span className="font-medium">USh {subtotal.toFixed(2)}</span>
+                                                        <span className="font-medium">{getCurrencySymbol(dispatchedEditSO.currency || "USD")} {subtotal.toFixed(2)}</span>
                                                     </div>
                                                     {discountAmount > 0 && (
                                                         <div className="flex justify-between text-sm">
                                                             <span className="text-slate-600">Discount:</span>
-                                                            <span className="font-medium text-slate-700">-USh {discountAmount.toFixed(2)}</span>
+                                                            <span className="font-medium text-slate-700">-{getCurrencySymbol(dispatchedEditSO.currency || "USD")} {discountAmount.toFixed(2)}</span>
                                                         </div>
                                                     )}
                                                     <div className="flex justify-between text-sm">
                                                         <span className="text-slate-600">Tax:</span>
-                                                        <span className="font-medium text-green-600">+USh {totalTax.toFixed(2)}</span>
+                                                        <span className="font-medium text-green-600">+{getCurrencySymbol(dispatchedEditSO.currency || "USD")} {totalTax.toFixed(2)}</span>
                                                     </div>
                                                     <div className="flex justify-between text-base border-t pt-2 mt-2">
                                                         <span className="font-bold">Grand Total:</span>
-                                                        <span className="font-bold text-primary">USh {grandTotal.toFixed(2)}</span>
+                                                        <span className="font-bold text-primary">{getCurrencySymbol(dispatchedEditSO.currency || "USD")} {grandTotal.toFixed(2)}</span>
                                                     </div>
                                                     <div className="flex justify-between text-sm border-t pt-2 mt-2">
                                                         <span className="text-slate-500">Payment Status:</span>
@@ -4685,7 +5281,7 @@ const SalesOrder = () => {
                                                     </div>
                                                     <div className="flex justify-between text-sm">
                                                         <span className="text-slate-500">Paid Amount:</span>
-                                                        <span className="font-medium text-green-600">USh {paidAmount.toFixed(2)}</span>
+                                                        <span className="font-medium text-green-600">{getCurrencySymbol(dispatchedEditSO.currency || "USD")} {paidAmount.toFixed(2)}</span>
                                                     </div>
                                                     <div className="flex justify-between text-base">
                                                         <span className="font-bold">Due Amount:</span>
@@ -4693,7 +5289,7 @@ const SalesOrder = () => {
                                                             "font-bold",
                                                             dueAmount === 0 ? "text-green-600" : "text-orange-600"
                                                         )}>
-                                                            USh {dueAmount.toFixed(2)}
+                                                            {getCurrencySymbol(dispatchedEditSO.currency || "USD")} {dueAmount.toFixed(2)}
                                                         </span>
                                                     </div>
                                                     {dueAmount === 0 && (
@@ -4728,13 +5324,13 @@ const SalesOrder = () => {
 
                     {/* Dialog Footer with Close SO button */}
                     <DialogFooter className="p-6 border-t gap-2">
-                        <Button 
-                            variant="outline" 
+                        <Button
+                            variant="outline"
                             onClick={() => setIsDispatchedEditOpen(false)}
                         >
                             Cancel
                         </Button>
-                        <Button 
+                        <Button
                             onClick={() => handleCloseSO()}
                             className="bg-green-600 hover:bg-green-700"
                             disabled={(() => {
@@ -4749,8 +5345,8 @@ const SalesOrder = () => {
                                 // Resolve real-time payment data from store
                                 const storePayment = getPaymentDataBySONumber(dispatchedEditSO.soNumber);
                                 const dueAmount = storePayment ? storePayment.dueAmount : (dispatchedEditSO.invoiceDueAmount ?? 0);
-                                return dueAmount > 0 
-                                    ? "Sales Order can be closed only when due payment is 0." 
+                                return dueAmount > 0
+                                    ? "Sales Order can be closed only when due payment is 0."
                                     : "Close Sales Order";
                             })()}
                         >
@@ -4783,6 +5379,7 @@ const SalesOrder = () => {
                                     handleDeleteSO(soToDelete.id);
                                 }
                             }}
+                            disabled={!canDelete(MODULE_KEY)}
                         >
                             Delete
                         </Button>

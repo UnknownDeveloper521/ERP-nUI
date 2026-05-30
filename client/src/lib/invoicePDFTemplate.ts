@@ -4,6 +4,8 @@ import { format } from "date-fns";
 // Used by: Invoicing module (preview & download) and Sales Order module (download invoice)
 
 export interface InvoicePDFData {
+    companyName?: string;
+    companyAddress?: string;
     invoiceNumber: string;
     invoiceDate: string;
     status: string;
@@ -16,7 +18,7 @@ export interface InvoicePDFData {
     soDate?: string;
     deliveryDate?: string;
     currency: string;
-    remarks?: string;
+    currencySymbol: string;
     terms: Array<{
         id: number;
         percentage: number;
@@ -78,7 +80,9 @@ export const generateInvoicePDFHTML = (invoice: InvoicePDFData): string => {
         invoice.taxValue || invoice.taxPercentage,
         invoice.taxType || "%"
     );
-    const formattedInvoiceDate = format(new Date(invoice.invoiceDate), "dd-MM-yyyy");
+
+    const isDraft = invoice.status.toUpperCase() === "DRAFT";
+    const formattedInvoiceDate = isDraft ? "-" : format(new Date(invoice.invoiceDate), "dd-MM-yyyy");
 
     return `
         <html>
@@ -93,38 +97,43 @@ export const generateInvoicePDFHTML = (invoice: InvoicePDFData): string => {
                     .company-info h1 { margin: 0; color: #1a1a1a; font-size: 22px; font-weight: 800; text-transform: uppercase; }
                     .company-info p { margin: 2px 0; color: #4a4a4a; font-size: 10px; }
                     
-                    .document-title { text-align: right; }
+                    .document-title { text-align: right; display: flex; flex-direction: column; align-items: flex-end; }
+                    .title-row { display: flex; align-items: center; gap: 10px; }
                     .document-title h2 { margin: 0; font-size: 18px; color: #1a1a1a; }
                     .document-title p { margin: 2px 0; font-weight: 700; color: #1a1a1a; font-size: 12px; }
-                    .document-title .status { display: inline-block; padding: 4px 12px; border-radius: 4px; font-size: 10px; font-weight: 700; margin-top: 4px; background: #f5f5f5; color: #333; }
+                    .document-title .status { 
+                        padding: 2px 8px; 
+                        border-radius: 4px; 
+                        font-size: 9px; 
+                        font-weight: 700; 
+                        text-transform: uppercase;
+                        background: #f1f5f9; 
+                        color: #475569;
+                        border: 1px solid #e2e8f0;
+                    }
+                    .status-open { background: #eff6ff !important; color: #1d4ed8 !important; border: 1px solid #dbeafe !important; }
 
-                    .details-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-bottom: 20px; }
-                    .info-box { border: 1px solid #d0d0d0; padding: 10px; border-radius: 6px; }
+                    .info-box { border: 1px solid #d0d0d0; padding: 10px; border-radius: 6px; margin-bottom: 15px; }
                     .info-box h3 { margin: 0 0 6px 0; font-size: 9px; text-transform: uppercase; color: #666; letter-spacing: 0.05em; border-bottom: 1px solid #e8e8e8; padding-bottom: 4px; }
                     .info-item { margin-bottom: 4px; display: flex; }
                     .info-item strong { width: 110px; color: #4a4a4a; font-size: 10px; flex-shrink: 0; }
                     .info-item span { color: #1a1a1a; font-weight: 500; }
 
                     table { width: 100%; border-collapse: collapse; margin-top: 5px; }
-                    th { background-color: #f5f5f5; color: #333; font-size: 9px; text-transform: uppercase; padding: 8px 10px; border: 1px solid #d0d0d0; text-align: left; }
-                    td { padding: 8px 10px; border: 1px solid #d0d0d0; font-size: 10px; }
+                    th { background-color: #f8fafc; color: #475569; font-size: 9px; text-transform: uppercase; padding: 6px 10px; border: 1px solid #e2e8f0; text-align: left; }
+                    td { padding: 8px 10px; border: 1px solid #e2e8f0; font-size: 10px; }
                     .text-right { text-align: right; }
                     .text-center { text-align: center; }
                     .font-bold { font-weight: 700; }
 
                     .totals-section { margin-top: 20px; display: flex; justify-content: flex-end; }
-                    .totals-box { width: 300px; border: 1px solid #d0d0d0; padding: 12px; border-radius: 6px; background: #f5f5f5; }
+                    .totals-box { width: 300px; border: 1px solid #d0d0d0; padding: 12px; border-radius: 6px; background: #f8fafc; }
                     .total-row { display: flex; justify-content: space-between; margin-bottom: 6px; font-size: 11px; }
                     .total-row.grand { border-top: 2px solid #333; padding-top: 8px; margin-top: 8px; font-size: 14px; font-weight: 800; color: #1a1a1a; }
 
-                    .terms-bullets { margin-top: 15px; }
-                    .terms-bullets h3 { font-size: 9px; font-weight: bold; text-transform: uppercase; color: #666; margin-bottom: 4px; }
+                    .section-header { font-size: 9px; font-weight: bold; text-transform: uppercase; color: #64748b; margin-bottom: 6px; margin-top: 15px; }
                     
-                    .remarks-section { margin-top: 15px; }
-                    .remarks-section h3 { font-size: 9px; font-weight: bold; text-transform: uppercase; color: #666; margin-bottom: 4px; }
-                    .remarks-box { border: 1px solid #d0d0d0; padding: 8px; border-radius: 4px; min-height: 40px; background: #f5f5f5; }
-                    
-                    .footer { margin-top: 40px; padding-top: 10px; border-top: 1px solid #d0d0d0; text-align: center; font-size: 9px; color: #888; }
+                    .footer { margin-top: 40px; padding-top: 10px; border-top: 1px solid #d0d0d0; text-align: center; font-size: 9px; color: #94a3b8; }
                     
                     @media print {
                         body { -webkit-print-color-adjust: exact; }
@@ -135,20 +144,21 @@ export const generateInvoicePDFHTML = (invoice: InvoicePDFData): string => {
                 <div class="container">
                     <div class="header">
                         <div class="company-info">
-                            <h1>MASTER-ERP</h1>
-                            <p>Industrial Solutions & Services</p>
-                            <p>Ahmedabad, Gujarat, India</p>
+                            <h1>${invoice.companyName || "MASTER-ERP"}</h1>
+                            <p>${invoice.companyAddress || "Industrial Solutions & Services<br>Ahmedabad, Gujarat, India"}</p>
                         </div>
                         <div class="document-title">
-                            <h2>TAX INVOICE</h2>
-                            <p>${invoice.invoiceNumber}</p>
-                            <div class="status status-simple">
-                                ${invoice.status.toUpperCase()}
+                            <div class="title-row">
+                                <h2>TAX INVOICE</h2>
+                                <span class="status ${invoice.status.toLowerCase() === 'open' ? 'status-open' : ''}">
+                                    ${invoice.status}
+                                </span>
                             </div>
+                            <p>${isDraft ? "-" : invoice.invoiceNumber}</p>
                         </div>
                     </div>
 
-                    <div class="info-box" style="margin-bottom: 15px;">
+                    <div class="info-box">
                         <h3>Bill To</h3>
                         <div class="info-item"><strong>Customer</strong><span>${invoice.customerName}</span></div>
                         <div class="info-item"><strong>Contact Person</strong><span>${invoice.contactPerson}</span></div>
@@ -157,74 +167,53 @@ export const generateInvoicePDFHTML = (invoice: InvoicePDFData): string => {
                         <div class="info-item"><strong>Shipping Address</strong><span>${invoice.shippingAddress}</span></div>
                     </div>
 
-                    <div class="info-box" style="margin-bottom: 20px;">
+                    <div class="info-box">
                         <h3>Invoice Details</h3>
                         <div class="info-item"><strong>Invoice Date</strong><span>${formattedInvoiceDate}</span></div>
-                        <div class="info-item"><strong>SO Number</strong><span>${invoice.soNumber}</span></div>
+                        <div class="info-item"><strong>SO Code</strong><span>${invoice.soNumber}</span></div>
                         <div class="info-item"><strong>SO Date</strong><span>${invoice.soDate ? format(new Date(invoice.soDate), "dd-MM-yyyy") : "-"}</span></div>
                         <div class="info-item"><strong>Delivery Date</strong><span>${invoice.deliveryDate ? format(new Date(invoice.deliveryDate), "dd-MM-yyyy") : "-"}</span></div>
-                        <div class="info-item"><strong>Currency</strong><span style="font-weight: 700; color: #1a1a1a;">${invoice.currency || "USD"}</span></div>
+                        <div class="info-item"><strong>Currency</strong><span style="font-weight: 700;">${invoice.currency || "USD"}</span></div>
                     </div>
 
-                    ${invoice.remarks ? `
-                        <div class="remarks-section">
-                            <h3>Remarks / Special Instructions</h3>
-                            <div class="remarks-box">${invoice.remarks}</div>
+                    ${invoice.terms && invoice.terms.length > 0 ? `
+                        <div style="margin-bottom: 20px;">
+                            <div class="section-header">Payment Terms</div>
+                            <table>
+                                <thead>
+                                    <tr>
+                                        <th style="width: 40%;">TERM TYPE</th>
+                                        <th class="text-center" style="width: 20%;">PERCENTAGE</th>
+                                        <th class="text-center" style="width: 15%;">DAYS</th>
+                                        <th class="text-right" style="width: 25%;">AMOUNT</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    ${invoice.terms.map(term => `
+                                        <tr>
+                                            <td>${term.termType}</td>
+                                            <td class="text-center">${term.percentage}%</td>
+                                            <td class="text-center">${term.days || "-"}</td>
+                                            <td class="text-right font-bold">
+                                                ${invoice.currencySymbol} ${((grandTotal * term.percentage) / 100).toFixed(2)}
+                                            </td>
+                                        </tr>
+                                    `).join("")}
+                                </tbody>
+                            </table>
                         </div>
                     ` : ""}
 
-                    ${invoice.terms.length > 0 ? `
-                        <div class="terms-bullets">
-                            <h3>Payment Terms</h3>
-                            <div style="margin-top: 8px;">
-                                ${invoice.terms.map(term => {
-                                    let termDescription = `${term.percentage}% ${term.termType}`;
-                                    
-                                    // FIX 2: Show proper due information based on term type
-                                    if (term.termType === "Delivery" || term.termType === "On Delivery") {
-                                        if (term.date) {
-                                            termDescription += ` – Due on ${format(new Date(term.date), "dd-MM-yyyy")}`;
-                                        } else if (invoice.deliveryDate) {
-                                            termDescription += ` – Due on delivery (${format(new Date(invoice.deliveryDate), "dd-MM-yyyy")})`;
-                                        } else {
-                                            termDescription += ` – Due on delivery`;
-                                        }
-                                    } else if (term.termType === "Days" && term.days) {
-                                        // Calculate due date: Invoice Date + days
-                                        const invoiceDate = new Date(invoice.invoiceDate);
-                                        const dueDate = new Date(invoiceDate);
-                                        dueDate.setDate(dueDate.getDate() + term.days);
-                                        termDescription += ` within ${term.days} days – Due on ${format(dueDate, "dd-MM-yyyy")}`;
-                                    } else if (term.termType === "Advance") {
-                                        if (term.date) {
-                                            termDescription += ` – Due on ${format(new Date(term.date), "dd-MM-yyyy")}`;
-                                        } else {
-                                            termDescription += ` – Due on order confirmation`;
-                                        }
-                                    } else if (term.date) {
-                                        termDescription += ` – Due on ${format(new Date(term.date), "dd-MM-yyyy")}`;
-                                    }
-                                    
-                                    return `
-                                        <div style="display: flex; align-items: flex-start; gap: 8px; margin-bottom: 6px;">
-                                            <span style="color: #333; font-weight: bold; margin-top: 2px;">•</span>
-                                            <p style="color: #333; font-size: 10px; line-height: 1.5; margin: 0;">${termDescription}</p>
-                                        </div>
-                                    `;
-                                }).join("")}
-                            </div>
-                        </div>
-                    ` : ""}
-
+                    <div class="section-header">Invoice Items</div>
                     <table>
                         <thead>
                             <tr>
-                                <th width="50">#</th>
-                                <th>Item Name</th>
-                                <th width="60" class="text-center">UOM</th>
-                                <th width="80" class="text-right">Qty</th>
-                                <th width="80" class="text-right">Rate</th>
-                                <th width="100" class="text-right">Amount</th>
+                                <th style="width: 40px;" class="text-center">#</th>
+                                <th>ITEM NAME</th>
+                                <th style="width: 60px;" class="text-center">UOM</th>
+                                <th style="width: 60px;" class="text-center">QTY</th>
+                                <th style="width: 100px;" class="text-right">UNIT PRICE</th>
+                                <th style="width: 120px;" class="text-right">AMOUNT</th>
                             </tr>
                         </thead>
                         <tbody>
@@ -233,9 +222,9 @@ export const generateInvoicePDFHTML = (invoice: InvoicePDFData): string => {
                                     <td class="text-center">${index + 1}</td>
                                     <td class="font-bold">${item.itemName}</td>
                                     <td class="text-center">${item.uom}</td>
-                                    <td class="text-right">${item.orderedQty}</td>
-                                    <td class="text-right">${item.rate.toFixed(2)}</td>
-                                    <td class="text-right font-bold">${item.price.toFixed(2)}</td>
+                                    <td class="text-center">${item.orderedQty}</td>
+                                    <td class="text-right">${invoice.currencySymbol} ${item.rate.toFixed(2)}</td>
+                                    <td class="text-right font-bold">${invoice.currencySymbol} ${item.price.toFixed(2)}</td>
                                 </tr>
                             `).join("")}
                         </tbody>
@@ -245,26 +234,26 @@ export const generateInvoicePDFHTML = (invoice: InvoicePDFData): string => {
                         <div class="totals-box">
                             <div class="total-row">
                                 <span>Subtotal:</span>
-                                <span class="font-bold">${invoice.currency || "USD"} ${subtotal.toFixed(2)}</span>
+                                <span class="font-bold">${invoice.currencySymbol} ${subtotal.toFixed(2)}</span>
                             </div>
                             <div class="total-row">
-                                <span>Discount (${invoice.discountType === "%" ? (invoice.discountValue || 0) + "%" : "Amount"}):</span>
-                                <span class="font-bold" style="color: #dc2626;">-${invoice.currency || "USD"} ${discountAmount.toFixed(2)}</span>
+                                <span style="color: #64748b;">Discount (${invoice.discountValue}%):</span>
+                                <span class="font-bold" style="color: #dc2626;">-${invoice.currencySymbol} ${discountAmount.toFixed(2)}</span>
                             </div>
                             <div class="total-row">
-                                <span>Tax (${invoice.taxType === "%" ? (invoice.taxValue || invoice.taxPercentage) + "%" : "Amount"}):</span>
-                                <span class="font-bold">${invoice.currency || "USD"} ${totalTax.toFixed(2)}</span>
+                                <span style="color: #64748b;">Tax (${invoice.taxPercentage}%):</span>
+                                <span class="font-bold">${invoice.currencySymbol} ${totalTax.toFixed(2)}</span>
                             </div>
                             <div class="total-row grand">
-                                <span>Grand Total:</span>
-                                <span>${invoice.currency || "USD"} ${grandTotal.toFixed(2)}</span>
+                                <span>GRAND TOTAL</span>
+                                <span>${invoice.currencySymbol} ${grandTotal.toFixed(2)}</span>
                             </div>
                         </div>
                     </div>
 
                     <div class="footer">
                         <p>This is a computer generated document. Generated on ${format(new Date(), "dd-MM-yyyy, HH:mm")}</p>
-                        <p>Tassos Consultancy Services | Govt IT Solutions | Ahmedabad</p>
+                        <p>${invoice.companyName || "Tassos Consultancy Services"} | ${invoice.companyAddress || "Govt IT Solutions | Ahmedabad"}</p>
                     </div>
                 </div>
             </body>

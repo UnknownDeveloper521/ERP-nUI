@@ -10,6 +10,7 @@ interface DatePickerProps {
     setDate: (date?: Date) => void;
     disabled?: boolean;
     minDate?: Date;
+    maxDate?: Date;
     placeholder?: string;
     className?: string;
     showClear?: boolean;
@@ -20,6 +21,7 @@ export function DatePicker({
     setDate,
     disabled = false,
     minDate,
+    maxDate,
     placeholder = "Pick a date",
     className,
     showClear
@@ -55,6 +57,14 @@ export function DatePicker({
             const minimum = new Date(minDate);
             minimum.setHours(0, 0, 0, 0);
             if (selected < minimum) {
+                return;
+            }
+        }
+
+        if (maxDate) {
+            const maximum = new Date(maxDate);
+            maximum.setHours(23, 59, 59, 999);
+            if (selected > maximum) {
                 return;
             }
         }
@@ -96,17 +106,25 @@ export function DatePicker({
             minimumDate.setHours(0, 0, 0, 0);
         }
 
-        const prevMonth = new Date(year, month - 1, 0);
+        let maximumDate: Date | null = null;
+        if (maxDate) {
+            maximumDate = new Date(maxDate);
+            maximumDate.setHours(23, 59, 59, 999);
+        }
+
+        const prevMonthLastDay = new Date(year, month, 0).getDate();
         for (let i = startingDayOfWeek - 1; i >= 0; i--) {
-            const dayDate = new Date(year, month - 1, prevMonth.getDate() - i);
+            const dayDate = new Date(year, month - 1, prevMonthLastDay - i);
             dayDate.setHours(0, 0, 0, 0);
             const isPast = minimumDate ? dayDate < minimumDate : false;
+            const isFuture = maximumDate ? dayDate > maximumDate : false;
+            const isDisabled = isPast || isFuture;
             days.push({
                 date: dayDate,
                 isCurrentMonth: false,
                 isToday: false,
                 isSelected: false,
-                isPast
+                isDisabled
             });
         }
 
@@ -116,13 +134,15 @@ export function DatePicker({
             const isToday = new Date().toDateString() === currentDate.toDateString();
             const isSelected = date && currentDate.toDateString() === date.toDateString();
             const isPast = minimumDate ? currentDate < minimumDate : false;
+            const isFuture = maximumDate ? currentDate > maximumDate : false;
+            const isDisabled = isPast || isFuture;
 
             days.push({
                 date: currentDate,
                 isCurrentMonth: true,
                 isToday,
                 isSelected,
-                isPast
+                isDisabled
             });
         }
 
@@ -131,12 +151,14 @@ export function DatePicker({
             const dayDate = new Date(year, month + 1, day);
             dayDate.setHours(0, 0, 0, 0);
             const isPast = minimumDate ? dayDate < minimumDate : false;
+            const isFuture = maximumDate ? dayDate > maximumDate : false;
+            const isDisabled = isPast || isFuture;
             days.push({
                 date: dayDate,
                 isCurrentMonth: false,
                 isToday: false,
                 isSelected: false,
-                isPast
+                isDisabled
             });
         }
 
@@ -202,16 +224,16 @@ export function DatePicker({
                             key={index}
                             variant="ghost"
                             size="icon"
-                            disabled={day.isPast}
+                            disabled={day.isDisabled}
                             className={cn(
                                 "h-8 w-8 text-sm font-normal",
                                 !day.isCurrentMonth && "text-muted-foreground opacity-50",
                                 day.isToday && "bg-accent text-accent-foreground font-semibold",
                                 day.isSelected && "bg-primary text-primary-foreground font-semibold",
-                                day.isCurrentMonth && !day.isPast && "hover:bg-accent hover:text-accent-foreground",
-                                day.isPast && "opacity-30 cursor-not-allowed text-muted-foreground"
+                                day.isCurrentMonth && !day.isDisabled && "hover:bg-accent hover:text-accent-foreground",
+                                day.isDisabled && "opacity-30 cursor-not-allowed text-muted-foreground"
                             )}
-                            onClick={() => !day.isPast && handleDateSelect(day.date)}
+                            onClick={() => !day.isDisabled && handleDateSelect(day.date)}
                         >
                             {day.date.getDate()}
                         </Button>

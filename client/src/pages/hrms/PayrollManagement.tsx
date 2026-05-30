@@ -20,77 +20,54 @@
 import React, { useState, useEffect } from "react";
 import { useLocation } from "wouter";
 import { cn } from "@/lib/utils";
+import { useHasPermission } from "@/hooks/usePermissions";
 
 // Import tab components
 import RunPayroll from "./RunPayroll";
 import Payslips from "./Payslips";
 
-// Role type
-type SimulatedRole = "Admin" | "HR Manager" | "Employee";
+import Unauthorized from "../Unauthorized";
 
 /**
  * Main Payroll Management Page with Tabs
  */
 export default function PayrollManagement() {
   const [location, setLocation] = useLocation();
-  
-  // ============================================================================
-  // ROLE SIMULATION STATE
-  // ============================================================================
-  // PURPOSE: Simulates different user roles (Admin/HR Manager/Employee) for testing
-  // WHY NEEDED: In production, this will be replaced with actual user role from auth context
-  // REMOVE WHEN: Implementing real authentication system
-  // ============================================================================
-  const [simulatedRole, setSimulatedRole] = useState<SimulatedRole>("Admin");
-  
-  // ============================================================================
-  // TAB ROUTING LOGIC
-  // ============================================================================
-  // PURPOSE: Determines which tab is active based on current URL path
-  // WHY NEEDED: Keeps tab state in sync with browser URL for proper navigation
-  // KEEP: This is essential for tab navigation and browser back/forward buttons
-  // ============================================================================
+  const { isMenuVisible, canCreate, canEdit, canView } = useHasPermission();
+
+  // Permission Checks
+  const hasModuleAccess = isMenuVisible("HRMS:Payroll Management");
+  const canAccessRunPayroll = canCreate("HRMS:Payroll Management") || canEdit("HRMS:Payroll Management");
+  const canAccessPayslips = canView("HRMS:Payroll Management");
+
+  // State for tabs
   const getActiveTabFromPath = () => {
     if (location.includes("/payslips")) return "payslips";
     if (location.includes("/run-payroll")) return "run-payroll";
-    return "run-payroll";
+    return canAccessRunPayroll ? "run-payroll" : "payslips";
   };
-  
+
   const [activeTab, setActiveTab] = useState<"run-payroll" | "payslips">(getActiveTabFromPath());
 
-  // ============================================================================
-  // SYNC TAB STATE WITH URL
-  // ============================================================================
-  // PURPOSE: Updates active tab when user navigates using browser back/forward
-  // WHY NEEDED: Ensures UI stays in sync with URL changes
-  // KEEP: Essential for proper browser navigation behavior
-  // ============================================================================
   useEffect(() => {
     setActiveTab(getActiveTabFromPath());
   }, [location]);
 
-  // ============================================================================
-  // ROLE-BASED ACCESS CONTROL
-  // ============================================================================
-  // PURPOSE: Automatically redirects Employees away from Run Payroll tab
-  // WHY NEEDED: Employees should only see their own payslips, not process payroll
-  // KEEP: This enforces security - prevents unauthorized access to payroll processing
-  // ============================================================================
+  // Automatic redirection if landing on unauthorized tab
   useEffect(() => {
-    if (simulatedRole === "Employee" && activeTab === "run-payroll") {
+    if (activeTab === "run-payroll" && !canAccessRunPayroll && canAccessPayslips) {
       setActiveTab("payslips");
       setLocation("/hrms/payroll-management/payslips");
+    } else if (activeTab === "payslips" && !canAccessPayslips && canAccessRunPayroll) {
+      setActiveTab("run-payroll");
+      setLocation("/hrms/payroll-management/run-payroll");
     }
-  }, [simulatedRole, activeTab, setLocation]);
+  }, [canAccessRunPayroll, canAccessPayslips, activeTab, setLocation]);
 
-  // ============================================================================
-  // PERMISSION CHECK
-  // ============================================================================
-  // PURPOSE: Determines if current user can access Run Payroll tab
-  // WHY NEEDED: Used to conditionally hide/show Run Payroll tab in UI
-  // KEEP: Essential for role-based UI rendering
-  // ============================================================================
-  const canAccessRunPayroll = simulatedRole !== "Employee";
+  // Early return if no module access at all
+  if (!hasModuleAccess) {
+    return <Unauthorized />;
+  }
 
   return (
     <div className="space-y-6">
@@ -142,17 +119,19 @@ export default function PayrollManagement() {
                WHY ALWAYS VISIBLE: All roles need access to view payslips
                KEEP: Essential for payslip viewing functionality
                ================================================================ */}
-          <button
-            onClick={() => setLocation("/hrms/payroll-management/payslips")}
-            className={cn(
-              "whitespace-nowrap py-4 px-1 border-b-2 font-medium text-sm transition-colors",
-              activeTab === "payslips"
-                ? "border-primary text-primary"
-                : "border-transparent text-muted-foreground hover:text-foreground hover:border-gray-300"
-            )}
-          >
-            Payslips
-          </button>
+          {canAccessPayslips && (
+            <button
+              onClick={() => setLocation("/hrms/payroll-management/payslips")}
+              className={cn(
+                "whitespace-nowrap py-4 px-1 border-b-2 font-medium text-sm transition-colors",
+                activeTab === "payslips"
+                  ? "border-primary text-primary"
+                  : "border-transparent text-muted-foreground hover:text-foreground hover:border-gray-300"
+              )}
+            >
+              Payslips
+            </button>
+          )}
         </nav>
       </div>
 

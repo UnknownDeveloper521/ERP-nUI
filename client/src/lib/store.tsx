@@ -4,12 +4,21 @@ import {
   onAuthStateChange,
   signInWithEmail,
   signOut,
-  signUpWithEmail
-} from './supabase';
+  signUpWithEmail,
+  signInCompanyWithEmail
+} from './customAuth';
+import { rolesPermissionsApi, RoleRecord, PermissionItem } from './api';
+import { usePermissionStore } from '../stores/permissionStore';
+import { transformPermissions } from '../utils/permissionHelper';
 
 // --- Types ---
 
-export type Role = "Admin" | "Manager" | "Operator" | "Accountant" | "Supervisor" | "Quality Control";
+export type Role = string;
+
+export interface RoleWithId {
+  id: number;
+  name: string;
+}
 
 export interface Permission {
   id: string;
@@ -33,11 +42,15 @@ export interface User {
   supabaseId?: string;
   name: string;
   email: string;
-  role: Role;
+  roles: Role[];
   department: string;
   status: "Active" | "Inactive";
-  password?: string; // In a real app, this would be hashed. Here for mockup auth.
+  password?: string;
   avatar?: string;
+  companyId?: number;
+  tenantId?: number;
+  roleId?: number;
+  employeeId?: number;
 }
 
 export interface AttendanceRecord {
@@ -56,6 +69,7 @@ interface AuthContextType {
   isAuthLoading: boolean;
   users: User[];
   roles: Role[];
+  rolesWithIds: RoleWithId[];
   rolePermissions: RolePermissions;
   moduleVisibility: ModuleVisibility;
   login: (email: string, password: string) => Promise<boolean>;
@@ -68,12 +82,20 @@ interface AuthContextType {
   updateRolePermissions: (role: Role, permissionIds: string[]) => void;
   updateModuleVisibility: (role: Role, moduleVisibilities: { [module: string]: boolean }) => void;
   availablePermissions: Permission[];
-  hasPermission: (permissionId: string) => boolean;
+  hasPermission: (module: string, action: string) => boolean;
   isModuleVisible: (module: string) => boolean;
   attendance: AttendanceRecord[];
   checkIn: () => void;
   checkOut: () => void;
   updateAttendance: (records: AttendanceRecord[]) => void;
+  addRole: (name: string) => void;
+  deleteRole: (name: string) => void;
+  renameRole: (oldName: string, newName: string) => void;
+  isPermissionsLoading: boolean;
+  fetchPermissionsForRole: (roleName: string) => Promise<void>;
+  saveRolePermissions: (roleName: string) => Promise<void>;
+  fetchRoles: () => Promise<RoleWithId[]>;
+  updateRolesBulk: (delta: any) => Promise<void>;
 }
 
 // --- Default Data ---
@@ -154,14 +176,32 @@ export const MODULE_HIERARCHY: ModuleHierarchyItem[] = [
   }
 ];
 
-export const ACTIONS_LIST = ["View", "Create", "Edit", "Delete", "Approve"] as const;
+export const ACTIONS_LIST = ["View", "Create", "Edit", "Delete", "Print", "Approve"] as const;
 
 // Helper to construct ID consistent with UI
 export const constructPermissionId = (module: string, submodule: string | undefined, action: string) => {
   if (submodule) {
-    return `${module.toLowerCase()}_${submodule.toLowerCase().replace(/\s+/g, '')}_${action.toLowerCase()}`;
+    return `${module.toLowerCase().replace(/\s+/g, '_')}_${submodule.toLowerCase().replace(/\s+/g, '_')}_${action.toLowerCase()}`;
   }
-  return `${module.toLowerCase()}_${action.toLowerCase()}`;
+  return `${module.toLowerCase().replace(/\s+/g, '_')}_${action.toLowerCase()}`;
+};
+
+// --- API Mapping Helpers ---
+
+const mapPermissionIdToBackend = (id: string): PermissionItem => {
+  const parts = id.split('||');
+  if (parts.length === 2) {
+    return { module_name: parts[0], action: parts[1] };
+  }
+  // Fallback for old/default data
+  const oldParts = id.split('_');
+  const action = oldParts.pop()!;
+  const modulePath = oldParts.join('/').toUpperCase();
+  return { module_name: modulePath, action: action.toLowerCase() };
+};
+
+const mapBackendToPermissionId = (item: PermissionItem): string => {
+  return `${item.module_name}||${item.action.toLowerCase()}`;
 };
 
 // Generate permissions traversing the hierarchy
@@ -212,7 +252,7 @@ const generatePermissionsFromHierarchy = () => {
 
 const DEFAULT_PERMISSIONS: Permission[] = generatePermissionsFromHierarchy();
 
-const DEFAULT_ROLES: Role[] = ["Admin", "Manager", "Operator", "Accountant", "Supervisor", "Quality Control"];
+const DEFAULT_ROLES: Role[] = ["Administrator", "Manager", "Operator", "Accountant", "Supervisor", "Quality Control"];
 
 // Helper to get all permissions for a module
 const getModulePermissions = (module: string, actions: string[]) =>
@@ -260,13 +300,13 @@ const DEFAULT_MODULE_VISIBILITY: ModuleVisibility = {
 };
 
 const DEFAULT_USERS: User[] = [
-  { id: 1, name: "Super Admin", email: "admin@tassos.com", password: "123456", role: "Admin", department: "IT", status: "Active", avatar: "https://github.com/shadcn.png" },
-  { id: 2, name: "Daxpanara Tassos", email: "daxpanara.tassos@gmail.com", password: "123456", role: "Admin", department: "IT", status: "Active" },
-  { id: 3, name: "Sarah Johnson", email: "sarah@tassos.com", password: "123456", role: "Manager", department: "Engineering", status: "Active" },
-  { id: 4, name: "Michael Chen", email: "michael@tassos.com", password: "123456", role: "Operator", department: "Product", status: "Active" },
-  { id: 5, name: "Jessica Williams", email: "jessica@tassos.com", password: "123456", role: "Operator", department: "Human Resources", status: "Active" },
-  { id: 6, name: "David Miller", email: "david@tassos.com", password: "123456", role: "Accountant", department: "Sales", status: "Active" },
-  { id: 7, name: "Emily Davis", email: "emily@tassos.com", password: "123456", role: "Supervisor", department: "Marketing", status: "Active" },
+  { id: 1, name: "Super Admin", email: "admin@tassos.com", password: "123456", roles: ["Admin"], department: "IT", status: "Active", avatar: "https://github.com/shadcn.png" },
+  { id: 2, name: "Daxpanara Tassos", email: "daxpanara.tassos@gmail.com", password: "123456", roles: ["Admin"], department: "IT", status: "Active" },
+  { id: 3, name: "Sarah Johnson", email: "sarah@tassos.com", password: "123456", roles: ["Manager"], department: "Engineering", status: "Active" },
+  { id: 4, name: "Michael Chen", email: "michael@tassos.com", password: "123456", roles: ["Operator"], department: "Product", status: "Active" },
+  { id: 5, name: "Jessica Williams", email: "jessica@tassos.com", password: "123456", roles: ["Operator"], department: "Human Resources", status: "Active" },
+  { id: 6, name: "David Miller", email: "david@tassos.com", password: "123456", roles: ["Accountant"], department: "Sales", status: "Active" },
+  { id: 7, name: "Emily Davis", email: "emily@tassos.com", password: "123456", roles: ["Supervisor"], department: "Marketing", status: "Active" },
 ];
 
 // --- Context ---
@@ -287,19 +327,51 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return saved ? JSON.parse(saved) : DEFAULT_USERS;
   });
 
+  const [rolesWithIds, setRolesWithIds] = useState<RoleWithId[]>([]);
+  const [roles, setRoles] = useState<Role[]>([]);
+  const [isPermissionsLoading, setIsPermissionsLoading] = useState(false);
+  const [savedPermissions, setSavedPermissions] = useState<RolePermissions>({});
   const [rolePermissions, setRolePermissions] = useState<RolePermissions>(() => {
     const saved = localStorage.getItem('rolePermissions');
-    let permissions = saved ? JSON.parse(saved) : DEFAULT_ROLE_PERMISSIONS;
-
-    // Ensure Admin always has ALL permissions (auto-update for new modules)
-    if (permissions["Admin"]) {
-      permissions = {
-        ...permissions,
-        "Admin": Array.from(new Set([...permissions["Admin"], ...DEFAULT_ROLE_PERMISSIONS["Admin"]]))
-      };
-    }
-    return permissions;
+    return saved ? JSON.parse(saved) : DEFAULT_ROLE_PERMISSIONS;
   });
+
+  const fetchRoles = async () => {
+    try {
+      const response = await rolesPermissionsApi.getRoleList();
+      if (response.isSuccessful && response.data && response.data.records) {
+        const mappedRoles = response.data.records.map(r => ({ id: r.id, name: r.role_name }));
+        setRolesWithIds(mappedRoles);
+        const roleNames = mappedRoles.map(r => r.name);
+        setRoles(roleNames);
+        return mappedRoles;
+      }
+    } catch (err) {
+      console.error("Failed to fetch roles:", err);
+    }
+    return [];
+  };
+
+
+  const hasPermission = (module: string, action: string) => {
+    if (!user) return false;
+    
+    // Admin override
+    if (user.roles.includes("Administrator")) return true;
+
+    const permissions = usePermissionStore.getState().permissions;
+    const perm = permissions[module] || permissions[module.toUpperCase()];
+    if (!perm) return false;
+
+    switch (action.toLowerCase()) {
+      case 'create': return perm.can_create;
+      case 'edit': return perm.can_edit;
+      case 'delete': return perm.can_delete;
+      case 'print': return perm.can_print;
+      case 'view': return perm.can_view;
+      default: return false;
+    }
+  };
 
   const [moduleVisibility, setModuleVisibility] = useState<ModuleVisibility>(() => {
     const saved = localStorage.getItem('moduleVisibility');
@@ -328,6 +400,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [users]);
 
   useEffect(() => {
+    localStorage.setItem('roles', JSON.stringify(roles));
+  }, [roles]);
+
+  useEffect(() => {
     localStorage.setItem('rolePermissions', JSON.stringify(rolePermissions));
   }, [rolePermissions]);
 
@@ -339,10 +415,32 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     localStorage.setItem('attendance', JSON.stringify(attendance));
   }, [attendance]);
 
-  const upsertLocalUserFromEmail = (email: string, supabaseId?: string) => {
+  const upsertLocalUserFromEmail = (authUser: any) => {
+    const { email, id: supabaseId, companyId, tenantId, roleId, employeeId, role } = authUser;
     const existing = users.find(u => u.email.toLowerCase() === email.toLowerCase());
+    
+    // Roles should be based on the current login, not accumulated from the past
+    let userRoles: string[] = [];
+    if (role) {
+      const mappedRole = role === "Admin" ? "Administrator" : role;
+      userRoles = [mappedRole];
+    }
+    
+    // Fallback to Administrator ONLY if absolutely no role is provided
+    if (userRoles.length === 0) {
+      userRoles = ["Administrator"];
+    }
+
     if (existing) {
-      const updated = { ...existing, supabaseId };
+      const updated = { 
+        ...existing, 
+        roles: userRoles, 
+        supabaseId,
+        companyId: companyId ? Number(companyId) : existing.companyId,
+        tenantId: tenantId ? Number(tenantId) : existing.tenantId,
+        roleId: roleId ? Number(roleId) : existing.roleId,
+        employeeId: employeeId ? Number(employeeId) : existing.employeeId
+      };
       setUsers(prev => prev.map(u => u.id === existing.id ? updated : u));
       return updated;
     }
@@ -352,10 +450,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       supabaseId,
       name: email.split("@")[0] || "User",
       email,
-      role: "Admin",
+      roles: userRoles,
       department: "General",
       status: "Active",
       avatar: `https://api.dicebear.com/7.x/avataaars/svg?seed=${email}`,
+      companyId: companyId ? Number(companyId) : undefined,
+      tenantId: tenantId ? Number(tenantId) : undefined,
+      roleId: roleId ? Number(roleId) : undefined,
+      employeeId: employeeId ? Number(employeeId) : undefined
     };
     setUsers(prev => [...prev, newUser]);
     return newUser;
@@ -363,8 +465,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const login = async (email: string, password: string): Promise<boolean> => {
     const { data, error } = await signInWithEmail(email, password);
-    if (error) {
-      console.error("Custom auth login error:", error.message, error);
+    if (error || !data) {
+      console.error("Custom auth login error:", error?.message || "No data returned", error);
       return false;
     }
 
@@ -374,13 +476,40 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       return false;
     }
 
-    const localUser = upsertLocalUserFromEmail(authUser.email, authUser.id);
+    // New Permission Handling
+    const setPermissions = usePermissionStore.getState().setPermissions;
+    if (data.permissions) {
+      const transformed = transformPermissions(data.permissions);
+      setPermissions(transformed);
+    } else {
+      console.warn("⚠️ No permissions received in login response");
+      // Optional: logout if permissions are mandatory
+      // await logout();
+      // return false;
+    }
+
+    const localUser = upsertLocalUserFromEmail(authUser);
     if (localUser.status === "Inactive") {
       console.error("Local user is inactive");
       return false;
     }
     setUser(localUser);
+    
     return true;
+  };
+
+  const refreshUserPermissions = async (roles: Role[]) => {
+    try {
+      // 1. Ensure roles are fetched (we need them for ID mapping)
+      const freshRoles = await fetchRoles();
+      
+      // 2. Fetch permissions for each role
+      for (const roleName of roles) {
+        await fetchPermissionsForRole(roleName, freshRoles);
+      }
+    } catch (err) {
+      console.error("Failed to refresh user permissions:", err);
+    }
   };
 
   const register = async (email: string, password: string, username?: string) => {
@@ -391,33 +520,63 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const logout = async () => {
     await signOut();
     setUser(null);
+    usePermissionStore.getState().clearPermissions(); // Clear permissions on logout
+    // Explicitly clear all keys
+    localStorage.removeItem('currentUser');
+    localStorage.removeItem('auth_token');
+    localStorage.removeItem('auth_user');
+    localStorage.removeItem('erp_common_data');
   };
 
   useEffect(() => {
     let unsub: { data: { subscription: { unsubscribe: () => void } } } | null = null;
 
-    (async () => {
+    const init = async () => {
       try {
-        const authUser = await getCurrentUser();
+        const authResult = await getCurrentUser();
+        const authUser = authResult?.user;
+        const authPermissions = authResult?.permissions;
+
         if (authUser?.email) {
-          const localUser = upsertLocalUserFromEmail(authUser.email, authUser.id);
-          setUser(localUser.status === "Inactive" ? null : localUser);
+          // Hydrate permissions if provided by verify API
+          if (authPermissions) {
+            const setPermissions = usePermissionStore.getState().setPermissions;
+            const transformed = transformPermissions(authPermissions);
+            setPermissions(transformed);
+          }
+
+          const localUser = upsertLocalUserFromEmail(authUser);
+          if (localUser.status !== "Inactive") {
+            setUser(localUser);
+          }
         } else {
+          // If verify API returns no user but we have one in local state (from localStorage init)
+          // we must clear it to avoid being stuck in "user but no permissions" state
           setUser(null);
+          localStorage.removeItem('currentUser');
+          usePermissionStore.getState().clearPermissions();
         }
 
         unsub = onAuthStateChange((nextUser) => {
           if (nextUser?.email) {
-            const localUser = upsertLocalUserFromEmail(nextUser.email, nextUser.id);
-            setUser(localUser.status === "Inactive" ? null : localUser);
+            const localUser = upsertLocalUserFromEmail(nextUser);
+            if (localUser.status !== "Inactive") {
+              setUser(localUser);
+            } else {
+              setUser(null);
+            }
           } else {
             setUser(null);
           }
         });
+      } catch (err) {
+        console.error("Auth error:", err);
       } finally {
         setIsAuthLoading(false);
       }
-    })();
+    };
+
+    init();
 
     return () => {
       unsub?.data.subscription.unsubscribe();
@@ -457,23 +616,143 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setUsers(users.filter(u => u.id !== id));
   };
 
-  const updateRolePermissions = (role: Role, permissionIds: string[]) => {
+  const updateRolePermissions = (roleName: Role, newPermissionIds: string[]) => {
     setRolePermissions(prev => ({
       ...prev,
-      [role]: permissionIds
+      [roleName]: newPermissionIds
     }));
   };
 
-  const hasPermission = (permissionId: string): boolean => {
-    if (!user) return false;
-    const permissions = rolePermissions[user.role] || [];
-    return permissions.includes(permissionId);
+  const saveRolePermissions = async (roleName: string) => {
+    const roleObj = rolesWithIds.find(r => r.name === roleName);
+    if (!roleObj) return;
+
+    const current = rolePermissions[roleName] || [];
+    const saved = savedPermissions[roleName] || [];
+
+    const add = current
+      .filter(id => !saved.includes(id))
+      .map(mapPermissionIdToBackend);
+
+    const del = saved
+      .filter(id => !current.includes(id))
+      .map(mapPermissionIdToBackend);
+
+    if (add.length === 0 && del.length === 0) return;
+
+    const payload = {
+      role_id: roleObj.id,
+      add: add.length > 0 ? add : undefined,
+      delete: del.length > 0 ? del : undefined
+    };
+
+    console.log("PAYLOAD BEING SENT TO givepermission:", JSON.stringify(payload, null, 2));
+
+    setIsPermissionsLoading(true);
+    try {
+      await rolesPermissionsApi.givePermission(payload);
+      
+      setSavedPermissions(prev => ({
+        ...prev,
+        [roleName]: current
+      }));
+    } catch (err) {
+      console.error("Failed to save permissions:", err);
+      throw err;
+    } finally {
+      setIsPermissionsLoading(false);
+    }
   };
 
-  const isModuleVisible = (module: string): boolean => {
-    if (!user) return false;
-    const roleVisibility = moduleVisibility[user.role] || {};
-    return roleVisibility[module] ?? true;
+  const isModuleVisible = (module: string) => {
+    if (!user) return true;
+    
+    // Administrator override
+    if (user.roles.includes("Administrator")) return true;
+
+    const permissions = usePermissionStore.getState().permissions;
+    // Check if the module is visible in menu
+    const perm = permissions[module] || permissions[module.toUpperCase()];
+    return perm?.show_in_menu ?? false;
+  };
+
+  const addRole = async (name: string) => {
+    if (roles.includes(name)) return;
+    try {
+      await rolesPermissionsApi.updateRole({ add: [{ role_name: name }] });
+      await fetchRoles(); // Refresh the list to get the new ID
+    } catch (err) {
+      console.error("Failed to add role:", err);
+    }
+  };
+
+  const updateRolesBulk = async (delta: any) => {
+    try {
+      await rolesPermissionsApi.updateRole(delta);
+      await fetchRoles();
+    } catch (err) {
+      console.error("Failed to update roles bulk:", err);
+      throw err;
+    }
+  };
+
+  const deleteRole = async (name: string) => {
+    if (name === "Admin") return;
+    const roleObj = rolesWithIds.find(r => r.name === name);
+    if (!roleObj) return;
+
+    try {
+      await rolesPermissionsApi.updateRole({ delete: [roleObj.id] });
+      
+      // Local cleanup
+      setRoles(prev => prev.filter(r => r !== name));
+      setRolesWithIds(prev => prev.filter(r => r.id !== roleObj.id));
+      setRolePermissions(prev => {
+        const updated = { ...prev };
+        delete updated[name];
+        return updated;
+      });
+    } catch (err) {
+      console.error("Failed to delete role:", err);
+    }
+  };
+
+  const renameRole = async (oldName: string, newName: string) => {
+    if (oldName === "Admin") return;
+    if (roles.includes(newName)) return;
+    const roleObj = rolesWithIds.find(r => r.name === oldName);
+    if (!roleObj) return;
+
+    try {
+      await rolesPermissionsApi.updateRole({ 
+        edit: [{ id: roleObj.id, role_name: newName }] 
+      });
+      
+      // Local updates
+      setRoles(prev => prev.map(r => r === oldName ? newName : r));
+      setRolesWithIds(prev => prev.map(r => r.id === roleObj.id ? { ...r, name: newName } : r));
+      setRolePermissions(prev => {
+        const updated = { ...prev };
+        if (updated[oldName]) {
+          updated[newName] = updated[oldName];
+          delete updated[oldName];
+        }
+        return updated;
+      });
+      setModuleVisibility(prev => {
+        const updated = { ...prev };
+        if (updated[oldName]) {
+          updated[newName] = updated[oldName];
+          delete updated[oldName];
+        }
+        return updated;
+      });
+      setUsers(prev => prev.map(u => u.roles.includes(oldName) ? { ...u, roles: u.roles.map(r => r === oldName ? newName : r) } : u));
+      if (user?.roles.includes(oldName)) setUser({ ...user, roles: user.roles.map(r => r === oldName ? newName : r) });
+
+    } catch (err) {
+      console.error("Failed to rename role:", err);
+    }
   };
 
   const updateModuleVisibility = (role: Role, moduleVisibilities: { [module: string]: boolean }) => {
@@ -482,6 +761,65 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       [role]: moduleVisibilities
     }));
   };
+
+  const fetchPermissionsForRole = async (roleName: string, rolesList?: RoleWithId[]) => {
+    const listToUse = rolesList || rolesWithIds;
+    const roleObj = listToUse.find(r => r.name === roleName);
+    if (!roleObj) return;
+
+    setIsPermissionsLoading(true);
+    try {
+      const response = await rolesPermissionsApi.getPermissions(roleObj.id);
+      if (response.isSuccessful && response.data && response.data.permissions) {
+        const permissionsArray = response.data.permissions as any[];
+        const permissionIds: string[] = [];
+          const visibilities: { [key: string]: boolean } = {};
+
+        permissionsArray.forEach(group => {
+          if (group.modules && Array.isArray(group.modules)) {
+            group.modules.forEach((mod: any) => {
+              const moduleName = mod.module_name;
+              if (mod.can_create) permissionIds.push(`${moduleName}||create`);
+              if (mod.can_edit) permissionIds.push(`${moduleName}||edit`);
+              if (mod.can_delete) permissionIds.push(`${moduleName}||delete`);
+              if (mod.can_print) permissionIds.push(`${moduleName}||print`);
+              
+              if (mod.show_in_menu) permissionIds.push(`${moduleName}||show_in_menu`);
+
+              // Update moduleVisibility mapping
+              const parts = mod.module_name.split('/');
+              if (parts.length > 1) {
+                const key = parts.slice(1).join(':'); 
+                visibilities[key] = Boolean(mod.show_in_menu);
+                const groupKey = parts.join(':');
+                visibilities[groupKey] = Boolean(mod.show_in_menu);
+              } else {
+                visibilities[parts[0]] = Boolean(mod.show_in_menu);
+              }
+            });
+          }
+        });
+
+        setRolePermissions(prev => ({
+          ...prev,
+          [roleName]: permissionIds
+        }));
+        setSavedPermissions(prev => ({
+          ...prev,
+          [roleName]: permissionIds
+        }));
+        setModuleVisibility(prev => ({
+          ...prev,
+          [roleName]: { ...prev[roleName], ...visibilities }
+        }));
+      }
+    } catch (err) {
+      console.error("Failed to fetch permissions:", err);
+    } finally {
+      setIsPermissionsLoading(false);
+    }
+  };
+
 
   const checkIn = () => {
     if (!user) return;
@@ -545,7 +883,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       user,
       isAuthLoading,
       users,
-      roles: DEFAULT_ROLES,
+      roles,
+      rolesWithIds,
       rolePermissions,
       moduleVisibility,
       login,
@@ -563,7 +902,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       attendance,
       checkIn,
       checkOut,
-      updateAttendance
+      updateAttendance,
+      addRole,
+      deleteRole,
+      renameRole,
+      isPermissionsLoading,
+      fetchPermissionsForRole,
+      saveRolePermissions,
+      fetchRoles,
+      updateRolesBulk
     }}>
       {children}
     </AuthContext.Provider>

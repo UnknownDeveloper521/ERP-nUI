@@ -1,3 +1,4 @@
+import React, { useEffect } from "react";
 import { Switch, Route } from "wouter";
 import { queryClient } from "./lib/queryClient";
 import { QueryClientProvider } from "@tanstack/react-query";
@@ -9,10 +10,15 @@ import Login from "@/pages/Login";
 import Register from "@/pages/Register";
 import VerifyEmail from "@/pages/VerifyEmail";
 import RegistrationSuccess from "@/pages/RegistrationSuccess";
-import ProtectedRoute from "@/components/auth/ProtectedRoute";
+import ProtectedRoute from "@/routes/ProtectedRoute";
+import Unauthorized from "@/pages/Unauthorized";
+import { useAuth } from "@/lib/store";
+import { usePermissionStore } from "@/stores/permissionStore";
+import { loadCommonData } from "@/services/loadCommonData";
+import { CommonStoreProvider, useCommonActions, useCommonStore } from "@/store/commonStore";
 import Dashboard from "@/pages/Dashboard";
 import HRMS from "@/pages/HRMS";
-import Accounting from "@/pages/Accounting";
+import ModuleSelection from "@/pages/ModuleSelection";
 // Removed: Non-existent accounting/Invoicing import
 
 import SuperAdminLogin from "@/pages/super-admin/Login";
@@ -24,9 +30,8 @@ import CompanyManagement from "@/pages/super-admin/CompanyManagement";
 
 import Vendors from "@/pages/Vendors";
 import Customers from "@/pages/Customers";
-import Sales from "@/pages/Sales";
-import UserManagement from "@/pages/UserManagement";
 import RolesPermissions from "@/pages/RolesPermissions";
+import AuditLogs from "@/pages/AuditLogs";
 import MyAccount from "@/pages/MyAccount";
 
 import PerformanceDashboard from "@/pages/PerformanceDashboard";
@@ -104,6 +109,70 @@ const PlaceholderPage = ({ title }: { title: string }) => (
 );
 
 function Router() {
+  const { user, isAuthLoading } = useAuth();
+  // console.log("[App] Router render", { hasUser: !!user, userEmail: user?.email });
+  const commonActions = useCommonActions();
+  const isLoaded = useCommonStore(state => state.isLoaded);
+  const isLoading = useCommonStore(state => state.isLoading);
+  const permissions = usePermissionStore(state => state.permissions);
+  const hasPermissionsLoaded = Object.keys(permissions).length > 0;
+
+  // Synchronize common data with auth state
+  // Critical Fix: Reset common store when user logs out. 
+  // This ensures that 'isLoaded' is reset, forcing a fresh load when next user logs in
+  // even if they login without a full page refresh.
+  useEffect(() => {
+    if (!user && isLoaded) {
+      commonActions.clearCommonData();
+    }
+  }, [user, isLoaded, commonActions]);
+
+  useEffect(() => {
+    // Orchestrate global master data fetch on login
+    // features: 
+    // 1. Skips if already loaded (e.g. from localStorage persistence)
+    // 2. Skips if currently loading
+    // 3. Only triggers for authenticated users
+    if (user && !isLoaded && !isLoading) {
+      loadCommonData({
+        ...commonActions,
+        isLoaded,
+        isLoading,
+        companyId: user.companyId
+      });
+    }
+  }, [user, isLoaded, isLoading, commonActions]);
+
+  if (isAuthLoading) {
+    return (
+      <div className="flex h-screen items-center justify-center">
+        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary"></div>
+      </div>
+    );
+  }
+
+  // If logged in but no permissions loaded, block UI
+  if (user && !hasPermissionsLoaded) {
+    return (
+      <div className="flex flex-col h-screen items-center justify-center text-center p-4">
+        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary mb-4"></div>
+        <p className="text-muted-foreground font-medium">Setting up your workspace...</p>
+        <p className="text-xs text-muted-foreground/60 mt-2 mb-6">Loading permissions and modules</p>
+        <button 
+          onClick={() => {
+            localStorage.removeItem('currentUser');
+            localStorage.removeItem('auth_token');
+            localStorage.removeItem('auth_user');
+            window.location.href = '/login';
+          }}
+          className="text-sm text-primary hover:underline cursor-pointer"
+        >
+          Taking too long? Sign out and try again
+        </button>
+      </div>
+    );
+  }
+
   return (
     <Switch>
       <Route path="/login" component={Login} />
@@ -136,9 +205,9 @@ function Router() {
       </Route>
 
       {/* HRMS Routes */}
-      <Route path="/hrms">
+      <Route path="/hrms/dashboard">
         {() => (
-          <ProtectedRoute>
+          <ProtectedRoute moduleName="HRMS/DASHBOARD">
             <MainLayout>
               <HRDashboard />
             </MainLayout>
@@ -148,7 +217,7 @@ function Router() {
 
       <Route path="/hrms/core-hr/employees/new">
         {() => (
-          <ProtectedRoute>
+          <ProtectedRoute moduleName="HRMS/CORE_HR">
             <MainLayout>
               <CoreHR />
             </MainLayout>
@@ -158,7 +227,17 @@ function Router() {
 
       <Route path="/hrms/core-hr/employees/:id">
         {() => (
-          <ProtectedRoute>
+          <ProtectedRoute moduleName="HRMS/CORE_HR">
+            <MainLayout>
+              <CoreHR />
+            </MainLayout>
+          </ProtectedRoute>
+        )}
+      </Route>
+
+      <Route path="/hrms/core-hr/employees/:id/edit">
+        {() => (
+          <ProtectedRoute moduleName="HRMS/CORE_HR">
             <MainLayout>
               <CoreHR />
             </MainLayout>
@@ -168,7 +247,7 @@ function Router() {
 
       <Route path="/hrms/core-hr">
         {() => (
-          <ProtectedRoute>
+          <ProtectedRoute moduleName="HRMS/CORE_HR">
             <MainLayout>
               <CoreHR />
             </MainLayout>
@@ -185,8 +264,6 @@ function Router() {
           </ProtectedRoute>
         )}
       </Route>
-
-
 
       <Route path="/hrms/leave-management/leave-entry">
         {() => (
@@ -299,7 +376,7 @@ function Router() {
 
       <Route path="/vendors">
         {() => (
-          <ProtectedRoute>
+          <ProtectedRoute moduleName="GENERAL/VENDORS">
             <MainLayout>
               <Vendors />
             </MainLayout>
@@ -309,7 +386,7 @@ function Router() {
 
       <Route path="/customers">
         {() => (
-          <ProtectedRoute>
+          <ProtectedRoute moduleName="GENERAL/CUSTOMERS">
             <MainLayout>
               <Customers />
             </MainLayout>
@@ -388,22 +465,22 @@ function Router() {
         )}
       </Route>
 
-      <Route path="/inventory/material-ledger">
-        {() => (
-          <ProtectedRoute>
-            <MainLayout>
-              <MaterialLedger />
-            </MainLayout>
-          </ProtectedRoute>
-        )}
-      </Route>
-
       {/* Material Requisitions Route */}
       <Route path="/inventory/material-requisitions">
         {() => (
           <ProtectedRoute>
             <MainLayout>
               <InventorySMRRequests />
+            </MainLayout>
+          </ProtectedRoute>
+        )}
+      </Route>
+
+      <Route path="/inventory/material-ledger">
+        {() => (
+          <ProtectedRoute>
+            <MainLayout>
+              <MaterialLedger />
             </MainLayout>
           </ProtectedRoute>
         )}
@@ -625,13 +702,10 @@ function Router() {
 
 
       <Route path="/accounting">
-        {() => (
-          <ProtectedRoute>
-            <MainLayout>
-              <Accounting />
-            </MainLayout>
-          </ProtectedRoute>
-        )}
+        {() => {
+          window.location.replace("/accounting/invoicing");
+          return null;
+        }}
       </Route>
 
       <Route path="/accounting/invoicing">
@@ -665,21 +739,22 @@ function Router() {
 
 
 
-      <Route path="/user-management">
+
+      <Route path="/system/roles-permissions">
         {() => (
           <ProtectedRoute>
             <MainLayout>
-              <UserManagement />
+              <RolesPermissions />
             </MainLayout>
           </ProtectedRoute>
         )}
       </Route>
 
-      <Route path="/settings">
+      <Route path="/system/audit-logs">
         {() => (
           <ProtectedRoute>
             <MainLayout>
-              <RolesPermissions />
+              <AuditLogs />
             </MainLayout>
           </ProtectedRoute>
         )}
@@ -863,15 +938,30 @@ function Router() {
 
 
 
-      {/* Home route - exact match for / */}
+      {/* Home route - Landing page for module selection */}
       <Route path="/">
         {() => (
           <ProtectedRoute>
+            <MainLayout>
+              <ModuleSelection />
+            </MainLayout>
+          </ProtectedRoute>
+        )}
+      </Route>
+
+      {/* Executive Dashboard - Dedicated route */}
+      <Route path="/executive-dashboard">
+        {() => (
+          <ProtectedRoute moduleName="GENERAL/DASHBOARD">
             <MainLayout>
               <Dashboard />
             </MainLayout>
           </ProtectedRoute>
         )}
+      </Route>
+
+      <Route path="/unauthorized">
+        {() => <Unauthorized />}
       </Route>
 
       {/* Catch-all route for unknown paths - show 404 */}
@@ -885,10 +975,12 @@ function Router() {
 function App() {
   return (
     <QueryClientProvider client={queryClient}>
-      <TooltipProvider>
-        <Toaster />
-        <Router />
-      </TooltipProvider>
+      <CommonStoreProvider>
+        <TooltipProvider>
+          <Toaster />
+          <Router />
+        </TooltipProvider>
+      </CommonStoreProvider>
     </QueryClientProvider>
   );
 }

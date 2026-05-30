@@ -12,11 +12,22 @@ import { mockSemiFinishedGoods, mockFinishedGoods, mockWorkCenters as masterWork
 // TYPE DEFINITIONS
 // ============================================================================
 
-export type SMRStatus = "Draft Req." | "Requested Req." | "Issued Req. by WH" | "Received Req. by SC";
+export type SMRStatus = 
+    | "Draft Req." 
+    | "Requested Req." 
+    | "Issued Req. by WH" 
+    | "Received Req. by SC"
+    | "DRAFT_REQ" 
+    | "REQUESTED_REQ" 
+    | "ISSUED_REQ_WH" 
+    | "RECEIVED_REQ_SC";
 
 // SMR Item in the request
 export interface SMRItem {
     id: number | string;
+    line_id?: number | string;
+    service_material_requisition_item_id?: number;
+    item_id?: number;
     itemCode: string;
     itemName: string;
     uom: string;
@@ -38,6 +49,7 @@ export interface SMRRequest {
     department: string;
     requestedBy?: string;
     status: SMRStatus;
+    statusCode?: string;
     issuedDate?: string;
     issuedBy?: string;
     receivedDate?: string;

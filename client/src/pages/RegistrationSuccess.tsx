@@ -6,7 +6,7 @@ import { Label } from "@/components/ui/label";
 import { useToast } from "@/hooks/use-toast";
 import { Mail, CheckCircle, Loader2 } from "lucide-react";
 
-const API_BASE_URL = import.meta.env.VITE_BACKEND_URL || 'http://localhost:8000';
+import { API_BASE_URL } from "@/lib/config";
 
 export default function RegistrationSuccess() {
   const [, setLocation] = useLocation();
@@ -50,8 +50,10 @@ export default function RegistrationSuccess() {
 
       if (response.ok) {
         toast({
+          variant: "success",
           title: "Email Sent!",
           description: result.message,
+          duration: 15000,
         });
       } else {
         toast({

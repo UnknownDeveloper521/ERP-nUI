@@ -4,7 +4,7 @@ import { Button } from "@/components/ui/button";
 import { useToast } from "@/hooks/use-toast";
 import { Loader2, CheckCircle, XCircle, Mail } from "lucide-react";
 
-const API_BASE_URL = import.meta.env.VITE_BACKEND_URL || 'http://localhost:8000';
+import { API_BASE_URL } from "@/lib/config";
 
 export default function VerifyEmail() {
   const [, setLocation] = useLocation();

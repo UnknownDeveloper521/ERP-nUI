@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect, useRef, useMemo, useCallback } from "react";
 import { format } from "date-fns";
 import { Card, CardContent } from "@/components/ui/card";
 import {
@@ -17,7 +17,8 @@ import {
     AlertCircle,
     Download,
     LayoutGrid,
-    Trash2
+    Trash2,
+    Loader2
 } from "lucide-react";
 import { DataTablePagination } from "@/components/shared/DataTablePagination";
 import { TableActionButtons } from "@/components/shared/TableActionButtons";
@@ -62,25 +63,57 @@ import { SearchableSelect as SharedSearchableSelect } from "@/components/shared/
 import { DatePicker as SharedDatePicker } from "@/components/shared/DatePicker";
 
 import {
-    getSalesOrders,
-    updateSalesOrder,
     type SOData as SalesOrderData,
-    type DispatchEntry,
-    type SOStatus as DispatchStatus
+    type DispatchEntry
 } from "@/lib/mockSalesOrders";
 
+import { inventoryApi, commonApi, type DispatchRecord } from "@/lib/api";
+import { useCommonStore } from "@/store/commonStore";
+import { useHasPermission } from "@/hooks/usePermissions";
+import Unauthorized from "@/pages/Unauthorized";
 import {
-    getInvoices,
-    type InvoiceData
-} from "@/lib/mockInvoices";
+    getAssignedIds,
+    getFirstAssignedMatch,
+    prioritizeByAssigned,
+} from "@/utils/assignedDropdown";
 
-import {
-    getSalesFollowUpByInvoice,
-    getPaymentFollowUpByInvoice,
-    createFollowUpFromInvoice,
-    getSalesFollowUpRecords,
-    getPaymentFollowUpRecords
-} from "@/lib/followUpStore";
+// ============================================================================
+// HELPER FUNCTIONS
+// ============================================================================
+
+// Get currency symbol from name or code
+const getCurrencySymbol = (currencyName: string = "") => {
+    const symbols: { [key: string]: string } = {
+        'INDIAN RUPEE': '₹',
+        'INR': '₹',
+        'US DOLLAR': '$',
+        'USD': '$',
+        'EURO': '€',
+        'EUR': '€',
+        'BRITISH POUND': '£',
+        'GBP': '£',
+        'JAPANESE YEN': '¥',
+        'JPY': '¥',
+        'CHINESE YUAN': '¥',
+        'CNY': '¥',
+        'AUSTRALIAN DOLLAR': 'A$',
+        'AUD': 'A$',
+        'CANADIAN DOLLAR': 'C$',
+        'CAD': 'C$',
+        'SWISS FRANC': 'Fr',
+        'CHF': 'Fr',
+        'SWEDISH KRONA': 'kr',
+        'SEK': 'kr',
+        'NEW ZEALAND DOLLAR': 'NZ$',
+        'NZD': 'NZ$',
+        'UGANDAN SHILLING': 'USh',
+        'UGX': 'USh',
+        'USH': 'USh'
+    };
+
+    const upperName = (currencyName || "").toUpperCase().trim();
+    return symbols[upperName] || upperName || '$';
+};
 
 // ============================================================================
 // REUSABLE COMPONENTS
@@ -89,12 +122,14 @@ import {
 
 
 
-function getDispatchStatusBadge(status: DispatchStatus) {
-    switch (status) {
-        case "Dispatch Pending": return <Badge className="bg-orange-100 text-orange-700 hover:bg-orange-200 border-none px-3 py-1 text-[10px] font-bold">Dispatch Pending</Badge>;
-        case "Dispatched": return <Badge className="bg-green-100 text-green-700 hover:bg-green-200 border-none px-3 py-1 text-[10px] font-bold">Dispatched</Badge>;
-        default: return <Badge variant="outline">{status}</Badge>;
+function getDispatchStatusBadge(status: string) {
+    const s = status.toLowerCase();
+    if (s.includes("pending")) {
+        return <Badge className="bg-orange-100 text-orange-700 hover:bg-orange-200 border-none px-3 py-1 text-[10px] font-bold">{status}</Badge>;
+    } else if (s.includes("dispatched") || s.includes("completed")) {
+        return <Badge className="bg-green-100 text-green-700 hover:bg-green-200 border-none px-3 py-1 text-[10px] font-bold">{status}</Badge>;
     }
+    return <Badge variant="outline">{status}</Badge>;
 }
 
 // ============================================================================
@@ -102,62 +137,96 @@ function getDispatchStatusBadge(status: DispatchStatus) {
 // ============================================================================
 
 export default function Dispatch() {
+    const { canView, canEdit, isMenuVisible } = useHasPermission();
+    const permissionModule = "INVENTORY/DISPATCH";
+
+    if (!isMenuVisible(permissionModule)) {
+        return <Unauthorized />;
+    }
+
     const { toast } = useToast();
 
-    const [salesOrders, setSalesOrders] = useState<SalesOrderData[]>([]);
+    const [records, setRecords] = useState<DispatchRecord[]>([]);
     const [searchTerm, setSearchTerm] = useState("");
-    const [statusFilter, setStatusFilter] = useState<string>("Dispatch Pending");
+    const [debouncedSearchTerm, setDebouncedSearchTerm] = useState("");
+    const [statusFilter, setStatusFilter] = useState<string>("all");
+    const [hasDefaultedPending, setHasDefaultedPending] = useState(false);
     const [dateFilter, setDateFilter] = useState<Date | undefined>(undefined);
     const [currentPage, setCurrentPage] = useState(1);
     const [itemsPerPage, setItemsPerPage] = useState(10);
+    const [totalRecords, setTotalRecords] = useState(0);
+    const [isListLoading, setIsListLoading] = useState(true);
+    const openingDispatchIdRef = useRef<number | null>(null);
 
-    // Track if save is in progress to prevent duplicate submissions
+    // Debounce searchTerm
+    useEffect(() => {
+        const handler = setTimeout(() => {
+            setDebouncedSearchTerm(searchTerm);
+        }, 500);
+        return () => clearTimeout(handler);
+    }, [searchTerm]);
+
+    const { dispatchStatuses, isLoaded: isMasterDataLoaded } = useCommonStore(s => ({
+        dispatchStatuses: s.dispatchStatuses,
+        isLoaded: s.isLoaded
+    }));
+
     const [isSaving, setIsSaving] = useState(false);
-    const followUpCreationRef = useRef<Set<string>>(new Set());
+    const [isDetailLoading, setIsDetailLoading] = useState(false);
+
+    const loadDispatches = useCallback(async () => {
+        try {
+            setIsListLoading(true);
+            const res = await inventoryApi.getDispatchList({
+                page: currentPage,
+                limit: itemsPerPage,
+                search: debouncedSearchTerm?.trim() || undefined,
+                dispatch_date: dateFilter ? format(dateFilter, "yyyy-MM-dd") : undefined,
+                status_id: statusFilter !== "all" ? statusFilter : undefined
+            });
+
+            if (res.isSuccessful) {
+                setRecords(res.data.records || []);
+                setTotalRecords(res.data.pagination.totalRecords || 0);
+            } else {
+                setRecords([]);
+                setTotalRecords(0);
+            }
+        } catch (error) {
+            console.error("Failed to load dispatches:", error);
+            setRecords([]);
+            setTotalRecords(0);
+        } finally {
+            setIsListLoading(false);
+        }
+    }, [currentPage, itemsPerPage, debouncedSearchTerm, dateFilter, statusFilter]);
 
     useEffect(() => {
-        const loadOrders = () => {
-            const allOrders = getSalesOrders();
-            console.log('[DISPATCH] Loading all sales orders:', {
-                totalOrders: allOrders.length,
-                orders: allOrders.map(o => ({
-                    soNumber: o.soNumber,
-                    status: o.status,
-                    itemsCount: o.items?.length || 0,
-                    itemCodes: o.items?.map(i => i.itemCode) || []
-                }))
+        // Wait for master data to be loaded and default status to be set
+        // before making the initial API call. This prevents double calls
+        // and ensures the initial filter is respected.
+        if (isMasterDataLoaded && hasDefaultedPending) {
+            loadDispatches();
+        }
+    }, [loadDispatches, isMasterDataLoaded, hasDefaultedPending]);
+
+    // Handle default status from master data (Dispatch Pending)
+    useEffect(() => {
+        if (!hasDefaultedPending && dispatchStatuses.length > 0) {
+            const pendingStatus = dispatchStatuses.find(s => {
+                const name = (s.name || s.value_name || "").toLowerCase();
+                return name.includes("pending");
             });
 
-            // Filter for Dispatch Pending and Dispatched orders
-            const relevantStatuses: DispatchStatus[] = ["Dispatch Pending", "Dispatched"];
-            const filtered = allOrders.filter(order => relevantStatuses.includes(order.status));
-
-            console.log('[DISPATCH] Filtered orders for dispatch:', {
-                filteredCount: filtered.length,
-                orders: filtered.map(o => ({
-                    soNumber: o.soNumber,
-                    status: o.status,
-                    itemsCount: o.items?.length || 0
-                }))
-            });
-
-            setSalesOrders(filtered);
-        };
-
-        loadOrders();
-
-        const handleStorageChange = (e: any) => {
-            if (e.key === "erp_mock_sales_orders_v2" || e.type === "erp:sales-orders-updated") {
-                loadOrders();
+            if (pendingStatus) {
+                const pendingId = String(pendingStatus.id || pendingStatus.value_id || pendingStatus.status_id);
+                setStatusFilter(pendingId);
+                setHasDefaultedPending(true);
+            } else {
+                setHasDefaultedPending(true);
             }
-        };
-        window.addEventListener("storage", handleStorageChange);
-        window.addEventListener("erp:sales-orders-updated", handleStorageChange);
-        return () => {
-            window.removeEventListener("storage", handleStorageChange);
-            window.removeEventListener("erp:sales-orders-updated", handleStorageChange);
-        };
-    }, []);
+        }
+    }, [dispatchStatuses, hasDefaultedPending]);
 
 
     // Dialog State
@@ -176,34 +245,58 @@ export default function Dispatch() {
     const [remarks, setRemarks] = useState("");
     const [selectedWarehouse, setSelectedWarehouse] = useState("");
     const [scannedSerials, setScannedSerials] = useState<string[]>([]);
+    const [serialError, setSerialError] = useState("");
     const [scanValue, setScanValue] = useState("");
+    const [warehouses, setWarehouses] = useState<{ id: number; name: string }[]>([]);
+    const [dropdownItems, setDropdownItems] = useState<any[]>([]);
 
-    // Filtering
-    const filteredOrders = salesOrders.filter(order => {
-        const matchesSearch = order.soNumber.toLowerCase().includes(searchTerm.toLowerCase()) ||
-            order.customerName.toLowerCase().includes(searchTerm.toLowerCase());
+    const assignedWarehouseKey = getAssignedIds("warehouse").join(",");
+    const orderedWarehouses = useMemo(
+        () => prioritizeByAssigned(warehouses, getAssignedIds("warehouse"), (wh) => wh.id),
+        [warehouses, assignedWarehouseKey]
+    );
 
-        const matchesStatus = statusFilter === "All" || order.status === statusFilter;
+    const mapWarehouseRecords = (rawRecords: any[]) =>
+        rawRecords
+            .map((wh: any) => ({
+                id: Number(wh.id || wh.warehouse_id || wh.value_id),
+                name: wh.warehouse_name || wh.name || wh.value_name || "Unknown Warehouse",
+            }))
+            .filter((wh) => wh.name && Number.isFinite(wh.id));
 
-        let matchesDate = true;
-        if (dateFilter) {
-            const orderDateObj = new Date(order.soDate);
-            orderDateObj.setHours(0, 0, 0, 0);
-            const filterDate = new Date(dateFilter);
-            filterDate.setHours(0, 0, 0, 0);
-            matchesDate = orderDateObj.getTime() === filterDate.getTime();
+    const applyWarehouseSelection = (
+        apiWarehouseId: number | string | null | undefined,
+        warehouseRecords: { id: number; name: string }[],
+        edit: boolean
+    ) => {
+        const ordered = prioritizeByAssigned(
+            warehouseRecords,
+            getAssignedIds("warehouse"),
+            (wh) => wh.id
+        );
+        setWarehouses(ordered);
+
+        if (apiWarehouseId != null && apiWarehouseId !== "" && Number(apiWarehouseId) > 0) {
+            setSelectedWarehouse(String(apiWarehouseId));
+            return;
         }
+        if (edit && ordered.length > 0) {
+            const firstAssigned = getFirstAssignedMatch(
+                getAssignedIds("warehouse"),
+                ordered.map((wh) => wh.id)
+            );
+            if (firstAssigned) {
+                setSelectedWarehouse(firstAssigned);
+            }
+        }
+    };
 
-        return matchesSearch && matchesStatus && matchesDate;
-    });
-
-    const paginatedOrders = filteredOrders.slice((currentPage - 1) * itemsPerPage, currentPage * itemsPerPage);
-    const totalPages = Math.ceil(filteredOrders.length / itemsPerPage);
+    const totalPages = Math.ceil(totalRecords / itemsPerPage);
 
     // Reset to page 1 when filters change
     useEffect(() => {
         setCurrentPage(1);
-    }, [searchTerm, statusFilter, dateFilter]);
+    }, [debouncedSearchTerm, statusFilter, dateFilter]);
 
     // Debug: Log when selectedOrder changes
     useEffect(() => {
@@ -217,41 +310,174 @@ export default function Dispatch() {
     }, [selectedOrder]);
 
     // Handlers
-    const handleOpenOrder = (order: SalesOrderData, edit: boolean) => {
-        console.log('[DISPATCH DEBUG] Opening order:', {
-            soNumber: order.soNumber,
-            itemsCount: order.items?.length || 0,
-            items: order.items,
-            itemCodes: order.items?.map(i => i.itemCode),
-            status: order.status
-        });
+    const handleOpenOrder = async (record: DispatchRecord, edit: boolean) => {
+        if (openingDispatchIdRef.current !== null) return;
+        openingDispatchIdRef.current = record.dispatch_id;
+        try {
+            setIsDetailLoading(true);
+            setIsDialogOpen(true); // Open early to show loading state
 
-        setSelectedOrder(order);
-        setIsEditMode(edit);
-        setTempDispatches([...order.dispatches]);
-        setRemarks(order.remarks || "");
-        setSelectedWarehouse(order.warehouse || "");
-        setDispatchForm({
-            itemCode: "",
-            dispatchQty: "",
-            dispatchDate: new Date(),
-            note: ""
-        });
-        setScannedSerials([]);
-        setScanValue("");
-        setIsSaving(false); // Reset saving state when opening dialog
-        setIsDialogOpen(true);
+            // 1. Fetch warehouses for the dropdown (assigned-first ordering)
+            let warehouseRecords = warehouses;
+            if (warehouseRecords.length === 0) {
+                const whRes = await commonApi.getWarehouses();
+                if (whRes.isSuccessful && whRes.data) {
+                    const rawRecords = Array.isArray(whRes.data)
+                        ? whRes.data
+                        : whRes.data.records || [];
+                    warehouseRecords = mapWarehouseRecords(rawRecords);
+                }
+            }
+
+            // 2. Show the dialog immediately with basic list data to provide visual feedback
+            const initialPartial: SalesOrderData = {
+                id: record.dispatch_id,
+                soNumber: record.so_code || "Loading...",
+                soDate: record.dispatch_date || "",
+                customerName: record.customer_name || "Loading...",
+                contactPerson: "",
+                shippingAddress: "Loading...",
+                billingAddress: "",
+                deliveryDate: record.delivery_date || "",
+                currency: "UGX",
+                remarks: "",
+                terms: [],
+                items: [],
+                dispatches: [],
+                status: "Dispatch Pending"
+            };
+            setSelectedOrder(initialPartial);
+            setIsEditMode(edit);
+            setTempDispatches([]);
+            setRemarks("");
+            setSelectedWarehouse("");
+            setDispatchForm({
+                itemCode: "",
+                dispatchQty: "",
+                dispatchDate: new Date(),
+                note: ""
+            });
+            setScannedSerials([]);
+            setScanValue("");
+            setSerialError("");
+            setIsSaving(false);
+
+            // 2. Fetch full details from API
+            const response = await inventoryApi.getDispatchById(record.dispatch_id);
+            
+            if (response.isSuccessful && response.data) {
+                const data = response.data;
+                
+                // Map items
+                const mappedItems = (data.dispatch_items || []).map(item => ({
+                    id: item.sales_order_item_id,
+                    itemCode: item.item_code || item.item_name || "N/A",
+                    itemName: item.item_name,
+                    uom: item.uom_name || item.uom || "-",
+                    orderedQty: item.ordered_qty,
+                    dispatchedQty: item.dispatched_qty,
+                    rate: item.unit_price,
+                    price: Number(item.unit_price) * item.ordered_qty
+                }));
+
+                // Update selectedOrder with full details from API
+                setSelectedOrder(prev => prev ? ({
+                    ...prev,
+                    soDate: data.dispatch_date || prev.soDate,
+                    deliveryDate: data.delivery_date || prev.deliveryDate,
+                    shippingAddress: data.shipping_address || prev.shippingAddress,
+                    remarks: data.remarks || prev.remarks,
+                    items: mappedItems,
+                    quotationRef: data.dispatch_code, // Hijack this for dispatch code in title
+                    currencySymbol: getCurrencySymbol(data.currency_name || "USD")
+                } as any) : null);
+
+                // Initialize tempDispatches with existing items to show in the UI
+                const existingTemp = (data.dispatch_items || [])
+                    .filter(item => (Number(item.dispatched_qty) || 0) > 0)
+                    .map(item => ({
+                        id: item.dispatch_order_item_id || Math.random(),
+                        itemCode: item.item_code || item.item_name || "N/A",
+                        itemName: item.item_name,
+                        dispatchQty: item.dispatched_qty,
+                        dispatchDate: data.dispatch_date || format(new Date(), "yyyy-MM-dd"),
+                        note: item.note || "",
+                        serialNumbers: item.serial_numbers || []
+                    }));
+                setTempDispatches(existingTemp);
+
+                // Update separate states
+                setRemarks(data.remarks || "");
+                applyWarehouseSelection(data.warehouse_id, warehouseRecords, edit);
+                
+                // 3. Fetch specific sales order items for the dropdown (only in EDIT mode)
+                if (edit && data.sales_order_id) {
+                    try {
+                        const itemsRes = await commonApi.getSalesOrderItems(data.sales_order_id);
+                        if (itemsRes.isSuccessful && itemsRes.data?.records) {
+                            setDropdownItems(itemsRes.data.records);
+                        }
+                    } catch (error) {
+                        console.error('[DISPATCH ERROR] Failed to fetch SO items:', error);
+                    }
+                }
+                
+                // Also update the dispatchForm date to match the record's date
+                if (data.dispatch_date) {
+                    setDispatchForm(prev => ({
+                        ...prev,
+                        dispatchDate: new Date(data.dispatch_date)
+                    }));
+                }
+            } else {
+                toast({
+                    title: "Fetch Failed",
+                    description: response.message || "Could not load dispatch details.",
+                    variant: "destructive",
+                    duration: 15000
+                });
+            }
+        } catch (error) {
+            console.error('[DISPATCH ERROR] Failed to fetch dispatch by ID:', error);
+            toast({
+                title: "Error",
+                description: "An unexpected error occurred while loading details.",
+                variant: "destructive",
+                duration: 15000
+            });
+        } finally {
+            setIsDetailLoading(false);
+            openingDispatchIdRef.current = null;
+        }
+    };
+
+    const handleDialogOpenChange = (open: boolean) => {
+        setIsDialogOpen(open);
+        if (!open) {
+            setIsDetailLoading(false);
+            openingDispatchIdRef.current = null;
+        }
     };
 
     const handleAddDispatch = () => {
         if (!dispatchForm.itemCode || !dispatchForm.dispatchQty) {
-            toast({ title: "Validation Error", description: "Please fill all required fields.", variant: "destructive" });
+            toast({ 
+                title: "Please Check", 
+                description: "Please fill all required fields.", 
+                variant: "destructive",
+                duration: 15000
+            });
             return;
         }
 
         const qty = parseFloat(dispatchForm.dispatchQty);
         if (isNaN(qty) || qty <= 0) {
-            toast({ title: "Validation Error", description: "Invalid quantity.", variant: "destructive" });
+            toast({ 
+                title: "Please Check", 
+                description: "Invalid quantity.", 
+                variant: "destructive",
+                duration: 15000
+            });
             return;
         }
 
@@ -279,7 +505,24 @@ export default function Dispatch() {
             .reduce((sum, d) => sum + d.dispatchQty, 0);
 
         if (currentDispatched + qty > item.orderedQty) {
-            toast({ title: "Validation Error", description: "Total dispatch quantity cannot exceed ordered quantity.", variant: "destructive" });
+            toast({ 
+                title: "Please Check", 
+                description: "Total dispatch quantity cannot exceed ordered quantity.", 
+                variant: "destructive",
+                duration: 15000
+            });
+            return;
+        }
+        
+        // NEW: Validation for serial number count vs dispatch quantity
+        if (scannedSerials.length > qty) {
+            setSerialError("Serial number count cannot exceed dispatch quantity");
+            toast({
+                title: "Validation Error",
+                description: `You have scanned ${scannedSerials.length} serial numbers, but dispatch quantity is only ${qty}.`,
+                variant: "destructive",
+                duration: 5000
+            });
             return;
         }
 
@@ -304,196 +547,77 @@ export default function Dispatch() {
         });
         setScannedSerials([]);
         setScanValue("");
+        setSerialError("");
     };
 
     const handleRemoveDispatch = (id: number) => {
         setTempDispatches(prev => prev.filter(d => d.id !== id));
     };
 
-    const handleSaveDispatch = () => {
+    const handleSaveDispatch = async () => {
         if (!selectedOrder) return;
-
-        // Prevent double-click/double-save
-        if (isSaving) {
-            console.log('[DISPATCH] ⚠️ Save already in progress, ignoring duplicate call');
+        if (!selectedWarehouse) {
+            toast({ 
+                title: "Required", 
+                description: "Please select a warehouse.", 
+                variant: "destructive",
+                duration: 15000
+            });
             return;
         }
 
         setIsSaving(true);
-        console.log('[DISPATCH] Save dispatch started for SO:', selectedOrder.soNumber);
-
-        // CRITICAL: Prevent duplicate submissions
-        if (isSaving) {
-            console.log('[DISPATCH] ⚠️ Save already in progress, ignoring duplicate call');
-            return;
-        }
-
-        setIsSaving(true);
-
         try {
-            // Calculate updated quantities
-            const updatedItems = selectedOrder.items.map(item => {
-                // FIXED: Match dispatches by itemCode OR itemName
-                const itemIdentifier = (item.itemCode && item.itemCode.trim() !== "") ? item.itemCode : item.itemName;
+            // Map items to add
+            const itemsToAdd = tempDispatches.map(entry => {
+                // Find the original item to get sales_order_item_id
+                const originalItem = selectedOrder.items.find(i => {
+                    const itemIdentifier = (i.itemCode && i.itemCode.trim() !== "") ? i.itemCode : i.itemName;
+                    return itemIdentifier === entry.itemCode;
+                });
 
-                const totalDispatched = tempDispatches
-                    .filter(d => {
-                        const dispatchIdentifier = (d.itemCode && d.itemCode.trim() !== "") ? d.itemCode : d.itemName;
-                        return dispatchIdentifier === itemIdentifier;
-                    })
-                    .reduce((sum, d) => sum + d.dispatchQty, 0);
-                return { ...item, dispatchedQty: totalDispatched };
+                return {
+                    sales_order_item_id: originalItem?.id || 0,
+                    dispatch_qty: entry.dispatchQty,
+                    note: entry.note || "",
+                    serial_numbers: entry.serialNumbers || []
+                };
             });
 
-            // Determine new status
-            const allDispatched = updatedItems.every(i => i.dispatchedQty >= i.orderedQty);
-            const newDispatchStatus: DispatchStatus = allDispatched ? "Dispatched" : "Dispatch Pending";
-            // Update SO status to "Dispatched" if all is done
-            const newSOStatus: any = allDispatched ? "Dispatched" : "Dispatch Pending";
-
-            const updatedOrder: any = {
-                ...selectedOrder,
-                items: updatedItems,
-                dispatches: tempDispatches,
-                status: newSOStatus,
-                remarks: remarks, // Sync with SO field name if needed
-                warehouse: selectedWarehouse // Sync with SO field name
+            const payload = {
+                warehouse_id: Number(selectedWarehouse),
+                remarks: remarks || "",
+                items: itemsToAdd
             };
 
-            // Save to centralized mock store
-            updateSalesOrder(updatedOrder.id, updatedOrder);
+            const res = await inventoryApi.updateDispatch(selectedOrder.id, payload);
 
-            // CRITICAL: If dispatch is completed, create follow-up records ONCE
-            if (allDispatched) {
-                console.log('[DISPATCH] ========================================');
-                console.log('[DISPATCH] DISPATCH COMPLETED - FOLLOW-UP CREATION START');
-                console.log('[DISPATCH] SO Number:', selectedOrder.soNumber);
-
-                // Find the invoice for this SO
-                const allInvoices = getInvoices();
-                console.log('[DISPATCH] Looking for invoice with SO Number:', selectedOrder.soNumber);
-                console.log('[DISPATCH] Available invoices:', allInvoices.map(inv => ({
-                    invoiceNo: inv.invoiceNumber,
-                    soNumber: inv.soNumber
-                })));
-
-                const invoice = allInvoices.find(inv => inv.soNumber === selectedOrder.soNumber);
-
-                if (!invoice) {
-                    console.error('[DISPATCH] ❌ No invoice found for SO:', selectedOrder.soNumber);
-                    toast({
-                        title: "Warning",
-                        description: "Dispatch completed but no invoice found. Follow-up records not created.",
-                        variant: "destructive"
-                    });
-                    setIsSaving(false);
-                    setIsDialogOpen(false);
-                    return;
-                }
-
-                console.log('[DISPATCH] ✓ Found invoice:', invoice.invoiceNumber);
-                console.log('[DISPATCH] Invoice Grand Total:', invoice.grandTotal);
-                console.log('[DISPATCH] Invoice Terms:', invoice.terms?.length || 0);
-
-                // STRICT DUPLICATE PREVENTION: Check both in-memory ref and store
-                const invoiceKey = invoice.invoiceNumber;
-
-                // Check if we've already processed this invoice in this session
-                if (followUpCreationRef.current.has(invoiceKey)) {
-                    console.log('[DISPATCH] ⚠️⚠️⚠️ DUPLICATE DETECTED IN REF - Invoice already processed in this session');
-                    toast({
-                        title: "Dispatch Completed",
-                        description: "Dispatch saved. Follow-up records already exist."
-                    });
-                    setIsSaving(false);
-                    setIsDialogOpen(false);
-                    return;
-                }
-
-                // Check for existing records in store
-                console.log('[DISPATCH] CHECKING FOR EXISTING RECORDS IN STORE');
-                const existingSalesFollowUp = getSalesFollowUpByInvoice(invoice.invoiceNumber);
-                const existingPaymentFollowUp = getPaymentFollowUpByInvoice(invoice.invoiceNumber);
-
-                console.log('[DISPATCH] Existing Sales Follow Up for', invoice.invoiceNumber + ':', existingSalesFollowUp ? 'FOUND' : 'NOT FOUND');
-                console.log('[DISPATCH] Existing Payment Follow Up for', invoice.invoiceNumber + ':', existingPaymentFollowUp ? 'FOUND' : 'NOT FOUND');
-
-                // If EITHER record exists, skip creation (defensive check)
-                if (existingSalesFollowUp || existingPaymentFollowUp) {
-                    console.log('[DISPATCH] ⚠️⚠️⚠️ Follow-up records ALREADY EXIST in store - skipping creation');
-                    toast({
-                        title: "Dispatch Completed",
-                        description: "Dispatch saved. Follow-up records already exist."
-                    });
-                    // Mark as processed to prevent future attempts
-                    followUpCreationRef.current.add(invoiceKey);
-                    setIsSaving(false);
-                    setIsDialogOpen(false);
-                    return;
-                }
-
-                // Mark as being processed BEFORE creation to prevent race conditions
-                followUpCreationRef.current.add(invoiceKey);
-
-                // Create both Sales and Payment Follow Up records atomically
-                console.log('[DISPATCH] ✅ CREATING FOLLOW-UP RECORDS (first time for this invoice)');
-                try {
-                    // Calculate delivery date from latest dispatch
-                    const latestDispatchDate = tempDispatches.length > 0
-                        ? tempDispatches.reduce((latest, dispatch) => {
-                            return dispatch.dispatchDate > latest ? dispatch.dispatchDate : latest;
-                        }, tempDispatches[0].dispatchDate)
-                        : format(new Date(), "yyyy-MM-dd");
-
-                    // Create both follow-up records atomically
-                    // This function creates EXACTLY ONE Sales Follow Up and ONE Payment Follow Up
-                    createFollowUpFromInvoice(invoice.invoiceNumber, invoice.soNumber, latestDispatchDate);
-
-                    console.log('[DISPATCH] ✓✓✓ Follow-up records created successfully');
-
-                    // Verify creation
-                    const verifyS = getSalesFollowUpByInvoice(invoice.invoiceNumber);
-                    const verifyP = getPaymentFollowUpByInvoice(invoice.invoiceNumber);
-                    console.log('[DISPATCH] VERIFICATION:', {
-                        salesCreated: !!verifyS,
-                        paymentCreated: !!verifyP
-                    });
-
-                } catch (error) {
-                    console.error('[DISPATCH] ❌❌❌ ERROR creating follow-up records:', error);
-                    // Remove from ref on error so it can be retried
-                    followUpCreationRef.current.delete(invoiceKey);
-                    toast({
-                        title: "Error",
-                        description: "Failed to create follow-up records. Please try again.",
-                        variant: "destructive"
-                    });
-                    setIsSaving(false);
-                    return;
-                }
-
-                console.log('[DISPATCH] FOLLOW-UP CREATION COMPLETE');
-                console.log('[DISPATCH] Sales Follow Up total records:', getSalesFollowUpRecords().length);
-                console.log('[DISPATCH] Payment Follow Up total records:', getPaymentFollowUpRecords().length);
-                console.log('[DISPATCH] ========================================');
-
-                // Show success message
-                toast({
-                    title: "Dispatch Completed",
-                    description: "Dispatch saved and follow-up records created successfully."
+            if (res.isSuccessful) {
+                toast({ 
+                    title: "Success", 
+                    description: res.message || "Dispatch updated successfully.",
+                    variant: "success",
+                    duration: 15000
                 });
+                setIsDialogOpen(false);
+                loadDispatches(); // Refresh the list
             } else {
-                toast({ title: "Success", description: "Dispatch record updated successfully." });
+                toast({ 
+                    title: "Validation Error", 
+                    description: res.message || "Failed to update dispatch.", 
+                    variant: "destructive",
+                    duration: 15000
+                });
             }
-
-            // Refresh local state
-            const allOrders = getSalesOrders();
-            const relevantStatuses: DispatchStatus[] = ["Dispatch Pending", "Dispatched"];
-            setSalesOrders(allOrders.filter(o => relevantStatuses.includes(o.status)));
-
-            setIsDialogOpen(false);
+        } catch (error: any) {
+            console.error('[DISPATCH ERROR] Save failed:', error);
+            toast({ 
+                title: "Error", 
+                description: error.message || "An unexpected error occurred while saving.", 
+                variant: "destructive",
+                duration: 15000
+            });
         } finally {
-            // Always reset saving state
             setIsSaving(false);
         }
     };
@@ -572,7 +696,7 @@ export default function Dispatch() {
                                 <p>Ahmedabad, Gujarat, India</p>
                             </div>
                             <div class="document-title">
-                                <h2>DISPATCH NOTE</h2>
+                                <h2>DISPATCH CODE NOTE</h2>
                                 <p># DSP-${selectedOrder.id}</p>
                             </div>
                         </div>
@@ -585,7 +709,7 @@ export default function Dispatch() {
                             </div>
                             <div class="info-box">
                                 <h3>Order Details</h3>
-                                <div class="info-item"><strong>SO Number</strong><span>${selectedOrder.soNumber}</span></div>
+                                <div class="info-item"><strong>SO Code</strong><span>${selectedOrder.soNumber}</span></div>
                                 <div class="info-item"><strong>Warehouse</strong><span>${selectedOrder.warehouse || "Main Warehouse"}</span></div>
                                 <div class="info-item"><strong>Dispatch Date</strong><span>${formattedDispatchDate}</span></div>
                                 <div class="info-item"><strong>Delivery Date</strong><span>${selectedOrder.deliveryDate ? format(new Date(selectedOrder.deliveryDate), "dd-MM-yyyy") : "N/A"}</span></div>
@@ -660,17 +784,6 @@ export default function Dispatch() {
                     <h1 className="text-3xl font-bold tracking-tight">Dispatch</h1>
                     <p className="text-muted-foreground">Manage and track sales order dispatches to customers.</p>
                 </div>
-                <Button
-                    variant="outline"
-                    size="sm"
-                    className="gap-2"
-                    onClick={() => {
-                        localStorage.removeItem("erp_mock_sales_orders");
-                        window.location.reload();
-                    }}
-                >
-                    <Trash2 className="h-4 w-4" /> Reset Data
-                </Button>
             </div>
 
             <div className="flex flex-col gap-6">
@@ -678,7 +791,7 @@ export default function Dispatch() {
                     search={{
                         value: searchTerm,
                         onChange: setSearchTerm,
-                        placeholder: "Search by SO Number or Customer..."
+                        placeholder: "Search by SO Code or Customer..."
                     }}
                     filters={[
                         {
@@ -686,11 +799,16 @@ export default function Dispatch() {
                             label: 'Status',
                             value: statusFilter,
                             options: [
-                                { label: "All Statuses", value: "All" },
-                                { label: "Dispatch Pending", value: "Dispatch Pending" },
-                                { label: "Dispatched", value: "Dispatched" }
+                                { label: "All Statuses", value: "all" },
+                                ...dispatchStatuses.map(s => ({
+                                    label: s.name,
+                                    value: String(s.id)
+                                }))
                             ],
-                            onChange: setStatusFilter,
+                            onChange: (val) => {
+                                setStatusFilter(val);
+                                setCurrentPage(1);
+                            },
                             searchable: true
                         },
                         {
@@ -709,9 +827,9 @@ export default function Dispatch() {
                             <Table>
                                 <TableHeader>
                                     <TableRow className="bg-muted/50">
-                                        <TableHead className="font-bold uppercase text-[11px] tracking-wider py-4 pl-6">Dispatch No</TableHead>
+                                        <TableHead className="font-bold uppercase text-[11px] tracking-wider py-4 pl-6">Dispatch Code</TableHead>
                                         <TableHead className="font-bold uppercase text-[11px] tracking-wider py-4">Dispatch Date</TableHead>
-                                        <TableHead className="font-bold uppercase text-[11px] tracking-wider py-4">SO NO</TableHead>
+                                        <TableHead className="font-bold uppercase text-[11px] tracking-wider py-4">SO Code</TableHead>
                                         <TableHead className="font-bold uppercase text-[11px] tracking-wider py-4">Customer Name</TableHead>
                                         <TableHead className="font-bold uppercase text-[11px] tracking-wider py-4">Delivery Date</TableHead>
                                         <TableHead className="font-bold uppercase text-[11px] tracking-wider py-4 text-center">Status</TableHead>
@@ -719,35 +837,42 @@ export default function Dispatch() {
                                     </TableRow>
                                 </TableHeader>
                                 <TableBody>
-                                    {paginatedOrders.length === 0 ? (
+                                    {isListLoading ? (
+                                        <TableRow>
+                                            <TableCell colSpan={7} className="h-32 text-center">
+                                                <div className="flex flex-col items-center justify-center gap-3">
+                                                    <Loader2 className="h-8 w-8 animate-spin text-primary" />
+                                                    <p className="text-sm text-muted-foreground">Loading...</p>
+                                                </div>
+                                            </TableCell>
+                                        </TableRow>
+                                    ) : records.length === 0 ? (
                                         <TableRow>
                                             <TableCell colSpan={7} className="h-32 text-center text-muted-foreground">
-                                                No Sales Orders found matching your criteria.
+                                                No Dispatch records found matching your criteria.
                                             </TableCell>
                                         </TableRow>
                                     ) : (
-                                        paginatedOrders.map((order) => (
-                                            <TableRow key={order.id} className="hover:bg-muted/30 transition-colors border-b">
+                                        records.map((record) => (
+                                            <TableRow key={record.dispatch_id} className="hover:bg-muted/30 transition-colors border-b text-[13px]">
                                                 <TableCell className="py-4 pl-6 font-medium text-xs text-primary">
-                                                    {(order.dispatches?.length || 0) > 0 ? `DSP-${order.id}` : "N/A"}
+                                                    {record.dispatch_code || "N/A"}
                                                 </TableCell>
                                                 <TableCell className="py-4 text-sm font-medium text-slate-600">
-                                                    {(order.dispatches?.length || 0) > 0 ? (
-                                                        order.dispatches[order.dispatches.length - 1].dispatchDate.includes('-') ?
-                                                            format(new Date(order.dispatches[order.dispatches.length - 1].dispatchDate), "dd-MM-yyyy") :
-                                                            order.dispatches[order.dispatches.length - 1].dispatchDate
-                                                    ) : "-"}
+                                                    {record.dispatch_date ? format(new Date(record.dispatch_date), "dd-MM-yyyy") : "-"}
                                                 </TableCell>
-                                                <TableCell className="py-4 text-sm font-bold text-primary">{order.soNumber}</TableCell>
-                                                <TableCell className="py-4 text-sm font-medium text-slate-600">{order.customerName}</TableCell>
+                                                <TableCell className="py-4 text-sm font-bold text-primary">{record.so_code}</TableCell>
+                                                <TableCell className="py-4 text-sm font-medium text-slate-600">{record.customer_name}</TableCell>
                                                 <TableCell className="py-4 text-sm font-medium text-slate-600">
-                                                    {order.deliveryDate ? (order.deliveryDate.includes('-') ? format(new Date(order.deliveryDate), "dd-MM-yyyy") : order.deliveryDate) : "-"}
+                                                    {record.delivery_date ? format(new Date(record.delivery_date), "dd-MM-yyyy") : "-"}
                                                 </TableCell>
-                                                <TableCell className="py-4 text-center">{getDispatchStatusBadge(order.status as any)}</TableCell>
                                                 <TableCell className="py-4 text-center">
-                                                    <TableActionButtons
-                                                        onView={() => handleOpenOrder(order, false)}
-                                                        onEdit={order.status !== "Dispatched" ? () => handleOpenOrder(order, true) : undefined}
+                                                    {getDispatchStatusBadge(record.status_name)}
+                                                </TableCell>
+                                                <TableCell className="py-4 text-center">
+                                                     <TableActionButtons
+                                                        onView={canView(permissionModule) ? () => { void handleOpenOrder(record, false); } : undefined}
+                                                        onEdit={(canEdit(permissionModule) && record.status_name !== "Dispatched") ? () => { void handleOpenOrder(record, true); } : undefined}
                                                     />
                                                 </TableCell>
                                             </TableRow>
@@ -757,11 +882,11 @@ export default function Dispatch() {
                             </Table>
                         </div>
 
-                        {filteredOrders.length > 0 && (
+                        {totalRecords > 0 && !isListLoading && (
                             <DataTablePagination
                                 currentPage={currentPage}
                                 totalPages={totalPages}
-                                totalItems={filteredOrders.length}
+                                totalItems={totalRecords}
                                 itemsPerPage={itemsPerPage}
                                 onPageChange={setCurrentPage}
                                 onItemsPerPageChange={setItemsPerPage}
@@ -773,13 +898,17 @@ export default function Dispatch() {
             </div>
 
             {/* Config Dialog */}
-            <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
-                <DialogContent className="sm:max-w-[1000px] max-h-[95vh] flex flex-col p-0">
-                    <DialogHeader className="p-6 pb-2">
+            <Dialog open={isDialogOpen} onOpenChange={handleDialogOpenChange}>
+                <DialogContent 
+                    className="flex! min-h-0 w-[95%] max-h-[82vh] flex-col gap-0 overflow-hidden bg-white p-0 sm:max-w-3xl md:max-w-4xl lg:max-w-6xl xl:max-w-7xl"
+                    onInteractOutside={(e) => e.preventDefault()}
+                    onEscapeKeyDown={(e) => e.preventDefault()}
+                >
+                    <DialogHeader className="border-b bg-white p-4 sm:p-6">
                         <div className="flex items-center gap-3 mb-1">
                             <Settings2 className="h-5 w-5 text-primary" />
                             <DialogTitle className="text-2xl font-bold">
-                                {isEditMode ? "Configure Dispatch:" : "View Dispatch:"} {selectedOrder?.soNumber}
+                                {isEditMode ? "Configure Dispatch:" : "View Dispatch:"} {selectedOrder?.quotationRef || selectedOrder?.soNumber}
                             </DialogTitle>
                         </div>
                         <DialogDescription>
@@ -787,46 +916,63 @@ export default function Dispatch() {
                         </DialogDescription>
                     </DialogHeader>
 
-                    <div className="flex-1 overflow-y-auto px-6 py-4 space-y-6">
+                    <div className="min-h-0 relative flex-1 overflow-x-hidden overflow-y-auto px-4 py-4 sm:px-6 space-y-6">
+                        {isDetailLoading && (
+                            <div className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-3 bg-background/60">
+                                <Loader2 className="h-8 w-8 animate-spin text-primary" />
+                                <p className="text-sm text-muted-foreground">Loading dispatch details...</p>
+                            </div>
+                        )}
                         {/* Form Fields */}
-                        <div className="grid grid-cols-3 gap-6">
+                        <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
                             <div className="space-y-1.5">
                                 <Label className="text-xs font-bold uppercase tracking-wide">Dispatch Date</Label>
-                                <Input value={format(dispatchForm.dispatchDate, "dd-MM-yyyy")} readOnly className="bg-muted" />
+                                <Input 
+                                    value={selectedOrder?.soDate ? (selectedOrder.soDate.includes('-') ? format(new Date(selectedOrder.soDate), "dd-MM-yyyy") : selectedOrder.soDate) : "N/A"} 
+                                    readOnly 
+                                    className="h-9 bg-muted/50" 
+                                />
                             </div>
                             <div className="space-y-1.5">
-                                <Label className="text-xs font-bold uppercase tracking-wide">SO NO</Label>
-                                <Input value={selectedOrder?.soNumber || ""} readOnly className="bg-muted" />
+                                <Label className="text-xs font-bold uppercase tracking-wide">SO Code</Label>
+                                <Input value={selectedOrder?.soNumber || ""} readOnly className="h-9 bg-muted/50" />
                             </div>
                             <div className="space-y-1.5">
                                 <Label className="text-xs font-bold uppercase tracking-wide">Customer Name</Label>
-                                <Input value={selectedOrder?.customerName || ""} readOnly className="bg-muted" />
+                                <Input value={selectedOrder?.customerName || ""} readOnly className="h-9 bg-muted/50" />
                             </div>
                             <div className="space-y-1.5">
                                 <Label className="text-xs font-bold uppercase tracking-wide">Delivery Date</Label>
-                                <Input value={selectedOrder?.deliveryDate ? (selectedOrder.deliveryDate.includes('-') ? format(new Date(selectedOrder.deliveryDate), "dd-MM-yyyy") : selectedOrder.deliveryDate) : "N/A"} readOnly className="bg-muted" />
+                                <Input value={selectedOrder?.deliveryDate ? (selectedOrder.deliveryDate.includes('-') ? format(new Date(selectedOrder.deliveryDate), "dd-MM-yyyy") : selectedOrder.deliveryDate) : "N/A"} readOnly className="h-9 bg-muted/50" />
                             </div>
-                            <div className="space-y-1.5 col-span-2">
+                            <div className="space-y-1.5 md:col-span-2">
                                 <Label className="text-xs font-bold uppercase tracking-wide">Shipping Address</Label>
-                                <Input value={selectedOrder?.shippingAddress || ""} readOnly className="bg-muted" />
+                                <Input value={selectedOrder?.shippingAddress || ""} readOnly className="h-9 bg-muted/50" />
                             </div>
                             <div className="space-y-1.5">
-                                <Label className="text-xs font-bold uppercase tracking-wide">Warehouse</Label>
-                                <Select value={selectedWarehouse} onValueChange={setSelectedWarehouse} disabled={!isEditMode}>
-                                    <SelectTrigger>
-                                        <SelectValue placeholder="Select Warehouse" />
-                                    </SelectTrigger>
-                                    <SelectContent>
-                                        <SelectItem value="Jinja WH">Jinja WH</SelectItem>
-                                        <SelectItem value="Kampala WH">Kampala WH</SelectItem>
-                                    </SelectContent>
-                                </Select>
+                                <SharedSearchableSelect
+                                    label="Warehouse"
+                                    value={selectedWarehouse}
+                                    onChange={setSelectedWarehouse}
+                                    options={orderedWarehouses.map(wh => ({
+                                        label: wh.name,
+                                        value: String(wh.id)
+                                    }))}
+                                    placeholder="Select Warehouse"
+                                    disabled={!isEditMode}
+                                    className="h-9"
+                                />
                             </div>
-                            <div className="space-y-1.5 col-span-3">
+                            <div className="space-y-1.5 md:col-span-2 lg:col-span-3">
                                 <Label className="text-xs font-bold uppercase tracking-wide">Remarks</Label>
                                 <Textarea
                                     value={remarks}
-                                    onChange={(e) => setRemarks(e.target.value)}
+                                    onChange={(e) => {
+                                        if (e.target.value.length <= 200) {
+                                            setRemarks(e.target.value);
+                                        }
+                                    }}
+                                    maxLength={200}
                                     disabled={!isEditMode}
                                     placeholder="Enter any notes or remarks..."
                                 />
@@ -842,7 +988,14 @@ export default function Dispatch() {
 
                             <TabsContent value="dispatch-items" className="space-y-6 outline-none">
                                 <div className="rounded-xl border shadow-sm overflow-hidden bg-white">
-                                    <Table>
+                                    <Table className="table-fixed">
+                                        <colgroup>
+                                            <col className="w-[52%]" />
+                                            <col className="w-[10%]" />
+                                            <col className="w-[16%]" />
+                                            <col className="w-[11%]" />
+                                            <col className="w-[11%]" />
+                                        </colgroup>
                                         <TableHeader>
                                             <TableRow className="bg-muted/50">
                                                 <TableHead className="font-bold text-[10px] py-3 uppercase tracking-wider pl-4">Item</TableHead>
@@ -853,7 +1006,16 @@ export default function Dispatch() {
                                             </TableRow>
                                         </TableHeader>
                                         <TableBody>
-                                            {selectedOrder?.items.map((item) => {
+                                            {isDetailLoading ? (
+                                                <TableRow>
+                                                    <TableCell colSpan={5} className="h-40 text-center">
+                                                        <div className="flex flex-col items-center gap-2 text-muted-foreground">
+                                                            <div className="animate-spin h-6 w-6 border-2 border-primary border-t-transparent rounded-full" />
+                                                            <span className="text-xs font-medium">Loading dispatch details...</span>
+                                                        </div>
+                                                    </TableCell>
+                                                </TableRow>
+                                            ) : selectedOrder?.items.map((item) => {
                                                 // FIXED: Match dispatches by itemCode OR itemName
                                                 const itemIdentifier = (item.itemCode && item.itemCode.trim() !== "") ? item.itemCode : item.itemName;
 
@@ -865,17 +1027,23 @@ export default function Dispatch() {
                                                     .reduce((sum, d) => sum + d.dispatchQty, 0);
 
                                                 return (
-                                                    <TableRow key={item.id} className="hover:bg-muted/20 transition-colors">
-                                                        <TableCell className="py-4 pl-4">
-                                                            <div className="flex flex-col">
-                                                                <span className="font-bold text-xs text-primary">{item.itemCode}</span>
-                                                                <span className="text-[10px] text-slate-500 font-medium">{item.itemName}</span>
+                                                    <TableRow key={item.id} className="hover:bg-muted/20 transition-colors align-top">
+                                                        <TableCell className="py-3 pl-4">
+                                                            <div className="space-y-0.5">
+                                                                <div className="font-medium text-sm text-slate-900 whitespace-normal wrap-break-word">
+                                                                    {item.itemName}
+                                                                </div>
+                                                                <div className="text-[10px] text-muted-foreground/70 font-mono whitespace-normal wrap-break-word">
+                                                                    {item.itemCode}
+                                                                </div>
                                                             </div>
                                                         </TableCell>
-                                                        <TableCell className="text-[9px] text-muted-foreground uppercase font-bold">{item.uom}</TableCell>
-                                                        <TableCell className="text-slate-900 font-medium">${item.rate || 0}/{item.uom}</TableCell>
-                                                        <TableCell className="text-right text-primary font-bold">{item.orderedQty}</TableCell>
-                                                        <TableCell className="text-right text-blue-600 font-bold pr-4">
+                                                        <TableCell className="py-3 text-[10px] text-muted-foreground uppercase font-bold align-top">{item.uom}</TableCell>
+                                                        <TableCell className="py-3 text-slate-900 font-medium tabular-nums align-top">
+                                                            {(selectedOrder as any)?.currencySymbol || "$"}{item.rate || 0}/{item.uom}
+                                                        </TableCell>
+                                                        <TableCell className="py-3 text-right text-primary font-bold tabular-nums align-top">{item.orderedQty}</TableCell>
+                                                        <TableCell className="py-3 text-right text-blue-600 font-bold pr-4 tabular-nums align-top">
                                                             {totalDispatched}
                                                         </TableCell>
                                                     </TableRow>
@@ -889,83 +1057,44 @@ export default function Dispatch() {
                             <TabsContent value="make-dispatch" className="mt-0 outline-none">
                                 <div className="space-y-8">
                                     {isEditMode && (
-                                        <div className="grid grid-cols-12 gap-6 bg-slate-50 p-6 rounded-2xl border border-slate-100 shadow-inner">
-                                            <div className="col-span-4">
-                                                <Label className="text-xs font-bold text-slate-600 mb-2 block uppercase tracking-wide">Item Selection <span className="text-red-500">*</span></Label>
-                                                <Select value={dispatchForm.itemCode} onValueChange={(v) => setDispatchForm(prev => ({ ...prev, itemCode: v }))}>
-                                                    <SelectTrigger className="h-10 bg-white border-slate-200">
-                                                        <SelectValue placeholder="Select Item" />
-                                                    </SelectTrigger>
-                                                    <SelectContent>
-                                                        {(() => {
-                                                            console.log('[DISPATCH DEBUG] SelectContent rendering - selectedOrder:', {
-                                                                exists: !!selectedOrder,
-                                                                soNumber: selectedOrder?.soNumber,
-                                                                itemsExists: !!selectedOrder?.items,
-                                                                itemsIsArray: Array.isArray(selectedOrder?.items),
-                                                                itemsLength: selectedOrder?.items?.length || 0,
-                                                                fullItems: selectedOrder?.items
-                                                            });
-
-                                                            const allItems = selectedOrder?.items || [];
-
-                                                            // Log each item's structure
-                                                            allItems.forEach((item, idx) => {
-                                                                console.log(`[DISPATCH DEBUG] Item ${idx}:`, {
-                                                                    id: item.id,
-                                                                    itemCode: item.itemCode,
-                                                                    itemCodeType: typeof item.itemCode,
-                                                                    itemCodeEmpty: !item.itemCode,
-                                                                    itemCodeTrimmed: item.itemCode?.trim(),
-                                                                    itemName: item.itemName,
-                                                                    fullItem: item
-                                                                });
-                                                            });
-
-                                                            // FIXED: Accept items with itemName even if itemCode is missing
-                                                            // Use itemName as fallback identifier if itemCode is empty
-                                                            const filteredItems = allItems.filter(item => {
-                                                                const hasItemCode = item.itemCode && item.itemCode.trim() !== "";
-                                                                const hasItemName = item.itemName && item.itemName.trim() !== "";
-                                                                return hasItemCode || hasItemName;
-                                                            });
-
-                                                            console.log('[DISPATCH DEBUG] Item dropdown rendering:', {
-                                                                totalItems: allItems.length,
-                                                                filteredItems: filteredItems.length,
-                                                                allItemCodes: allItems.map(i => i.itemCode),
-                                                                allItemNames: allItems.map(i => i.itemName),
-                                                                filteredItemCodes: filteredItems.map(i => i.itemCode),
-                                                                items: filteredItems.map(i => ({ code: i.itemCode, name: i.itemName }))
-                                                            });
-
-                                                            if (filteredItems.length === 0) {
-                                                                return <SelectItem value="no-items" disabled>No items available</SelectItem>;
-                                                            }
-
-                                                            return filteredItems.map(item => {
-                                                                // Use itemCode if available, otherwise use itemName as the value
-                                                                const itemValue = (item.itemCode && item.itemCode.trim() !== "")
-                                                                    ? item.itemCode
-                                                                    : item.itemName;
-
-                                                                // Display format: show itemCode if available, otherwise just itemName
-                                                                const displayText = (item.itemCode && item.itemCode.trim() !== "")
-                                                                    ? `${item.itemCode} - ${item.itemName}`
-                                                                    : item.itemName;
-
-                                                                return (
-                                                                    <SelectItem key={item.id} value={itemValue}>
-                                                                        {displayText}
-                                                                    </SelectItem>
-                                                                );
-                                                            });
-                                                        })()}
-                                                    </SelectContent>
-                                                </Select>
+                                        <div className="grid grid-cols-1 gap-4 bg-slate-50 p-4 sm:p-6 rounded-2xl border border-slate-100 shadow-inner md:grid-cols-12 md:gap-6">
+                                            <div className="md:col-span-6">
+                                                <SharedSearchableSelect
+                                                    label="Item Selection"
+                                                    value={dispatchForm.itemCode}
+                                                    onChange={(v) => setDispatchForm(prev => ({ ...prev, itemCode: v }))}
+                                                    options={dropdownItems.map(item => {
+                                                        const itemValue = item.item_code || item.item_name;
+                                                        
+                                                        // Calculate total quantity already added in tempDispatches (unsaved entries)
+                                                        const tempDispatchedQty = tempDispatches
+                                                            .filter(d => d.itemCode === itemValue)
+                                                            .reduce((sum, d) => sum + Number(d.dispatchQty || 0), 0);
+                                                        
+                                                        // Frontend pending = Original remaining - frontend additions
+                                                        const currentPending = Math.max(0, Number(item.remaining_qty || 0) - tempDispatchedQty);
+                                                        
+                                                        const itemName = String(item.item_name || "").trim() || String(itemValue || "").trim();
+                                                        const itemCode = String(item.item_code || "").trim();
+                                                        const secondary = `${itemCode ? `${itemCode} • ` : ""}Pending: ${currentPending}`;
+                                                        
+                                                        return { 
+                                                            label: `${itemCode ? `${itemCode} - ` : ""}${itemName} (Pending: ${currentPending})`,
+                                                            primaryText: itemName,
+                                                            secondaryText: secondary,
+                                                            value: itemValue,
+                                                            disabled: currentPending <= 0 
+                                                        };
+                                                    })}
+                                                    placeholder="Select Item"
+                                                    className="h-auto min-h-[52px] items-start! py-0.5 bg-white border-slate-200"
+                                                    listClassName="max-h-[min(320px,calc(var(--radix-popover-content-available-height)-2.5rem))]"
+                                                    selectedPrimaryLineClamp={2}
+                                                    compactStackedSelected
+                                                />
                                             </div>
 
-                                            <div className="col-span-3">
+                                            <div className="md:col-span-2">
                                                 <Label className="text-xs font-bold text-slate-600 mb-2 block uppercase tracking-wide">Dispatch Qty <span className="text-red-500">*</span></Label>
                                                 <Input
                                                     type="text"
@@ -982,12 +1111,17 @@ export default function Dispatch() {
                                                 />
                                             </div>
 
-                                            <div className="col-span-4">
+                                            <div className="md:col-span-4">
                                                 <Label className="text-xs font-bold text-slate-600 mb-2 block uppercase tracking-wide">Note</Label>
                                                 <Input
                                                     className="h-10 bg-white border-slate-200"
                                                     value={dispatchForm.note}
-                                                    onChange={(e) => setDispatchForm(prev => ({ ...prev, note: e.target.value }))}
+                                                    onChange={(e) => {
+                                                        if (e.target.value.length <= 200) {
+                                                            setDispatchForm(prev => ({ ...prev, note: e.target.value }));
+                                                        }
+                                                    }}
+                                                    maxLength={200}
                                                     placeholder="Reason for dispatch..."
                                                 />
                                             </div>
@@ -995,7 +1129,7 @@ export default function Dispatch() {
                                             {/* QR Scanning Section */}
                                             <div className="col-span-12 grid grid-cols-12 gap-6 pt-2 border-t border-slate-200 mt-2">
                                                 <div className="col-span-5">
-                                                    <Label className="text-xs font-bold text-slate-600 mb-2 block uppercase tracking-wide flex items-center gap-2">
+                                                    <Label className="text-xs font-bold text-slate-600 mb-2 uppercase tracking-wide flex items-center gap-2">
                                                         Scan QR Code <span className="text-[10px] lowercase font-normal text-muted-foreground">(Optional)</span>
                                                     </Label>
                                                     <div className="relative">
@@ -1003,19 +1137,52 @@ export default function Dispatch() {
                                                             placeholder="Scan or type serial number..."
                                                             className="h-10 pr-20 bg-white border-slate-300 focus:border-primary shadow-sm"
                                                             value={scanValue}
-                                                            onChange={(e) => setScanValue(e.target.value)}
+                                                            onChange={(e) => {
+                                                                setScanValue(e.target.value);
+                                                                if (serialError) setSerialError("");
+                                                            }}
                                                             onKeyDown={(e) => {
                                                                 if (e.key === "Enter" && scanValue.trim()) {
                                                                     e.preventDefault();
-                                                                    if (scannedSerials.includes(scanValue.trim())) {
-                                                                        toast({ title: "Duplicate Serial", description: "This serial number has already been scanned.", variant: "destructive" });
-                                                                    } else {
-                                                                        setScannedSerials(prev => [...prev, scanValue.trim()]);
-                                                                        setScanValue("");
+                                                                    
+                                                                    const maxAllowed = Number(dispatchForm.dispatchQty) || 0;
+                                                                    
+                                                                    if (maxAllowed <= 0) {
+                                                                        setSerialError("Please enter dispatch quantity first");
+                                                                        return;
                                                                     }
+                                                                    if (scannedSerials.includes(scanValue.trim())) {
+                                                                        toast({ 
+                                                                            title: "Duplicate Serial", 
+                                                                            description: "This serial number has already been scanned.", 
+                                                                            variant: "destructive",
+                                                                            duration: 3000
+                                                                        });
+                                                                        return;
+                                                                    }
+
+                                                                    if (scannedSerials.length >= maxAllowed) {
+                                                                        setSerialError("Serial number count cannot exceed dispatch quantity");
+                                                                        toast({
+                                                                            title: "Limit Reached",
+                                                                            description: `You have already scanned ${maxAllowed} serial numbers for this item.`,
+                                                                            variant: "destructive",
+                                                                            duration: 3000
+                                                                        });
+                                                                        return;
+                                                                    }
+
+                                                                    setScannedSerials(prev => [...prev, scanValue.trim()]);
+                                                                    setScanValue("");
+                                                                    setSerialError("");
                                                                 }
                                                             }}
                                                         />
+                                                        {serialError && (
+                                                            <p className="text-[10px] text-red-500 mt-1 font-medium animate-in fade-in slide-in-from-top-1">
+                                                                {serialError}
+                                                            </p>
+                                                        )}
                                                         <div className="absolute right-2 top-1.5 h-7 px-2 flex items-center justify-center bg-slate-100 rounded text-[10px] font-bold text-slate-500 border border-slate-200">
                                                             ENTER ↵
                                                         </div>
@@ -1043,7 +1210,10 @@ export default function Dispatch() {
                                                                 variant="ghost"
                                                                 size="sm"
                                                                 className="h-6 px-2 text-[10px] text-red-500 hover:text-red-700 hover:bg-red-50"
-                                                                onClick={() => setScannedSerials([])}
+                                                                onClick={() => {
+                                                                    setScannedSerials([]);
+                                                                    setSerialError("");
+                                                                }}
                                                             >
                                                                 Clear All
                                                             </Button>
@@ -1065,7 +1235,13 @@ export default function Dispatch() {
                                     )}
 
                                     <div className="rounded-xl border shadow-sm overflow-hidden bg-white">
-                                        <Table>
+                                        <Table className="table-fixed">
+                                            <colgroup>
+                                                <col className="w-[44%]" />
+                                                <col className="w-[14%]" />
+                                                <col className="w-[32%]" />
+                                                {isEditMode && <col className="w-[10%]" />}
+                                            </colgroup>
                                             <TableHeader>
                                                 <TableRow className="bg-muted/50">
                                                     <TableHead className="font-bold text-[10px] py-3 uppercase tracking-wider pl-4">Item</TableHead>
@@ -1083,11 +1259,18 @@ export default function Dispatch() {
                                                     </TableRow>
                                                 ) : (
                                                     tempDispatches.map((entry) => (
-                                                        <TableRow key={entry.id} className="hover:bg-muted/10 transition-colors border-slate-50">
+                                                        <TableRow key={entry.id} className="hover:bg-muted/10 transition-colors border-slate-50 align-top">
                                                             <TableCell className="py-3 pl-4">
-                                                                <span className="font-bold text-xs text-primary">{entry.itemCode}</span>
+                                                                <div className="space-y-0.5">
+                                                                    <div className="font-medium text-sm text-slate-900 whitespace-normal wrap-break-word">
+                                                                        {entry.itemName}
+                                                                    </div>
+                                                                    <div className="text-[10px] text-muted-foreground/70 font-mono whitespace-normal wrap-break-word">
+                                                                        {entry.itemCode}
+                                                                    </div>
+                                                                </div>
                                                             </TableCell>
-                                                            <TableCell className="py-3 text-center">
+                                                            <TableCell className="py-3 text-center align-top">
                                                                 <div className="flex flex-col items-center gap-1">
                                                                     <span className="text-blue-600 font-bold">{entry.dispatchQty}</span>
                                                                     {entry.serialNumbers && entry.serialNumbers.length > 0 && (
@@ -1097,9 +1280,9 @@ export default function Dispatch() {
                                                                     )}
                                                                 </div>
                                                             </TableCell>
-                                                            <TableCell className="py-3 text-sm text-slate-500">{entry.note || "-"}</TableCell>
+                                                            <TableCell className="py-3 text-sm text-slate-500 whitespace-normal wrap-break-word align-top">{entry.note || "-"}</TableCell>
                                                             {isEditMode && (
-                                                                <TableCell className="py-3 text-center">
+                                                                <TableCell className="py-3 text-center align-top">
                                                                     <Button
                                                                         variant="ghost"
                                                                         size="icon"
@@ -1121,9 +1304,9 @@ export default function Dispatch() {
                         </Tabs>
                     </div>
 
-                    <DialogFooter className="p-6 border-t bg-slate-50/50 rounded-b-xl">
+                    <DialogFooter className="border-t bg-white p-4 sm:p-6 mt-auto gap-2 sm:flex-row sm:items-center sm:justify-end rounded-b-xl">
                         {!isEditMode && selectedOrder?.status === "Dispatched" && (
-                            <Button onClick={handlePrintDispatch} className="mr-auto px-6 h-11 font-bold bg-blue-600 hover:bg-blue-700 text-white shadow-lg shadow-blue-200">
+                            <Button onClick={handlePrintDispatch} className="sm:mr-auto px-6 h-11 font-bold bg-blue-600 hover:bg-blue-700 text-white shadow-lg shadow-blue-200">
                                 <Download className="mr-2 h-4 w-4" /> Download Dispatch Note
                             </Button>
                         )}
@@ -1139,10 +1322,11 @@ export default function Dispatch() {
                             <Button
                                 onClick={handleSaveDispatch}
                                 className="px-8 h-11 font-bold shadow-lg shadow-primary/20"
-                                disabled={isSaving}
+                                loading={isSaving}
+                                disabled={isSaving || isDetailLoading}
                             >
                                 <Check className="mr-2 h-4 w-4" />
-                                {isSaving ? "Saving..." : "Save Dispatch"}
+                                Save Dispatch
                             </Button>
                         )}
                     </DialogFooter>

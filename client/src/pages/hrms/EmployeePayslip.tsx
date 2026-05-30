@@ -30,6 +30,8 @@ import { AppListToolbar } from "@/components/shared/AppListToolbar";
 import { SearchableSelect } from "@/components/shared/SearchableSelect";
 import { DataTablePagination } from "@/components/shared/DataTablePagination";
 import { TableActionButtons } from "@/components/shared/TableActionButtons";
+import { CURRENCY_SYMBOL } from "@/config/appConfig";
+import { useCommonStore } from "@/store/commonStore";
 import { mockPayPeriods, MOCK_PAYROLL_RUNS, MOCK_EMPLOYEES } from "@/lib/payrollSharedData";
 
 // ============================================================================
@@ -70,6 +72,7 @@ interface Payslip {
 
 export default function EmployeePayslip() {
   const { toast } = useToast();
+  const companyDetails = useCommonStore((state) => state.companyDetails);
 
   // Employee ID for currently logged in (simulated) user
   const currentEmployeeId = "emp-001";
@@ -164,11 +167,11 @@ export default function EmployeePayslip() {
 <html>
 <head>
   <meta charset="UTF-8">
-  <title>Payslip - ${payslip?.employeeCode ?? 'N/A'} - ${payslip?.periodName ?? 'N/A'}</title>
+  <title>&#8203;</title>
   <style>
-    @page { margin: 20mm; }
+    @page { margin: 0; }
     @media print { 
-      body { margin: 0; }
+      body { margin: 0; padding: 15mm; }
       .no-print { display: none; }
     }
     body { font-family: Arial, sans-serif; padding: 20px; max-width: 800px; margin: 0 auto; }
@@ -198,7 +201,8 @@ export default function EmployeePayslip() {
 </head>
 <body>
   <div class="header">
-    <div class="company-name">Tassos Consultancy Services</div>
+    <div class="company-name">${companyDetails?.company_name || "Tassos Consultancy Services"}</div>
+    ${companyDetails?.company_address ? `<div style="font-size: 12px; color: #666; margin-top: 5px;">${companyDetails.company_address}</div>` : ''}
     <div class="payslip-title">Payslip for ${payslip.periodName}</div>
   </div>
 
@@ -240,7 +244,7 @@ export default function EmployeePayslip() {
     </div>
     <div class="summary-card">
       <div class="summary-label">Gross Pay</div>
-      <div class="summary-value">USh${payslip.grossPay.toLocaleString()}</div>
+      <div class="summary-value">${CURRENCY_SYMBOL}${payslip.grossPay.toLocaleString()}</div>
     </div>
   </div>
 
@@ -250,7 +254,7 @@ export default function EmployeePayslip() {
         <thead>
           <tr class="earnings-header">
             <th>Earnings</th>
-            <th style="text-align: right;">Amount (USh)</th>
+            <th style="text-align: right;">Amount (${CURRENCY_SYMBOL})</th>
           </tr>
         </thead>
         <tbody>
@@ -262,7 +266,7 @@ export default function EmployeePayslip() {
           `).join('')}
           <tr class="total-row">
             <td>Total Earnings</td>
-            <td style="text-align: right;">USh${(payslip?.grossPay ?? 0).toLocaleString()}</td>
+            <td style="text-align: right;">${CURRENCY_SYMBOL}${(payslip?.grossPay ?? 0).toLocaleString()}</td>
           </tr>
         </tbody>
       </table>
@@ -272,7 +276,7 @@ export default function EmployeePayslip() {
         <thead>
           <tr class="deductions-header">
             <th>Deductions</th>
-            <th style="text-align: right;">Amount (USh)</th>
+            <th style="text-align: right;">Amount (${CURRENCY_SYMBOL})</th>
           </tr>
         </thead>
         <tbody>
@@ -284,7 +288,7 @@ export default function EmployeePayslip() {
           `).join('')}
           <tr class="total-row">
             <td>Total Deductions</td>
-            <td style="text-align: right;">USh${(payslip?.totalDeductions ?? 0).toLocaleString()}</td>
+            <td style="text-align: right;">${CURRENCY_SYMBOL}${(payslip?.totalDeductions ?? 0).toLocaleString()}</td>
           </tr>
         </tbody>
       </table>
@@ -293,7 +297,7 @@ export default function EmployeePayslip() {
 
   <div class="net-pay-section">
     <div class="net-pay-label">Net Pay</div>
-    <div class="net-pay-value">USh${payslip.netPay.toLocaleString()}</div>
+    <div class="net-pay-value">${CURRENCY_SYMBOL}${payslip.netPay.toLocaleString()}</div>
   </div>
 
   <div class="footer">
@@ -515,7 +519,7 @@ function PayslipDetailDialog({
               <CardContent className="pt-6">
                 <div className="text-sm text-gray-600">Net Pay</div>
                 <div className="text-2xl font-bold text-green-600">
-                  USh{payslip?.netPay.toLocaleString()}
+                  {CURRENCY_SYMBOL}{payslip?.netPay.toLocaleString()}
                 </div>
               </CardContent>
             </Card>
@@ -537,14 +541,14 @@ function PayslipDetailDialog({
                       <TableRow key={idx}>
                         <TableCell>{earning.name}</TableCell>
                         <TableCell className="text-right">
-                          USh{earning.amount.toLocaleString()}
+                          {CURRENCY_SYMBOL}{earning.amount.toLocaleString()}
                         </TableCell>
                       </TableRow>
                     ))}
                     <TableRow className="bg-green-50/50 font-semibold">
                       <TableCell>Total Earnings</TableCell>
                       <TableCell className="text-right">
-                        USh{payslip?.grossPay.toLocaleString()}
+                        {CURRENCY_SYMBOL}{payslip?.grossPay.toLocaleString()}
                       </TableCell>
                     </TableRow>
                   </TableBody>
@@ -567,14 +571,14 @@ function PayslipDetailDialog({
                       <TableRow key={idx}>
                         <TableCell>{deduction.name}</TableCell>
                         <TableCell className="text-right">
-                          USh{deduction.amount.toLocaleString()}
+                          {CURRENCY_SYMBOL}{deduction.amount.toLocaleString()}
                         </TableCell>
                       </TableRow>
                     ))}
                     <TableRow className="bg-red-50/50 font-semibold">
                       <TableCell>Total Deductions</TableCell>
                       <TableCell className="text-right">
-                        USh{payslip?.totalDeductions.toLocaleString()}
+                        {CURRENCY_SYMBOL}{payslip?.totalDeductions.toLocaleString()}
                       </TableCell>
                     </TableRow>
                   </TableBody>
@@ -587,7 +591,7 @@ function PayslipDetailDialog({
             <div className="flex justify-between items-center">
               <span className="text-lg font-semibold">Net Salary</span>
               <span className="text-2xl font-bold text-blue-600">
-                USh{payslip?.netPay.toLocaleString()}
+                {CURRENCY_SYMBOL}{payslip?.netPay.toLocaleString()}
               </span>
             </div>
           </div>

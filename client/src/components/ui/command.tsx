@@ -55,6 +55,11 @@ const Command = React.forwardRef<
       "flex h-full w-full flex-col overflow-hidden rounded-md bg-popover text-popover-foreground",
       className
     )}
+    // Enforce consecutive character matching (substring)
+    filter={(value, search) => {
+      if (value.toLowerCase().includes(search.toLowerCase())) return 1;
+      return 0;
+    }}
     {...props}
   />
 ))

@@ -1,8 +1,9 @@
-import React, { useState, useMemo } from "react";
+import React, { useState, useMemo, useEffect } from "react";
+import { useDebounce } from "@/hooks/useDebounce";
 import { format } from "date-fns";
 import {
     Search, Eye, CheckCircle, ChevronLeft, ChevronRight, ChevronsUpDown, Check,
-    Calendar as CalendarIcon, Download
+    Calendar as CalendarIcon, Download, Loader2
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -57,6 +58,11 @@ import {
     mockWorkerWages,
     updateWorkerWage
 } from "@/lib/workerPayrollSharedData";
+import { workerPaymentsApi, WorkerPaymentRecord } from "@/lib/api";
+import { generateWorkerPaymentPDFHTML } from "@/lib/workerPaymentPDFTemplate";
+import { commonApi } from "@/lib/api";
+import { useCommonStore } from "@/store/commonStore";
+import { DataTablePagination } from "@/components/shared/DataTablePagination";
 
 
 
@@ -66,53 +72,219 @@ export default function WorkerPaymentsPage() {
     const { toast } = useToast();
 
     // State
-    const [wages, setWages] = useState<WorkerWage[]>(mockWorkerWages);
+    const [wages, setWages] = useState<WorkerWage[]>([]);
     const [isFormOpen, setIsFormOpen] = useState(false);
     const [selectedWage, setSelectedWage] = useState<WorkerWage | null>(null);
     const [searchQuery, setSearchQuery] = useState("");
-    const [statusFilter, setStatusFilter] = useState<string>("Submitted Wages");
+    const debouncedSearchQuery = useDebounce(searchQuery, 500);
+    const [statusFilter, setStatusFilter] = useState<string>("Submitted");
     const [departmentFilter, setDepartmentFilter] = useState<string>("All");
     const [dateFilter, setDateFilter] = useState<Date | undefined>(undefined);
     const [currentPage, setCurrentPage] = useState(1);
-    const itemsPerPage = 10;
+    const [totalRecords, setTotalRecords] = useState(0);
+    const [isListLoading, setIsListLoading] = useState(true);
+    const [isViewDetailLoading, setIsViewDetailLoading] = useState(false);
+    const [isMarkingPaid, setIsMarkingPaid] = useState(false);
+    const [openingWageId, setOpeningWageId] = useState<string | null>(null);
+    const [itemsPerPage, setItemsPerPage] = useState(10);
 
-    // Filtered Data
-    const filteredWages = wages.filter(w => {
-        const matchesSearch =
-            w.wagePeriod.toLowerCase().includes(searchQuery.toLowerCase()) ||
-            w.department.toLowerCase().includes(searchQuery.toLowerCase());
+    const { departments, workerPayrollStatuses } = useCommonStore(state => state);
+    const departmentOptions = useMemo(() => {
+        return ["All", ...(departments || []).map(d => d.name || d.value_name)];
+    }, [departments]);
 
-        // Accounting only sees Submitted and Paid
-        const allowedStatuses = ["Submitted Wages", "Paid Wages"];
-        if (!allowedStatuses.includes(w.status)) return false;
+    const statusOptions = useMemo(() => {
+        const statuses = (workerPayrollStatuses || [])
+            .map(s => s.name)
+            .filter(name => name.toLowerCase() !== "draft");
+        
+        if (statuses.length > 0) return ["All", ...statuses];
+        return ["All", "Submitted", "Paid"];
+    }, [workerPayrollStatuses]);
 
-        const matchesStatus = statusFilter === "All" || w.status === statusFilter;
-        const matchesDepartment = departmentFilter === "All" || w.department === departmentFilter;
-        const matchesDate = !dateFilter || format(new Date(w.registerDate), "yyyy-MM-dd") === format(dateFilter, "yyyy-MM-dd");
+    // Fetch Data
+    const fetchPayments = async () => {
+        setIsListLoading(true);
+        try {
+            const deptId = (departments || []).find(d => (d.name || d.value_name) === departmentFilter)?.id;
+            
+            // Resolve status ID from master data (workerPayrollStatuses)
+            let statusId: number | undefined = undefined;
+            if (statusFilter !== "All") {
+                const match = (workerPayrollStatuses || []).find(s => s.name === statusFilter);
+                statusId = match?.id;
+                
+                // Fallback for hardcoded cases if master data isn't fully synced yet
+                if (!statusId) {
+                    if (statusFilter === "Submitted") statusId = 300;
+                    else if (statusFilter === "Paid") statusId = 301;
+                }
+            }
 
-        return matchesSearch && matchesStatus && matchesDepartment && matchesDate;
-    });
+            const res = await workerPaymentsApi.getPayments({
+                page: currentPage,
+                limit: itemsPerPage,
+                search: debouncedSearchQuery,
+                department_id: deptId,
+                status_id: statusId,
+                entry_date: dateFilter ? format(dateFilter, "yyyy-MM-dd") : undefined
+            });
 
-    const paginatedWages = filteredWages.slice((currentPage - 1) * itemsPerPage, currentPage * itemsPerPage);
-    const totalPages = Math.ceil(filteredWages.length / itemsPerPage);
-
-    // Handlers
-    const handleView = (wage: WorkerWage) => {
-        setSelectedWage(wage);
-        setIsFormOpen(true);
+            if (res.isSuccessful && res.data) {
+                const mappedWages: WorkerWage[] = res.data.records.map((record: WorkerPaymentRecord) => ({
+                    id: String(record.worker_payroll_id),
+                    wagePeriod: record.wage_period,
+                    registerDate: record.entry_date,
+                    location: record.location_name,
+                    department: record.department_name,
+                    workcenter: "",
+                    operation: "",
+                    workerCategory: record.worker_category_name,
+                    noOfWorkers: record.no_of_workers,
+                    netWageAmount: record.net_wage_amount,
+                    totalWageAmount: record.total_wage_amount,
+                    status: record.status_name.toLowerCase().includes("paid") ? "Paid Wages" : "Submitted Wages"
+                }));
+                setWages(mappedWages);
+                setTotalRecords(res.data.pagination.totalRecords);
+            }
+        } catch (error) {
+            console.error("Failed to fetch worker payments:", error);
+            toast({
+                title: "Error",
+                description: "Failed to fetch worker payments data.",
+                variant: "destructive"
+            });
+        } finally {
+            setIsListLoading(false);
+        }
     };
 
-    const handleMarkAsPaid = () => {
-        if (!selectedWage) return;
-        const updatedWages = updateWorkerWage(selectedWage.id, { status: "Paid Wages" });
-        setWages(updatedWages);
-        toast({ title: "Success", description: "Wage marked as Paid." });
-        setIsFormOpen(false);
+    const isActionBusy =
+        isListLoading ||
+        openingWageId !== null ||
+        isViewDetailLoading ||
+        isMarkingPaid;
+
+    useEffect(() => {
+        fetchPayments();
+    }, [currentPage, debouncedSearchQuery, statusFilter, departmentFilter, dateFilter, itemsPerPage]);
+
+    // Reset to page 1 when search or filters change
+    useEffect(() => {
+        setCurrentPage(1);
+    }, [debouncedSearchQuery, statusFilter, departmentFilter, dateFilter]);
+
+    const totalPages = Math.ceil(totalRecords / itemsPerPage);
+    const paginatedWages = wages; // Already paginated from API
+
+    // Handlers
+    const handleView = async (wage: WorkerWage) => {
+        if (isActionBusy) return;
+        setOpeningWageId(wage.id);
+        setIsViewDetailLoading(true);
+        setSelectedWage(wage);
+        setIsFormOpen(true);
+
+        try {
+            // Call the same listing API but pass worker_payroll_id to get specific details
+            const res = await workerPaymentsApi.getPayments({
+                page: 1,
+                limit: 1,
+                worker_payroll_id: wage.id
+            });
+
+            if (res.isSuccessful && res.data && res.data.records.length > 0) {
+                const record = res.data.records[0];
+                const mappedWage: WorkerWage = {
+                    id: String(record.worker_payroll_id),
+                    wagePeriod: record.wage_period,
+                    registerDate: record.entry_date,
+                    location: record.location_name,
+                    department: record.department_name,
+                    workcenter: "",
+                    operation: "",
+                    workerCategory: record.worker_category_name,
+                    noOfWorkers: record.no_of_workers,
+                    netWageAmount: record.net_wage_amount,
+                    totalWageAmount: record.total_wage_amount,
+                    status: record.status_name.toLowerCase().includes("paid") ? "Paid Wages" : "Submitted Wages"
+                };
+                setSelectedWage(mappedWage);
+            }
+        } catch (error) {
+            console.error("Failed to fetch payment details:", error);
+            toast({
+                title: "Error",
+                description: "Failed to fetch detailed payment information.",
+                variant: "destructive"
+            });
+        } finally {
+            setIsViewDetailLoading(false);
+            setOpeningWageId(null);
+        }
+    };
+
+    const handleMarkAsPaid = async () => {
+        if (!selectedWage || isActionBusy) return;
+        setIsMarkingPaid(true);
+        try {
+            // Using workerPayrollStatuses to find the correct status_id for 'Paid'
+            const paidStatus = (workerPayrollStatuses || []).find(s => s.name.toLowerCase().includes("paid"));
+            const status_id = paidStatus?.id || 301; // Fallback to 301
+
+            const res = await workerPaymentsApi.updatePayment(selectedWage.id, { status_id });
+            if (res.isSuccessful) {
+                toast({ 
+                    variant: "success",
+                    title: "Success", 
+                    description: res.message || "Wage marked as Paid.",
+                    duration: 15000
+                });
+                setIsFormOpen(false);
+                fetchPayments(); // Refresh the list
+            }
+        } catch (error) {
+            console.error("Failed to update payment status:", error);
+            toast({
+                title: "Error",
+                description: "Failed to mark wage as paid.",
+                variant: "destructive"
+            });
+        } finally {
+            setIsMarkingPaid(false);
+        }
     };
 
     const handleDownloadPDF = () => {
         if (!selectedWage) return;
-        window.print();
+        
+        const htmlContent = generateWorkerPaymentPDFHTML(selectedWage);
+
+        // Use a hidden iframe to print/download
+        let iframe = document.getElementById("payment-print-iframe") as HTMLIFrameElement;
+        if (!iframe) {
+            iframe = document.createElement("iframe");
+            iframe.id = "payment-print-iframe";
+            iframe.style.position = "absolute";
+            iframe.style.width = "0px";
+            iframe.style.height = "0px";
+            iframe.style.border = "none";
+            document.body.appendChild(iframe);
+        }
+
+        const doc = iframe.contentWindow?.document || iframe.contentDocument;
+        if (doc) {
+            doc.open();
+            doc.write(htmlContent);
+            doc.close();
+
+            // Wait for styles and fonts to load
+            setTimeout(() => {
+                iframe.contentWindow?.focus();
+                iframe.contentWindow?.print();
+            }, 500);
+        }
     };
 
     return (
@@ -127,30 +299,30 @@ export default function WorkerPaymentsPage() {
                 search={{
                     placeholder: "Search by Period / Dept...",
                     value: searchQuery,
-                    onChange: (val) => setSearchQuery(val)
+                    onChange: (val) => { setSearchQuery(val); setCurrentPage(1); }
                 }}
                 filters={[
                     {
                         type: 'select',
                         label: "Department",
                         value: departmentFilter,
-                        onChange: setDepartmentFilter,
-                        options: ["All", "Production", "Logistics", "Packaging", "Maintenance"],
+                        onChange: (val) => { setDepartmentFilter(val); setCurrentPage(1); },
+                        options: departmentOptions,
                         searchable: true
                     },
                     {
                         type: 'date',
                         label: "Date",
                         value: dateFilter,
-                        onChange: setDateFilter,
+                        onChange: (val) => { setDateFilter(val); setCurrentPage(1); },
                         placeholder: "Pick a date"
                     },
                     {
                         type: 'select',
                         label: "Status",
                         value: statusFilter,
-                        onChange: setStatusFilter,
-                        options: ["All", "Submitted Wages", "Paid Wages"],
+                        onChange: (val) => { setStatusFilter(val); setCurrentPage(1); },
+                        options: statusOptions,
                         searchable: true
                     }
                 ]}
@@ -173,7 +345,16 @@ export default function WorkerPaymentsPage() {
                                 </TableRow>
                             </TableHeader>
                             <TableBody>
-                                {paginatedWages.length === 0 ? (
+                                {isListLoading ? (
+                                    <TableRow>
+                                        <TableCell colSpan={7} className="h-32 text-center">
+                                            <div className="flex flex-col items-center justify-center gap-3">
+                                                <Loader2 className="h-8 w-8 animate-spin text-primary" />
+                                                <p className="text-sm text-muted-foreground">Loading...</p>
+                                            </div>
+                                        </TableCell>
+                                    </TableRow>
+                                ) : wages.length === 0 ? (
                                     <TableRow>
                                         <TableCell colSpan={7} className="h-24 text-center text-muted-foreground">No records found.</TableCell>
                                     </TableRow>
@@ -185,32 +366,25 @@ export default function WorkerPaymentsPage() {
                                             <TableCell className="text-xs">{wage.department}</TableCell>
                                             <TableCell className="text-center font-medium text-xs font-mono">{wage.noOfWorkers}</TableCell>
                                             <TableCell className="text-right font-bold text-xs font-mono">USh{wage.totalWageAmount.toLocaleString()}</TableCell>
-                                            <TableCell className="text-center">
-                                                <Badge
-                                                    variant="outline"
-                                                    className={cn(
-                                                        "text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 border-2",
-                                                        wage.status === "Submitted Wages" ? "bg-blue-50 text-blue-600 border-blue-200" : "bg-emerald-50 text-emerald-600 border-emerald-200"
-                                                    )}
-                                                >
-                                                    {wage.status === "Submitted Wages" ? "Submitted" : "Paid"}
+                                            <TableCell>
+                                                <Badge className={cn(
+                                                    "font-bold text-[10px] px-2 py-0.5 uppercase tracking-wide border",
+                                                    (wage.status as any) === "Submitted Wages" ? "bg-blue-50 text-blue-600 border-blue-200" : "bg-emerald-50 text-emerald-600 border-emerald-200"
+                                                )}>
+                                                    {wage.status}
                                                 </Badge>
                                             </TableCell>
                                             <TableCell className="text-center">
-                                                <TableActionButtons
-                                                    onView={wage.status !== "Submitted Wages" ? () => handleView(wage) : undefined}
-                                                    customActions={wage.status === "Submitted Wages" ? (
-                                                        <Button
-                                                            variant="ghost"
-                                                            size="sm"
-                                                            onClick={() => handleView(wage)}
-                                                            className="h-8 text-primary hover:bg-primary/5 font-semibold text-xs"
-                                                        >
-                                                            <Eye className="mr-2 h-4 w-4" />
-                                                            Process
-                                                        </Button>
-                                                    ) : undefined}
-                                                />
+                                                <Button
+                                                    variant="ghost"
+                                                    size="sm"
+                                                    className="h-8 text-blue-600 hover:text-blue-700 hover:bg-blue-50 font-bold text-xs gap-2"
+                                                    onClick={() => handleView(wage)}
+                                                    disabled={isActionBusy}
+                                                >
+                                                    <Eye className="h-4 w-4" />
+                                                    {(wage.status as any) === "Submitted Wages" && "Process"}
+                                                </Button>
                                             </TableCell>
                                         </TableRow>
                                     ))
@@ -219,177 +393,113 @@ export default function WorkerPaymentsPage() {
                         </Table>
                     </div>
 
-                    {/* Simple Pagination */}
-                    {totalPages > 1 && (
-                        <div className="flex justify-end gap-2 mt-4">
-                            <Button variant="outline" size="sm" onClick={() => setCurrentPage(p => Math.max(1, p - 1))} disabled={currentPage === 1}>Previous</Button>
-                            <Button variant="outline" size="sm" onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))} disabled={currentPage === totalPages}>Next</Button>
-                        </div>
+                    {totalRecords > 0 && !isListLoading && (
+                        <DataTablePagination
+                            currentPage={currentPage}
+                            totalPages={totalPages}
+                            totalItems={totalRecords}
+                            itemsPerPage={itemsPerPage}
+                            onPageChange={setCurrentPage}
+                            onItemsPerPageChange={setItemsPerPage}
+                        />
                     )}
                 </CardContent>
             </Card>
 
             {/* View/Process Dialog */}
             <Dialog open={isFormOpen} onOpenChange={setIsFormOpen}>
-                <DialogContent className="max-w-4xl max-h-[90vh] overflow-y-auto">
-                    <DialogHeader className="border-b pb-4 mb-4">
+                <DialogContent 
+                    className="flex! min-h-0 w-[95%] max-h-[82vh] flex-col gap-0 overflow-hidden bg-white p-0 sm:max-w-3xl md:max-w-4xl lg:max-w-5xl xl:max-w-6xl"
+                    onInteractOutside={(e) => e.preventDefault()}
+                    onPointerDownOutside={(e) => e.preventDefault()}
+                >
+                    <DialogHeader className="border-b bg-white p-4 sm:p-6">
                         <DialogTitle className="text-xl">Worker Wage Details</DialogTitle>
                         <DialogDescription>Review payroll information before marking as paid.</DialogDescription>
                     </DialogHeader>
 
-                    {selectedWage && (
-                        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 py-2">
-                            <div className="space-y-1">
-                                <Label className="text-[10px] uppercase font-bold text-muted-foreground block tracking-wider">Wage Period</Label>
-                                <Input value={selectedWage.wagePeriod} readOnly className="h-10 bg-muted" />
-                            </div>
-                            <div className="space-y-1">
-                                <Label className="text-[10px] uppercase font-bold text-muted-foreground block tracking-wider">Register Date</Label>
-                                <Input value={format(new Date(selectedWage.registerDate), "dd-MM-yyyy")} readOnly className="h-10 bg-muted" />
-                            </div>
-                            <div className="space-y-1">
-                                <Label className="text-[10px] uppercase font-bold text-muted-foreground block tracking-wider">Location</Label>
-                                <Input value={selectedWage.location || "-"} readOnly className="h-10 bg-muted" />
-                            </div>
-                            <div className="space-y-1">
-                                <Label className="text-[10px] uppercase font-bold text-muted-foreground block tracking-wider">Department</Label>
-                                <Input value={selectedWage.department || "-"} readOnly className="h-10 bg-muted" />
-                            </div>
-                            <div className="space-y-1">
-                                <Label className="text-[10px] uppercase font-bold text-muted-foreground block tracking-wider">Worker Category</Label>
-                                <Input value={selectedWage.workerCategory} readOnly className="h-10 bg-muted" />
-                            </div>
-                            <div className="space-y-1">
-                                <Label className="text-[10px] uppercase font-bold text-muted-foreground block tracking-wider">No of Workers</Label>
-                                <Input value={selectedWage.noOfWorkers} readOnly className="h-10 bg-muted font-mono" />
-                            </div>
-                            <div className="space-y-1">
-                                <Label className="text-[10px] uppercase font-bold text-muted-foreground block tracking-wider">Net Wage Amount</Label>
-                                <Input value={`USh${selectedWage.netWageAmount}`} readOnly className="h-10 bg-muted font-mono" />
-                            </div>
-                            <div className="lg:col-span-1 pt-2">
-                                <Label className="text-sm font-semibold text-primary">Total Wage Amount</Label>
-                                <div className="text-2xl font-bold text-primary px-3 py-2 bg-primary/5 rounded-md border border-primary/20">
-                                    USh{selectedWage.totalWageAmount.toLocaleString()}
+                    <div className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto px-4 py-4 sm:px-6 space-y-6">
+                        <div className="relative">
+                            {isViewDetailLoading && (
+                                <div className="absolute inset-0 z-10 flex items-center justify-center bg-background/60 rounded-md">
+                                    <Loader2 className="h-8 w-8 animate-spin text-primary" />
                                 </div>
-                            </div>
-                        </div>
-                    )}
+                            )}
+                            {selectedWage && (
+                                <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
+                                    <div className="space-y-1">
+                                        <Label className="text-[10px] uppercase font-bold text-muted-foreground block tracking-wider">Wage Period</Label>
+                                        <Input value={selectedWage.wagePeriod} readOnly className="h-9 bg-muted/50" />
+                                    </div>
+                                    <div className="space-y-1">
+                                        <Label className="text-[10px] uppercase font-bold text-muted-foreground block tracking-wider">Register Date</Label>
+                                        <Input value={format(new Date(selectedWage.registerDate), "dd-MM-yyyy")} readOnly className="h-9 bg-muted/50" />
+                                    </div>
+                                    <div className="space-y-1">
+                                        <Label className="text-[10px] uppercase font-bold text-muted-foreground block tracking-wider">Location</Label>
+                                        <Input value={selectedWage.location || "-"} readOnly className="h-9 bg-muted/50" />
+                                    </div>
+                                    <div className="space-y-1">
+                                        <Label className="text-[10px] uppercase font-bold text-muted-foreground block tracking-wider">Department</Label>
+                                        <Input value={selectedWage.department || "-"} readOnly className="h-9 bg-muted/50" />
+                                    </div>
+                                    <div className="space-y-1">
+                                        <Label className="text-[10px] uppercase font-bold text-muted-foreground block tracking-wider">Worker Category</Label>
+                                        <Input value={selectedWage.workerCategory} readOnly className="h-9 bg-muted/50" />
+                                    </div>
+                                    <div className="space-y-1">
+                                        <Label className="text-[10px] uppercase font-bold text-muted-foreground block tracking-wider">No of Workers</Label>
+                                        <Input value={selectedWage.noOfWorkers} readOnly className="h-9 bg-muted/50 font-mono tabular-nums" />
+                                    </div>
+                                    <div className="space-y-1">
+                                        <Label className="text-[10px] uppercase font-bold text-muted-foreground block tracking-wider">Net Wage Amount</Label>
+                                        <Input value={`USh${selectedWage.netWageAmount}`} readOnly className="h-9 bg-muted/50 font-mono tabular-nums" />
+                                    </div>
 
-                    <DialogFooter className="border-t pt-4 mt-4 flex justify-end gap-3 no-print">
-                        <Button variant="outline" onClick={() => setIsFormOpen(false)}>Close</Button>
-                        {selectedWage?.status === "Paid Wages" && (
+                                    <div className="lg:col-span-3">
+                                        <div className="rounded-lg border bg-muted/20 p-4 sm:p-5">
+                                            <div className="flex items-start justify-between gap-4">
+                                                <div className="space-y-1">
+                                                    <Label className="text-[10px] uppercase font-bold text-muted-foreground block tracking-wider">
+                                                        Total Wage Amount
+                                                    </Label>
+                                                    <div className="text-2xl font-bold text-primary tabular-nums">
+                                                        USh{selectedWage.totalWageAmount.toLocaleString()}
+                                                    </div>
+                                                </div>
+                                                <Badge className="bg-blue-50 text-blue-700 border border-blue-100">
+                                                    {selectedWage.status}
+                                                </Badge>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            )}
+                        </div>
+                    </div>
+
+                    <DialogFooter className="border-t bg-white p-4 sm:p-6 mt-auto flex flex-col-reverse gap-2 sm:flex-row sm:items-center sm:justify-end sm:gap-3 no-print">
+                        <Button variant="outline" onClick={() => setIsFormOpen(false)}>
+                            Close
+                        </Button>
+                        {(selectedWage?.status as any) === "Paid Wages" && (
                             <Button onClick={handleDownloadPDF} variant="outline" className="border-primary text-primary hover:bg-primary/5">
                                 <Download className="mr-2 h-4 w-4" />
                                 Download PDF
                             </Button>
                         )}
-                        {selectedWage?.status === "Submitted Wages" && (
-                            <Button onClick={handleMarkAsPaid} className="bg-emerald-600 hover:bg-emerald-700">
+                        {(selectedWage?.status as any) === "Submitted Wages" && (
+                            <Button
+                                onClick={handleMarkAsPaid}
+                                loading={isMarkingPaid}
+                                disabled={isViewDetailLoading || isMarkingPaid}
+                                className="bg-emerald-600 hover:bg-emerald-700"
+                            >
                                 <CheckCircle className="mr-2 h-4 w-4" />
                                 Mark as Paid
                             </Button>
                         )}
                     </DialogFooter>
-
-                    {/* Hidden Print Content */}
-                    {selectedWage && (
-                        <div className="hidden print:block p-8 space-y-8 bg-white text-black min-h-screen">
-                            <div className="flex justify-between items-start border-b-2 border-primary pb-6">
-                                <div>
-                                    <h1 className="text-3xl font-bold text-primary">WORKER PAYMENT VOUCHER</h1>
-                                    <p className="text-muted-foreground mt-1 uppercase tracking-widest text-sm">Official Record of Wage Payment</p>
-                                </div>
-                                <div className="text-right">
-                                    <p className="font-bold text-lg">Voucher #: {selectedWage.id}</p>
-                                    <p className="text-sm">Printed on: {format(new Date(), "dd MMM yyyy HH:mm")}</p>
-                                </div>
-                            </div>
-
-                            <div className="grid grid-cols-2 gap-12 mt-8">
-                                <div className="space-y-4">
-                                    <div className="border-l-4 border-primary pl-4">
-                                        <p className="text-[10px] uppercase font-bold text-muted-foreground tracking-widest">Wage Period</p>
-                                        <p className="text-lg font-semibold">{selectedWage.wagePeriod}</p>
-                                    </div>
-                                    <div className="border-l-4 border-primary pl-4">
-                                        <p className="text-[10px] uppercase font-bold text-muted-foreground tracking-widest">Department</p>
-                                        <p className="text-lg font-semibold">{selectedWage.department || "-"}</p>
-                                    </div>
-                                    <div className="border-l-4 border-primary pl-4">
-                                        <p className="text-[10px] uppercase font-bold text-muted-foreground tracking-widest">Location</p>
-                                        <p className="text-lg font-semibold">{selectedWage.location || "-"}</p>
-                                    </div>
-                                </div>
-                                <div className="space-y-4">
-                                    <div className="border-l-4 border-primary pl-4">
-                                        <p className="text-[10px] uppercase font-bold text-muted-foreground tracking-widest">Registration Date</p>
-                                        <p className="text-lg font-semibold">{format(new Date(selectedWage.registerDate), "dd MMMM yyyy")}</p>
-                                    </div>
-                                    <div className="border-l-4 border-primary pl-4">
-                                        <p className="text-[10px] uppercase font-bold text-muted-foreground tracking-widest">Worker Category</p>
-                                        <p className="text-lg font-semibold">{selectedWage.workerCategory}</p>
-                                    </div>
-                                    <div className="border-l-4 border-primary pl-4">
-                                        <p className="text-[10px] uppercase font-bold text-muted-foreground tracking-widest">No. of Workers</p>
-                                        <p className="text-lg font-semibold">{selectedWage.noOfWorkers}</p>
-                                    </div>
-                                </div>
-                            </div>
-
-                            <div className="mt-12 bg-primary/5 p-8 rounded-xl border-2 border-primary/20">
-                                <div className="flex justify-between items-center">
-                                    <div className="space-y-1">
-                                        <p className="text-xs uppercase font-bold text-primary tracking-widest">Payment Amount Summary</p>
-                                        <p className="text-sm text-muted-foreground font-medium">Net Wage per Worker: USh{selectedWage.netWageAmount.toLocaleString()}</p>
-                                    </div>
-                                    <div className="text-right">
-                                        <p className="text-sm uppercase font-bold text-primary tracking-widest mb-1">Total Net Wage Amount</p>
-                                        <p className="text-4xl font-black text-primary">USh{selectedWage.totalWageAmount.toLocaleString()}</p>
-                                    </div>
-                                </div>
-                            </div>
-
-                            <div className="mt-24 grid grid-cols-3 gap-12 pt-12 border-t border-dashed border-muted-foreground/30">
-                                <div className="text-center space-y-4">
-                                    <div className="h-0.5 bg-black/20 w-full mx-auto"></div>
-                                    <p className="text-[10px] uppercase font-bold tracking-widest">Requested By</p>
-                                </div>
-                                <div className="text-center space-y-4">
-                                    <div className="h-0.5 bg-black/20 w-full mx-auto"></div>
-                                    <p className="text-[10px] uppercase font-bold tracking-widest">Verified By (HR)</p>
-                                </div>
-                                <div className="text-center space-y-4">
-                                    <div className="h-0.5 bg-black/20 w-full mx-auto"></div>
-                                    <p className="text-[10px] uppercase font-bold tracking-widest">Approved By (Accounts)</p>
-                                </div>
-                            </div>
-
-                            <div className="absolute bottom-8 left-8 right-8 flex justify-between text-[8px] text-muted-foreground uppercase tracking-[0.2em]">
-                                <p>Master ERP System - Financial Module</p>
-                                <p>System Generated Document</p>
-                                <p>Confidential</p>
-                            </div>
-
-                            <style dangerouslySetInnerHTML={{
-                                __html: `
-                                @media print {
-                                    body * { visibility: hidden; }
-                                    .print\\:block, .print\\:block * { visibility: visible; }
-                                    .print\\:block { 
-                                        position: absolute; 
-                                        left: 0; 
-                                        top: 0; 
-                                        width: 100%; 
-                                        height: 100%;
-                                        margin: 0;
-                                        padding: 40px;
-                                    }
-                                    .no-print { display: none !important; }
-                                }
-                            `}} />
-                        </div>
-                    )}
                 </DialogContent>
             </Dialog>
         </div>

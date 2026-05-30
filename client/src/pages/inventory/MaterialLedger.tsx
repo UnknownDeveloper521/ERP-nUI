@@ -1,8 +1,7 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback, useMemo, useRef } from "react";
+import { format } from "date-fns";
+import { useDebounce } from "@/hooks/useDebounce";
 import { Card, CardContent } from "@/components/ui/card";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
 import {
     Table,
     TableBody,
@@ -12,9 +11,16 @@ import {
     TableRow,
 } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
-import { ChevronLeft, ChevronRight } from "lucide-react";
 import { DataTablePagination } from "@/components/shared/DataTablePagination";
+import { AppListToolbar, FilterField } from "@/components/shared/AppListToolbar";
 import { cn } from "@/lib/utils";
+import { commonApi, inventoryApi, type MaterialLedgerRecord } from "@/lib/api";
+import { useToast } from "@/hooks/use-toast";
+import {
+    getAssignedIds,
+    getFirstAssignedMatch,
+    prioritizeByAssigned,
+} from "@/utils/assignedDropdown";
 
 // ============================================================================
 // TYPE DEFINITIONS
@@ -23,37 +29,48 @@ import { cn } from "@/lib/utils";
 interface LedgerEntry {
     id: number;
     date: string;
-    type: "Issue" | "GRN";
+    type: string;
     refNo: string;
     itemCode: string;
     itemName: string;
     qty: number;
     uom: string;
     warehouse: string;
-    user: string;
+    qtyBalance: number;
 }
 
-// ============================================================================
-// MOCK DATA
-// ============================================================================
-
-const MOCK_LEDGER_ENTRIES: LedgerEntry[] = [
-    { id: 1, date: "2024-02-15", type: "Issue", refNo: "MR-2024-001", itemCode: "RM-001", itemName: "Scrap Battery", qty: 150, uom: "KG", warehouse: "Jinja WH", user: "Admin" },
-    { id: 2, date: "2024-02-15", type: "Issue", refNo: "MR-2024-001", itemCode: "RM-002", itemName: "Plastic Pallets", qty: 50, uom: "NOS", warehouse: "Jinja WH", user: "Admin" },
-    { id: 3, date: "2024-02-16", type: "GRN", refNo: "GRN-2024-101", itemCode: "RM-003", itemName: "Acid Type A", qty: 200, uom: "LTR", warehouse: "Jinja WH", user: "Inventory Mgr" },
-    { id: 4, date: "2024-02-17", type: "Issue", refNo: "MR-2024-003", itemCode: "SFG-005", itemName: "Terminals", qty: 500, uom: "NOS", warehouse: "Jinja WH", user: "John Doe" },
-    { id: 5, date: "2024-02-18", type: "GRN", refNo: "GRN-2024-102", itemCode: "SFG-001", itemName: "Purified Lead", qty: 300, uom: "KG", warehouse: "Jinja WH", user: "Admin" },
-    { id: 6, date: "2024-02-19", type: "Issue", refNo: "MR-2024-005", itemCode: "SFG-002", itemName: "Battery Cases", qty: 100, uom: "NOS", warehouse: "Jinja WH", user: "Production Mgr" },
-    { id: 7, date: "2024-02-20", type: "GRN", refNo: "GRN-2024-103", itemCode: "RM-004", itemName: "Acid Type B", qty: 150, uom: "LTR", warehouse: "Jinja WH", user: "Inventory Mgr" },
-    { id: 8, date: "2024-02-21", type: "Issue", refNo: "MR-2024-007", itemCode: "SFG-006", itemName: "Connectors", qty: 300, uom: "NOS", warehouse: "Jinja WH", user: "Admin" },
-];
-
-const formatDate = (date: Date | string): string => {
-    const d = typeof date === 'string' ? new Date(date) : date;
-    const day = String(d.getDate()).padStart(2, '0');
-    const month = String(d.getMonth() + 1).padStart(2, '0');
+const formatDisplayDate = (date: Date | string): string => {
+    const d = typeof date === "string" ? new Date(date) : date;
+    if (Number.isNaN(d.getTime())) return String(date);
+    const day = String(d.getDate()).padStart(2, "0");
+    const month = String(d.getMonth() + 1).padStart(2, "0");
     const year = d.getFullYear();
     return `${day}-${month}-${year}`;
+};
+
+const mapLedgerRecord = (r: MaterialLedgerRecord): LedgerEntry => {
+    const rawType = String(r.transaction_type || "").trim();
+    const typeUpper = rawType.toUpperCase();
+    const displayType =
+        typeUpper === "ISSUE" || typeUpper === "ISSUED" ? "Issue" : rawType || "—";
+
+    return {
+        id: r.id,
+        date: r.transaction_date,
+        type: displayType,
+        refNo: r.reference_code?.trim() ? r.reference_code.trim() : "—",
+        itemCode: r.item_code || "—",
+        itemName: r.item_name || "—",
+        qty: Number(r.qty) || 0,
+        uom: r.uom_name || "",
+        warehouse: r.warehouse_name || "—",
+        qtyBalance: Number(r.balance_qty) || 0,
+    };
+};
+
+const isIssueType = (type: string): boolean => {
+    const t = type.trim().toUpperCase();
+    return t === "ISSUE" || t === "ISSUED";
 };
 
 // ============================================================================
@@ -61,19 +78,186 @@ const formatDate = (date: Date | string): string => {
 // ============================================================================
 
 export default function MaterialLedger() {
+    const { toast } = useToast();
     const [currentPage, setCurrentPage] = useState(1);
-    // Pagination state - using DataTablePagination component
     const [itemsPerPage, setItemsPerPage] = useState(10);
+    const [searchTerm, setSearchTerm] = useState("");
+    const debouncedSearchTerm = useDebounce(searchTerm, 500);
+    const [selectedDate, setSelectedDate] = useState<Date | undefined>(undefined);
+    const [warehouseFilter, setWarehouseFilter] = useState<string>("all");
+    const [warehouses, setWarehouses] = useState<{ id: number; name: string }[]>([]);
+    const [areListFiltersReady, setAreListFiltersReady] = useState(false);
+    const appliedWarehouseFilterDefault = useRef(false);
+    const [entries, setEntries] = useState<LedgerEntry[]>([]);
+    const [totalRecords, setTotalRecords] = useState(0);
+    const [isLoading, setIsLoading] = useState(false);
 
-    const totalPages = Math.ceil(MOCK_LEDGER_ENTRIES.length / itemsPerPage);
-    const paginatedLedger = MOCK_LEDGER_ENTRIES.slice((currentPage - 1) * itemsPerPage, currentPage * itemsPerPage);
+    const assignedWarehouseKey = getAssignedIds("warehouse").join(",");
+    const orderedWarehouses = useMemo(
+        () => prioritizeByAssigned(warehouses, getAssignedIds("warehouse"), (wh) => wh.id),
+        [warehouses, assignedWarehouseKey]
+    );
 
-    // Auto-adjust page when data changes
     useEffect(() => {
-        if (currentPage > totalPages && totalPages > 0) {
+        let cancelled = false;
+        const fetchWarehouses = async () => {
+            const assignedWarehouseIds = getAssignedIds("warehouse");
+            try {
+                const res = await commonApi.getWarehouses();
+                if (cancelled) return;
+                if (res.isSuccessful && res.data?.records) {
+                    const warehouseRecords = res.data.records
+                        .map((wh: Record<string, unknown>) => ({
+                            id: Number(wh.id ?? wh.warehouse_id),
+                            name: String(
+                                wh.warehouse_name ?? wh.name ?? wh.value_name ?? "Unknown Warehouse"
+                            ).trim(),
+                        }))
+                        .filter((wh: { id: number; name: string }) => Number.isFinite(wh.id) && wh.name);
+
+                    setWarehouses(warehouseRecords);
+
+                    if (
+                        !appliedWarehouseFilterDefault.current &&
+                        assignedWarehouseIds.length > 0 &&
+                        warehouseRecords.length > 0
+                    ) {
+                        const ordered = prioritizeByAssigned<{ id: number; name: string }>(
+                            warehouseRecords,
+                            assignedWarehouseIds,
+                            (wh) => wh.id
+                        );
+                        const firstAssigned = getFirstAssignedMatch(
+                            assignedWarehouseIds,
+                            ordered.map((wh) => wh.id)
+                        );
+                        if (firstAssigned) {
+                            setWarehouseFilter(String(firstAssigned));
+                            appliedWarehouseFilterDefault.current = true;
+                        }
+                    }
+                } else {
+                    setWarehouses([]);
+                }
+            } catch (error) {
+                if (!cancelled) {
+                    console.error("Failed to fetch warehouses:", error);
+                    setWarehouses([]);
+                }
+            } finally {
+                if (!cancelled) {
+                    setAreListFiltersReady(true);
+                }
+            }
+        };
+        void fetchWarehouses();
+        return () => {
+            cancelled = true;
+        };
+    }, []);
+
+    const fetchLedger = useCallback(async () => {
+        if (!areListFiltersReady) return;
+        setIsLoading(true);
+        const warehouseId =
+            warehouseFilter === "all"
+                ? undefined
+                : (() => {
+                      const n = Number(warehouseFilter);
+                      return Number.isFinite(n) ? n : undefined;
+                  })();
+
+        try {
+            const res = await inventoryApi.getMaterialLedgerList({
+                page: currentPage,
+                limit: itemsPerPage,
+                search: debouncedSearchTerm.trim() || undefined,
+                transaction_date: selectedDate ? format(selectedDate, "yyyy-MM-dd") : undefined,
+                warehouse_id: warehouseId,
+            });
+
+            if (res.isSuccessful && res.data) {
+                setEntries((res.data.records || []).map(mapLedgerRecord));
+                const pagination = res.data.pagination;
+                setTotalRecords(
+                    pagination?.totalCount ??
+                        pagination?.totalRecords ??
+                        res.data.records?.length ??
+                        0
+                );
+            } else {
+                setEntries([]);
+                setTotalRecords(0);
+                toast({
+                    title: "Error",
+                    description: res.message || "Failed to load material ledger",
+                    variant: "destructive",
+                });
+            }
+        } catch (error) {
+            console.error("Failed to fetch material ledger:", error);
+            setEntries([]);
+            setTotalRecords(0);
+            toast({
+                title: "Error",
+                description: "Failed to load material ledger",
+                variant: "destructive",
+            });
+        } finally {
+            setIsLoading(false);
+        }
+    }, [
+        areListFiltersReady,
+        currentPage,
+        itemsPerPage,
+        debouncedSearchTerm,
+        selectedDate,
+        warehouseFilter,
+        toast,
+    ]);
+
+    useEffect(() => {
+        void fetchLedger();
+    }, [fetchLedger]);
+
+    useEffect(() => {
+        setCurrentPage(1);
+    }, [debouncedSearchTerm, selectedDate, warehouseFilter]);
+
+    const totalPages = totalRecords > 0 ? Math.ceil(totalRecords / itemsPerPage) : 0;
+
+    useEffect(() => {
+        if (totalPages > 0 && currentPage > totalPages) {
             setCurrentPage(totalPages);
         }
-    }, [MOCK_LEDGER_ENTRIES.length, currentPage, totalPages]);
+    }, [totalRecords, currentPage, totalPages]);
+
+    const warehouseOptions = useMemo(
+        () => [
+            { value: "all", label: "All Warehouse" },
+            ...orderedWarehouses.map((wh) => ({ value: String(wh.id), label: wh.name })),
+        ],
+        [orderedWarehouses]
+    );
+
+    const filterFields: FilterField[] = [
+        {
+            type: "select",
+            label: "Warehouse",
+            value: warehouseFilter,
+            onChange: setWarehouseFilter,
+            options: warehouseOptions,
+            searchable: true,
+        },
+        {
+            type: "date",
+            label: "Date",
+            value: selectedDate,
+            onChange: setSelectedDate,
+            placeholder: "Filter by date",
+            showClear: true,
+        },
+    ];
 
     return (
         <div className="flex flex-col gap-6 h-full min-h-0">
@@ -84,36 +268,53 @@ export default function MaterialLedger() {
 
             <Card>
                 <CardContent className="pt-6">
-                    <div className="rounded-md border">
+                    <AppListToolbar
+                        search={{
+                            value: searchTerm,
+                            onChange: setSearchTerm,
+                            placeholder: "Search item name, ref code...",
+                        }}
+                        filters={filterFields}
+                    />
+
+                    <div className="rounded-md border overflow-hidden">
                         <Table>
                             <TableHeader>
                                 <TableRow className="bg-muted/50 hover:bg-muted/50">
                                     <TableHead className="font-semibold text-xs uppercase tracking-wider">Date</TableHead>
                                     <TableHead className="font-semibold text-xs uppercase tracking-wider">Type</TableHead>
-                                    <TableHead className="font-semibold text-xs uppercase tracking-wider">Ref No</TableHead>
+                                    <TableHead className="font-semibold text-xs uppercase tracking-wider">Ref Code</TableHead>
                                     <TableHead className="font-semibold text-xs uppercase tracking-wider">Item Details</TableHead>
                                     <TableHead className="text-right font-semibold text-xs uppercase tracking-wider">Qty</TableHead>
                                     <TableHead className="font-semibold text-xs uppercase tracking-wider">Warehouse</TableHead>
-                                    <TableHead className="font-semibold text-xs uppercase tracking-wider pr-6">Processed By</TableHead>
+                                    <TableHead className="text-right font-semibold text-xs uppercase tracking-wider pr-6">Qty Balance</TableHead>
                                 </TableRow>
                             </TableHeader>
                             <TableBody>
-                                {paginatedLedger.length === 0 ? (
+                                {isLoading ? (
+                                    <TableRow>
+                                        <TableCell colSpan={7} className="h-32 text-center text-muted-foreground">
+                                            Loading...
+                                        </TableCell>
+                                    </TableRow>
+                                ) : entries.length === 0 ? (
                                     <TableRow>
                                         <TableCell colSpan={7} className="h-32 text-center text-muted-foreground">
                                             No transactions found.
                                         </TableCell>
                                     </TableRow>
                                 ) : (
-                                    paginatedLedger.map((entry) => (
+                                    entries.map((entry) => (
                                         <TableRow key={entry.id} className="hover:bg-muted/30 transition-colors border-b">
-                                            <TableCell className="py-4">{formatDate(entry.date)}</TableCell>
+                                            <TableCell className="py-4">{formatDisplayDate(entry.date)}</TableCell>
                                             <TableCell>
                                                 <Badge
                                                     variant="outline"
                                                     className={cn(
                                                         "font-medium",
-                                                        entry.type === "Issue" ? "border-amber-500 text-amber-600 bg-amber-50" : "border-green-500 text-green-600 bg-green-50"
+                                                        isIssueType(entry.type)
+                                                            ? "border-amber-500 text-amber-600 bg-amber-50"
+                                                            : "border-green-500 text-green-600 bg-green-50"
                                                     )}
                                                 >
                                                     {entry.type}
@@ -122,13 +323,23 @@ export default function MaterialLedger() {
                                             <TableCell className="font-medium text-primary">{entry.refNo}</TableCell>
                                             <TableCell>
                                                 <div className="font-medium">{entry.itemName}</div>
-                                                <div className="text-[10px] text-muted-foreground uppercase tracking-tight">{entry.itemCode}</div>
+                                                <div className="text-[10px] text-muted-foreground uppercase tracking-tight">
+                                                    {entry.itemCode}
+                                                </div>
                                             </TableCell>
                                             <TableCell className="text-right font-medium">
-                                                {entry.qty} <span className="text-[10px] text-muted-foreground ml-0.5">{entry.uom}</span>
+                                                {entry.qty}{" "}
+                                                <span className="text-[10px] text-muted-foreground ml-0.5">
+                                                    {entry.uom}
+                                                </span>
                                             </TableCell>
                                             <TableCell>{entry.warehouse}</TableCell>
-                                            <TableCell className="pr-6">{entry.user}</TableCell>
+                                            <TableCell className="text-right font-medium pr-6">
+                                                {entry.qtyBalance}{" "}
+                                                <span className="text-[10px] text-muted-foreground ml-0.5">
+                                                    {entry.uom}
+                                                </span>
+                                            </TableCell>
                                         </TableRow>
                                     ))
                                 )}
@@ -136,15 +347,17 @@ export default function MaterialLedger() {
                         </Table>
                     </div>
 
-                    {/* Pagination - using standardized DataTablePagination component */}
-                    {MOCK_LEDGER_ENTRIES.length > 0 && (
+                    {totalRecords > 0 && (
                         <DataTablePagination
                             currentPage={currentPage}
                             totalPages={totalPages}
-                            totalItems={MOCK_LEDGER_ENTRIES.length}
+                            totalItems={totalRecords}
                             itemsPerPage={itemsPerPage}
                             onPageChange={setCurrentPage}
-                            onItemsPerPageChange={setItemsPerPage}
+                            onItemsPerPageChange={(n) => {
+                                setItemsPerPage(n);
+                                setCurrentPage(1);
+                            }}
                             options={[10, 15, 30, 50]}
                         />
                     )}

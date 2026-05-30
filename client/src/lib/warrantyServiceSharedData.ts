@@ -15,6 +15,8 @@ export type ClaimStatus = "Accept" | "Reject" | "NA" | "";
 
 export interface RepairItem {
     id: number;
+    item_id?: number;
+    itemCode?: string;
     itemName: string;
     stock: number;
     qty: number | string;
@@ -34,6 +36,10 @@ export interface ServiceRequestData {
     clientName: string;
     serialNumber: string;
     itemName?: string;
+    itemCode?: string;
+    customerId?: number;
+    batchId?: number | null;
+    warrantyStatusId?: number;
     batch: string;
     productionDate: string;
     invoiceDate: string;
@@ -50,6 +56,7 @@ export interface ServiceRequestData {
     labourCost?: number | string;
     labourBillable?: boolean;
     serviceDate?: string;
+    isPaidService?: "Yes" | "No" | "";
 }
 
 export interface SerialNumberData {

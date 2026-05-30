@@ -22,8 +22,10 @@ export default function Register() {
     try {
       await register(email, password);
       toast({
+        variant: "success",
         title: "Account created",
         description: "You can now sign in.",
+        duration: 15000,
       });
       
       // Redirect to registration success page with email parameter

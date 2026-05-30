@@ -18,7 +18,7 @@ export interface PaymentTerm {
     percentage: number; // Deprecated: kept for backward compatibility, use value instead
     terms: "Advance" | "Delivery" | "Days";
     date: string;
-    days?: number; // Number of days for "Days" term type
+    days?: number | string; // Number of days for "Days" term type
 }
 
 export interface QuotationData {
@@ -31,12 +31,14 @@ export interface QuotationData {
     billingAddress: string;
     shippingAddress: string;
     currency: string;
+    currencySymbol?: string;
     paymentTerms: PaymentTerm[];
     deliveryTime: string;
     quotationValidity: string;
     remarks: string;
     items: QuotationItem[];
     status: QuotationStatus;
+    statusId?: number | string;
     discountValue?: number; // Discount value (percentage 0-100 or fixed amount)
     discountType?: "%" | "Amount"; // Discount type - percentage or fixed amount
     taxType?: "%" | "Amount"; // Tax type - percentage or fixed amount

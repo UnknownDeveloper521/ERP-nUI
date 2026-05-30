@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import * as React from "react";
 import { format } from "date-fns";
 import { Card, CardContent } from "@/components/ui/card";
@@ -62,6 +62,18 @@ import { DataTablePagination } from "@/components/shared/DataTablePagination";
 import { TableActionButtons } from "@/components/shared/TableActionButtons";
 import { AppListToolbar } from "@/components/shared/AppListToolbar";
 import { DatePicker } from "@/components/shared/DatePicker";
+import { SearchableSelect } from "@/components/shared/SearchableSelect";
+import { serviceCenterApi, type MaterialRequisitionItemRecord } from "@/lib/api";
+import { useCommonStore } from "@/store/commonStore";
+import {
+    isClaimEntityName,
+    isCurrencyEntityName,
+    isSelectActionEntityName,
+    isWarrantyServiceRequestStatusEntityName,
+    isWarrantyStatusEntityName,
+} from "@/services/loadCommonData";
+import { useHasPermission } from "@/hooks/usePermissions";
+import Unauthorized from "../Unauthorized";
 
 import {
     ServiceRequestStatus,
@@ -71,8 +83,6 @@ import {
     RepairItem,
     ServiceRequestData,
     MOCK_SERIAL_NUMBERS,
-    REPAIR_ITEMS,
-    MOCK_STOCK_DATA,
     getNextServiceRequestCode,
     getDefaultMockData
 } from "@/lib/warrantyServiceSharedData";
@@ -81,9 +91,148 @@ import {
 // HELPER FUNCTIONS
 // ============================================================================
 
+const TOAST_DURATION = 15000;
+
+type EntityMasterRow = {
+    id?: number | string;
+    value_id?: number | string;
+    code?: string;
+    value_code?: string;
+    name?: string;
+    value_name?: string;
+};
+
+/** Green styling for successful actions; keep errors as destructive. */
+const crudSuccessToast = {
+    className:
+        "border-green-600 bg-green-50 text-green-950 shadow-md dark:border-green-700 dark:bg-green-950 dark:text-green-50",
+    duration: TOAST_DURATION,
+};
+
+/** Prevents focus ring / border clipping inside the modal scroll area */
+const formSelectTriggerClass =
+    "h-10 ring-offset-0 focus:ring-2 focus:ring-ring focus:ring-offset-0";
+
+const getCurrencySymbol = (currencyCode: string): string => {
+    if (!currencyCode?.trim()) return "$";
+    const clean = currencyCode.trim().toUpperCase();
+    const symbols: Record<string, string> = {
+        USD: "$",
+        "US DOLLAR": "$",
+        EUR: "€",
+        EURO: "€",
+        GBP: "£",
+        "BRITISH POUND": "£",
+        INR: "₹",
+        "INDIAN RUPEE": "₹",
+        JPY: "¥",
+        "JAPANESE YEN": "¥",
+        CNY: "¥",
+        "CHINESE YUAN": "¥",
+        AUD: "A$",
+        "AUSTRALIAN DOLLAR": "A$",
+        CAD: "C$",
+        "CANADIAN DOLLAR": "C$",
+        CHF: "CHF",
+        "SWISS FRANC": "CHF",
+        UGX: "USh",
+        "UGANDA SHILLING": "USh",
+    };
+    return symbols[clean] || clean;
+};
+
+/** Resolve display symbol from warranty detail / action `currency_id` and entity master currencies. */
+const resolveCurrencySymbolFromId = (
+    currencyId: string | number | undefined | null,
+    currencyList: EntityMasterRow[]
+): string => {
+    if (currencyId == null || currencyId === "") return "$";
+    const idStr = String(currencyId);
+    const match = currencyList.find((c) => {
+        const valueId = c.value_id != null ? String(c.value_id) : "";
+        const rowId = c.id != null ? String(c.id) : "";
+        return valueId === idStr || rowId === idStr;
+    });
+    const code =
+        match?.code ||
+        match?.value_code ||
+        match?.name ||
+        match?.value_name ||
+        "";
+    return getCurrencySymbol(String(code));
+};
+
+export type ServiceRequestDataWithCurrency = ServiceRequestData & {
+    currencyId?: string | number;
+};
+
 // Using shared AppListToolbar and DatePicker components
 
 // Reusable components (using shared versions)
+
+const isExpiredWarrantyStatus = (status: string | undefined): boolean => {
+    const s = (status || "").trim().toLowerCase();
+    return s === "expired" || s === "overdue";
+};
+
+const mapPaidServicesFromApi = (paid: boolean | null | undefined): "Yes" | "No" | "" => {
+    if (paid === true) return "Yes";
+    if (paid === false) return "No";
+    return "";
+};
+
+const getPaidServiceDisplay = (isPaidService: string | undefined): string => {
+    if (isPaidService === "Yes" || isPaidService === "No") return isPaidService;
+    return "—";
+};
+
+const getMrItemStockQty = (record: MaterialRequisitionItemRecord): number =>
+    Number(record.current_QTY ?? record.current_qty ?? 0) || 0;
+
+const getClaimStatusIdForPayload = (
+    warrantyStatus: string | undefined,
+    claim: string | undefined,
+    claims: Array<{ id?: number | string; value_id?: number | string; code?: string; value_code?: string; name?: string; value_name?: string }>
+): number | null => {
+    // Expired/overdue: no claim on form — backend accepts null claim_status_id
+    if (isExpiredWarrantyStatus(warrantyStatus)) {
+        return null;
+    }
+    return getClaimStatusId(claim || "", claims);
+};
+
+const getPaidServicesForPayload = (
+    warrantyStatus: string | undefined,
+    claim: string | undefined,
+    isPaidService: string | undefined,
+    claims: Array<{ code?: string; value_code?: string; name?: string; value_name?: string }>
+): boolean => {
+    if (isExpiredWarrantyStatus(warrantyStatus)) {
+        return isPaidService === "Yes";
+    }
+    if (claimMatchesCode(claim, "REJECTED", claims) && warrantyStatus === "Under Warranty") {
+        return isPaidService === "Yes";
+    }
+    return isPaidService === "Yes";
+};
+
+const getApiErrorMessage = (error: unknown, fallback: string): string => {
+    if (error instanceof Error && error.message?.trim()) return error.message.trim();
+    if (typeof error === "string" && error.trim()) return error.trim();
+    if (error && typeof error === "object") {
+        const record = error as Record<string, unknown>;
+        if (typeof record.message === "string" && record.message.trim()) return record.message.trim();
+    }
+    return fallback;
+};
+
+const EMPTY_DISPLAY = "—";
+
+const displayText = (value: string | number | null | undefined): string => {
+    if (value === null || value === undefined) return EMPTY_DISPLAY;
+    const text = String(value).trim();
+    return text ? text : EMPTY_DISPLAY;
+};
 
 const formatDate = (dateStr: string) => {
     try {
@@ -92,6 +241,12 @@ const formatDate = (dateStr: string) => {
     } catch {
         return dateStr || "";
     }
+};
+
+const displayDate = (dateStr: string | undefined | null): string => {
+    if (!dateStr || !String(dateStr).trim()) return EMPTY_DISPLAY;
+    const formatted = formatDate(dateStr);
+    return formatted.trim() ? formatted : EMPTY_DISPLAY;
 };
 
 const safeParseDate = (dateStr: string | undefined | null): Date | undefined => {
@@ -138,14 +293,279 @@ const calculateWarrantyStatus = (warrantyEndDate: string): WarrantyStatus => {
     }
 };
 
-const getStatusBadgeVariant = (status: ServiceRequestStatus) => {
+const normalizeWarrantyStatusKey = (code: string): string =>
+    code.trim().toUpperCase().replace(/[\s-]+/g, "_");
+
+const getWarrantyStatusEntityCode = (status: { code?: string; value_code?: string } | undefined): string =>
+    normalizeWarrantyStatusKey(String(status?.code || status?.value_code || ""));
+
+const findWarrantyStatusEntity = (
+    statuses: EntityMasterRow[],
+    ...codes: string[]
+) => {
+    const keys = codes.map(normalizeWarrantyStatusKey);
+    return statuses.find((s) => keys.includes(getWarrantyStatusEntityCode(s)));
+};
+
+const resolveWarrantyStatusLabelToEntityCodes = (label: string | undefined): string[] => {
+    const l = (label || "").trim().toLowerCase();
+    if (!l) return ["UNDER_WARRANTY", "UNDER WARRANTY"];
+    if (l.includes("under") && l.includes("warranty")) return ["UNDER_WARRANTY", "UNDER WARRANTY"];
+    if (l === "expired" || l === "overdue" || l === "expire") return ["EXPIRE", "EXPIRED", "OVERDUE"];
+    return [normalizeWarrantyStatusKey(label ?? "")];
+};
+
+const getWarrantyStatusIdFromEntities = (
+    warrantyStatus: string | undefined,
+    statuses: Array<{ id?: number | string; value_id?: number | string; code?: string; value_code?: string; name?: string; value_name?: string }>,
+    explicitId?: number | null
+): number | null => {
+    if (statuses.length === 0) return null;
+
+    if (explicitId != null && !Number.isNaN(Number(explicitId))) {
+        const id = Number(explicitId);
+        const inList = statuses.some((s) => Number(s.id ?? s.value_id) === id);
+        if (inList) return id;
+    }
+    for (const code of resolveWarrantyStatusLabelToEntityCodes(warrantyStatus)) {
+        const found = findWarrantyStatusEntity(statuses, code);
+        if (found) {
+            const id = found.id ?? found.value_id;
+            return id != null && id !== "" ? Number(id) : null;
+        }
+    }
+    const byName = statuses.find(
+        (s) => String(s.name || s.value_name || "").trim().toLowerCase() === (warrantyStatus || "").trim().toLowerCase()
+    );
+    if (byName) {
+        const id = byName.id ?? byName.value_id;
+        return id != null && id !== "" ? Number(id) : null;
+    }
+    return null;
+};
+
+const getClaimCode = (claim: { code?: string; value_code?: string } | undefined): string =>
+    String(claim?.code || claim?.value_code || "").trim().toUpperCase();
+
+const findClaimByCode = (
+    claims: EntityMasterRow[],
+    code: string
+) => claims.find((c) => getClaimCode(c) === code.toUpperCase());
+
+const resolveClaimToCode = (claim: string | undefined, claims: EntityMasterRow[]): string => {
+    if (!claim) return "";
+    const upper = claim.trim().toUpperCase();
+    if (findClaimByCode(claims, upper)) return upper;
+    if (upper === "ACCEPT" || claim === "Accept") return "ACCEPT";
+    if (upper === "REJECTED" || upper === "REJECT" || claim === "Reject") return "REJECTED";
+    if (upper === "NA" || upper === "N/A") return getClaimCode(findClaimByCode(claims, "NA")) || "NA";
+    const byName = claims.find(
+        (c) => String(c.name || c.value_name || "").trim().toLowerCase() === claim.trim().toLowerCase()
+    );
+    return byName ? getClaimCode(byName) : upper;
+};
+
+const claimMatchesCode = (
+    claim: string | undefined,
+    code: string,
+    claims: EntityMasterRow[]
+): boolean => {
+    if (!claim) return false;
+    const resolved = resolveClaimToCode(claim, claims);
+    return resolved === code.toUpperCase();
+};
+
+const getClaimStatusId = (
+    claim: string,
+    claims: EntityMasterRow[]
+): number | null => {
+    const code = resolveClaimToCode(claim, claims);
+    const found = findClaimByCode(claims, code);
+    if (!found) return null;
+    const id = found.id ?? found.value_id;
+    return id != null && id !== "" ? Number(id) : null;
+};
+
+const getClaimDisplayName = (
+    claim: string | undefined,
+    claims: EntityMasterRow[]
+): string => {
+    if (!claim) return "";
+    const code = resolveClaimToCode(claim, claims);
+    const found = findClaimByCode(claims, code);
+    return found?.name || found?.value_name || claim;
+};
+
+const getServiceActionCode = (action: { code?: string; value_code?: string } | undefined): string =>
+    String(action?.code || action?.value_code || "").trim().toUpperCase();
+
+const findServiceActionByCode = (
+    actions: EntityMasterRow[],
+    code: string
+) => actions.find((a) => getServiceActionCode(a) === code.toUpperCase());
+
+const resolveServiceActionToCode = (
+    action: string | undefined,
+    actions: EntityMasterRow[]
+): string => {
+    if (!action) return "";
+    const upper = action.trim().toUpperCase();
+    const byCode = findServiceActionByCode(actions, upper);
+    if (byCode) return getServiceActionCode(byCode);
+    const byName = actions.find(
+        (a) => String(a.name || a.value_name || "").trim().toLowerCase() === action.trim().toLowerCase()
+    );
+    return byName ? getServiceActionCode(byName) : "";
+};
+
+const findServiceActionCodeFromEntities = (
+    actions: EntityMasterRow[],
+    ...lookupCodes: string[]
+): string => {
+    for (const code of lookupCodes) {
+        const found = findServiceActionByCode(actions, code);
+        if (found) return getServiceActionCode(found);
+    }
+    return "";
+};
+
+/** Replace only when Under Warranty + Accept claim; otherwise Repair only. */
+const allowsReplaceServiceAction = (
+    warrantyStatus: string | undefined,
+    claim: string | undefined,
+    claims: Array<{ code?: string; value_code?: string; name?: string; value_name?: string }>
+): boolean =>
+    warrantyStatus === "Under Warranty" && claimMatchesCode(claim, "ACCEPT", claims);
+
+const serviceActionMatchesCode = (
+    action: string | undefined,
+    code: string,
+    actions: EntityMasterRow[]
+): boolean => {
+    if (!action) return false;
+    return resolveServiceActionToCode(action, actions) === code.toUpperCase();
+};
+
+const getServiceActionId = (
+    action: string,
+    actions: EntityMasterRow[]
+): number | null => {
+    const code = resolveServiceActionToCode(action, actions);
+    const found = findServiceActionByCode(actions, code);
+    if (!found) return null;
+    const id = found.id ?? found.value_id;
+    return id != null && id !== "" ? Number(id) : null;
+};
+
+const getServiceActionDisplayName = (
+    action: string | undefined,
+    actions: EntityMasterRow[]
+): string => {
+    if (!action) return "";
+    const code = resolveServiceActionToCode(action, actions);
+    const found = findServiceActionByCode(actions, code);
+    return found?.name || found?.value_name || action;
+};
+
+const getStatusCode = (status: { code?: string; value_code?: string } | undefined): string =>
+    String(status?.code || status?.value_code || "").trim().toUpperCase();
+
+const getStatusId = (status: EntityMasterRow | undefined): string =>
+    String(status?.id ?? status?.value_id ?? "").trim();
+
+/** Listing API uses short codes (SUBMITTED); entity master may use SUBMITTED REQUEST. */
+const toWarrantyListStatusApiCode = (rawCode: string): string => {
+    const c = String(rawCode || "").trim().toUpperCase().replace(/\s+/g, " ");
+    if (!c) return "";
+    const base = c.replace(/\s+REQUEST$/i, "").trim();
+    if (base === "SUBMIT" || base === "SUBMITTED") return "SUBMITTED";
+    if (base === "COMPLETE" || base === "COMPLETED") return "COMPLETED";
+    if (base === "REJECT" || base === "REJECTED") return "REJECTED";
+    if (base === "DRAFT") return "DRAFT";
+    return base;
+};
+
+const warrantyListStatusCodesMatch = (recordCode: string, filterCode: string): boolean => {
+    const a = toWarrantyListStatusApiCode(recordCode);
+    const b = toWarrantyListStatusApiCode(filterCode);
+    return Boolean(a && b && a === b);
+};
+
+const findWarrantyRequestStatus = (
+    statuses: EntityMasterRow[],
+    code: string
+) =>
+    statuses.find(
+        (s) => toWarrantyListStatusApiCode(getStatusCode(s)) === toWarrantyListStatusApiCode(code)
+    );
+
+/** List row status label from API (prefer status_name; resolve code via entity master). */
+const resolveListStatusDisplay = (
+    record: { status_name?: string; status_code?: string },
+    statuses: EntityMasterRow[]
+): string => {
+    const fromApi = String(record.status_name || "").trim();
+    if (fromApi) return fromApi;
+    const code = String(record.status_code || "").trim();
+    if (!code) return "Draft";
+    const match = statuses.find(
+        (s) =>
+            getStatusCode(s) === code.toUpperCase() ||
+            warrantyListStatusCodesMatch(getStatusCode(s), code)
+    );
+    return match ? String(match.name || match.value_name || code) : code;
+};
+
+const findDraftWarrantyRequestStatus = (
+    statuses: EntityMasterRow[]
+) => {
+    const byCode = findWarrantyRequestStatus(statuses, "DRAFT");
+    if (byCode) return byCode;
+    return statuses.find((s) => {
+        const name = String(s.name || s.value_name || "").trim().toLowerCase();
+        return name === "draft request" || name === "draft";
+    });
+};
+
+const statusMatchesCode = (
+    statusLabel: string | undefined,
+    code: string,
+    statuses: EntityMasterRow[]
+): boolean => {
+    if (!statusLabel) return false;
+    const normalized = statusLabel.trim().toLowerCase();
+    const match = findWarrantyRequestStatus(statuses, code);
+    const names = [
+        match?.name,
+        match?.value_name,
+        code === "DRAFT" ? "draft" : undefined,
+        code === "SUBMITTED" ? "submitted request" : undefined,
+        code === "SUBMITTED" ? "submitted" : undefined,
+        code === "COMPLETED" ? "completed request" : undefined,
+        code === "COMPLETED" ? "completed" : undefined,
+        code === "REJECTED" ? "rejected request" : undefined,
+        code === "REJECTED" ? "rejected" : undefined,
+    ]
+        .filter(Boolean)
+        .map((n) => String(n).trim().toLowerCase());
+    return names.includes(normalized) || normalized === code.toLowerCase();
+};
+
+const getStatusBadgeVariant = (
+    status: ServiceRequestStatus,
+    statuses: Array<{ code?: string; value_code?: string; name?: string; value_name?: string }> = []
+) => {
+    if (statusMatchesCode(status, "DRAFT", statuses)) return "secondary";
+    if (statusMatchesCode(status, "SUBMITTED", statuses)) return "default";
+    if (statusMatchesCode(status, "COMPLETED", statuses)) return "default";
+    if (statusMatchesCode(status, "REJECTED", statuses)) return "destructive";
     switch (status) {
         case "Draft":
-            return "outline";
+            return "secondary";
         case "Submitted Request":
             return "default";
         case "Completed Request":
-            return "secondary";
+            return "default";
         case "Rejected Request":
             return "destructive";
         default:
@@ -155,26 +575,29 @@ const getStatusBadgeVariant = (status: ServiceRequestStatus) => {
 
 // Helper function to get display status based on warranty status and service action
 const getDisplayStatus = (request: ServiceRequestData): string => {
-    if (request.status === "Completed Request") {
+    const requestStatus = String(request.status);
+    const requestClaim = String(request.claim || "");
+    if (requestStatus === "Completed Request" || requestStatus === "Completed") {
         // Under Warranty with Accept claim
-        if (request.warrantyStatus === "Under Warranty" && request.claim === "Accept") {
-            if (request.serviceAction === "Repair") {
+        const action = String(request.serviceAction || "").toUpperCase();
+        if (request.warrantyStatus === "Under Warranty" && (requestClaim === "Accept" || requestClaim === "ACCEPT")) {
+            if (action === "REPAIR" || request.serviceAction === "Repair") {
                 return "Complete Repair";
-            } else if (request.serviceAction === "Replace") {
+            } else if (action === "REPLACE" || request.serviceAction === "Replace") {
                 return "Complete Replace";
             }
         }
         // Under Warranty with Reject claim (only Repair allowed, not Replace)
-        else if (request.warrantyStatus === "Under Warranty" && request.claim === "Reject") {
-            if (request.serviceAction === "Repair") {
+        else if (request.warrantyStatus === "Under Warranty" && (requestClaim === "Reject" || requestClaim === "REJECTED")) {
+            if (action === "REPAIR" || request.serviceAction === "Repair") {
                 return "Complete Repair";
             }
         }
         // Expired Warranty with NA claim
         else if (request.warrantyStatus === "Expired" && request.claim === "NA") {
-            if (request.serviceAction === "Repair") {
+            if (action === "REPAIR" || request.serviceAction === "Repair") {
                 return "Complete Repair";
-            } else if (request.serviceAction === "Replace") {
+            } else if (action === "REPLACE" || request.serviceAction === "Replace") {
                 return "Complete Replace";
             } else if (!request.serviceAction || request.serviceAction === "") {
                 return "Complete NA";
@@ -189,17 +612,119 @@ const getDisplayStatus = (request: ServiceRequestData): string => {
 // MAIN COMPONENT
 // ============================================================================
 
+const WARRANTY_SERVICE_MODULE = "Service_Center:Warranty Service";
+
 function WarrantyService() {
     const { toast } = useToast();
+    const { isMenuVisible, canCreate, canEdit, canView, canPrint } = useHasPermission();
+    const hasModuleAccess = isMenuVisible(WARRANTY_SERVICE_MODULE);
+
+    const warrantyServiceRequestStatusesFromStore = useCommonStore(
+        (state) => state.warrantyServiceRequestStatuses || []
+    );
+    const claimStatusesFromStore = useCommonStore((state) => state.claimStatuses || []);
+    const serviceActionsFromStore = useCommonStore((state) => state.serviceActions || []);
+    const currenciesFromStore = useCommonStore((state) => state.currencies || []);
+    const entityValues = useCommonStore((state) => state.entityValues || []);
+
+    const currencies = useMemo(() => {
+        if (currenciesFromStore.length > 0) return currenciesFromStore;
+        return (entityValues || []).filter((r: any) =>
+            isCurrencyEntityName(r?.entity_type_name, r?.entity_type_code)
+        );
+    }, [currenciesFromStore, entityValues]);
+
+    const repairCurrencyOptions = useMemo(
+        () =>
+            currencies
+                .filter((c: EntityMasterRow) => c.id != null || c.value_id != null)
+                .map((c: EntityMasterRow) => {
+                    const id = c.value_id ?? c.id;
+                    const label =
+                        c.code ||
+                        c.value_code ||
+                        c.name ||
+                        c.value_name ||
+                        String(id);
+                    return { value: String(id), label: String(label) };
+                }),
+        [currencies]
+    );
+
+    const warrantyServiceRequestStatuses = useMemo(() => {
+        if (warrantyServiceRequestStatusesFromStore.length > 0) {
+            return warrantyServiceRequestStatusesFromStore;
+        }
+        return (entityValues || []).filter((r: any) =>
+            isWarrantyServiceRequestStatusEntityName(r?.entity_type_name, r?.entity_type_code, r?.entity_type_id)
+        );
+    }, [warrantyServiceRequestStatusesFromStore, entityValues]);
+
+    const claimStatuses = useMemo(() => {
+        if (claimStatusesFromStore.length > 0) return claimStatusesFromStore;
+        return (entityValues || []).filter((r: any) =>
+            isClaimEntityName(r?.entity_type_name, r?.entity_type_code, r?.entity_type_id)
+        );
+    }, [claimStatusesFromStore, entityValues]);
+
+    const isCommonLoaded = useCommonStore((state) => state.isLoaded);
+    const warrantyStatusesFromStore = useCommonStore((state) => state.warrantyStatuses || []);
+    const warrantyStatuses = useMemo(() => {
+        if (warrantyStatusesFromStore.length > 0) return warrantyStatusesFromStore;
+        return (entityValues || []).filter((r: any) =>
+            isWarrantyStatusEntityName(r?.entity_type_name, r?.entity_type_code, r?.entity_type_id)
+        );
+    }, [warrantyStatusesFromStore, entityValues]);
+
+    const serviceActions = useMemo(() => {
+        if (serviceActionsFromStore.length > 0) return serviceActionsFromStore;
+        return (entityValues || []).filter((r: any) =>
+            isSelectActionEntityName(r?.entity_type_name, r?.entity_type_code, r?.entity_type_id)
+        );
+    }, [serviceActionsFromStore, entityValues]);
+
+    const serviceActionOptions = useMemo(() => serviceActions, [serviceActions]);
+
+    const repairActionCode = useMemo(
+        () => findServiceActionCodeFromEntities(serviceActionOptions, "REPAIR"),
+        [serviceActionOptions]
+    );
+    const replaceActionCode = useMemo(
+        () => findServiceActionCodeFromEntities(serviceActionOptions, "REPLACE"),
+        [serviceActionOptions]
+    );
+
+    const isRequestStatus = (statusLabel: string | undefined, code: string) =>
+        statusMatchesCode(statusLabel, code, warrantyServiceRequestStatuses);
+
+    const isClaimCode = (claim: string | undefined, code: string) =>
+        claimMatchesCode(claim, code, claimStatuses);
+
+    /** List API status filter uses dropdown label (e.g. Draft Request), same as status_name on records. */
+    const resolveListStatusFilter = (value: string): string | undefined => {
+        if (value === "All" || !value) return undefined;
+        const selected = warrantyServiceRequestStatuses.find(
+            (s) => getStatusId(s) === String(value).trim()
+        );
+        if (selected) {
+            const filterName = String(selected.name || selected.value_name || "").trim();
+            if (filterName) return filterName;
+            const code = getStatusCode(selected);
+            return code || undefined;
+        }
+        return String(value).trim() || undefined;
+    };
 
     // State with mock data initialization
-    const [serviceRequests, setServiceRequests] = useState<ServiceRequestData[]>(() => {
-        return getDefaultMockData();
-    });
+    const [serviceRequests, setServiceRequests] = useState<ServiceRequestData[]>([]);
+    const [isListLoading, setIsListLoading] = useState(false);
+    const [actionLoading, setActionLoading] = useState<string | null>(null);
+    const [totalRecords, setTotalRecords] = useState(0);
+    const [totalPages, setTotalPages] = useState(1);
 
     const [searchTerm, setSearchTerm] = useState("");
     const [filterDate, setFilterDate] = useState<Date | undefined>(undefined);
-    const [filterStatus, setFilterStatus] = useState<string>("Draft");
+    const [filterStatus, setFilterStatus] = useState<string>("");
     const [currentPage, setCurrentPage] = useState(1);
     const [itemsPerPage, setItemsPerPage] = useState(10);
 
@@ -207,6 +732,137 @@ function WarrantyService() {
     const [isViewModalOpen, setIsViewModalOpen] = useState(false);
     const [editingId, setEditingId] = useState<number | null>(null);
     const [viewingRequest, setViewingRequest] = useState<ServiceRequestData | null>(null);
+    const [serialDetailsLoaded, setSerialDetailsLoaded] = useState(false);
+    const [repairItemOptions, setRepairItemOptions] = useState<MaterialRequisitionItemRecord[]>([]);
+    const [isRepairItemsLoading, setIsRepairItemsLoading] = useState(false);
+
+    useEffect(() => {
+        if (!isFormModalOpen) return;
+        let cancelled = false;
+        (async () => {
+            setIsRepairItemsLoading(true);
+            try {
+                const res = await serviceCenterApi.getItemsFromMaterialRequisitions();
+                if (!cancelled && res.isSuccessful && res.data?.records) {
+                    setRepairItemOptions(res.data.records);
+                } else if (!cancelled) {
+                    setRepairItemOptions([]);
+                }
+            } catch (error) {
+                console.error("Failed to fetch repair items:", error);
+                if (!cancelled) setRepairItemOptions([]);
+            } finally {
+                if (!cancelled) setIsRepairItemsLoading(false);
+            }
+        })();
+        return () => {
+            cancelled = true;
+        };
+    }, [isFormModalOpen]);
+
+    const repairItemSelectOptions = useMemo(
+        () =>
+            repairItemOptions.map((opt) => ({
+                value: String(opt.item_id),
+                label: `${opt.item_name || ""} ${opt.item_code || ""}`.trim(),
+                primaryText: String(opt.item_name || "").trim(),
+                secondaryText: String(opt.item_code || "").trim(),
+            })),
+        [repairItemOptions]
+    );
+
+    // Fetch data from API
+    const fetchWarrantyServices = async (page = 1) => {
+        try {
+            setIsListLoading(true);
+            const listStatus = resolveListStatusFilter(filterStatus);
+            const response = await serviceCenterApi.getWarrantyServiceList({
+                page,
+                limit: itemsPerPage,
+                text_search: searchTerm || undefined,
+                date: filterDate ? format(filterDate, "yyyy-MM-dd") : undefined,
+                status: listStatus,
+            });
+
+            if (response.isSuccessful && response.data) {
+                const records = response.data.records || [];
+
+                const mappedRecords: ServiceRequestData[] = records.map(record => ({
+                    id: record.warranty_claim_id,
+                    serviceRequestCode: record.service_code,
+                    clientName: record.consumer_name,
+                    serialNumber: record.serial_number,
+                    itemName: "", // not in list api
+                    batch: "", // not in list api
+                    productionDate: "", // not in list api
+                    invoiceDate: "", // not in list api
+                    warrantyEndDate: "", // not in list api
+                    warrantyStatus: (record.warranty_status_name || "Under Warranty") as WarrantyStatus,
+                    complaintDescription: "", // not in list api
+                    claim: resolveClaimToCode(
+                        record.claim_status_code || record.claim_status_name || "",
+                        claimStatuses
+                    ) as ClaimStatus,
+                    reason: "", // not in list api
+                    status: resolveListStatusDisplay(record, warrantyServiceRequestStatuses) as ServiceRequestStatus,
+                    serviceAction: "", // not in list api
+                    repairItems: [], // not in list api
+                    replaceItems: [], // not in list api
+                    newSerialNumber: "", // not in list api
+                    labourCost: 0, // not in list api
+                    labourBillable: false, // not in list api
+                    serviceDate: record.service_date,
+                    isPaidService: "" // not in list api
+                }));
+
+                setServiceRequests(mappedRecords);
+                const paginationMeta = response.data.pagination as {
+                    totalRecords?: number;
+                    totalCount?: number;
+                    totalPages?: number;
+                };
+                setTotalRecords(
+                    paginationMeta.totalRecords ??
+                        paginationMeta.totalCount ??
+                        mappedRecords.length
+                );
+                setTotalPages(response.data.pagination.totalPages || 1);
+            }
+        } catch (error) {
+            console.error("Error fetching warranty services:", error);
+            toast({
+                title: "Error",
+                description: "Failed to fetch warranty service requests",
+                variant: "destructive", duration: TOAST_DURATION
+            });
+        } finally {
+            setIsListLoading(false);
+        }
+    };
+
+    // Default list filter to "Draft Request" from entity values (same pattern as WH Receive)
+    useEffect(() => {
+        if (filterStatus !== "") return;
+
+        if (warrantyServiceRequestStatuses.length > 0) {
+            const draftStatus = findDraftWarrantyRequestStatus(warrantyServiceRequestStatuses);
+            setFilterStatus(draftStatus ? getStatusId(draftStatus) : "All");
+            return;
+        }
+
+        if (isCommonLoaded) {
+            setFilterStatus("All");
+        }
+    }, [warrantyServiceRequestStatuses, isCommonLoaded, filterStatus]);
+
+    // Consolidated fetch effect with debounce for search and filters
+    useEffect(() => {
+        if (filterStatus === "") return;
+        const timer = setTimeout(() => {
+            fetchWarrantyServices(currentPage);
+        }, 300);
+        return () => clearTimeout(timer);
+    }, [currentPage, itemsPerPage, searchTerm, filterDate, filterStatus]);
 
     const [formData, setFormData] = useState<Partial<ServiceRequestData>>({
         clientName: "",
@@ -225,15 +881,71 @@ function WarrantyService() {
         replaceItems: [],
         labourCost: 0,
         labourBillable: false,
-        serviceDate: format(new Date(), "yyyy-MM-dd") // Auto-generate today's date
+        serviceDate: format(new Date(), "yyyy-MM-dd"), // Auto-generate today's date
+        isPaidService: ""
     });
 
+    /** Repair section currency (local UI state; sent as currency_id on Complete when Repair). */
+    const [repairCurrencyId, setRepairCurrencyId] = useState("");
+
+    const repairCurrencySymbol = useMemo(() => {
+        const match = currencies.find(
+            (c: EntityMasterRow) => String(c.value_id ?? c.id) === String(repairCurrencyId)
+        );
+        const code =
+            match?.code ||
+            match?.value_code ||
+            match?.name ||
+            match?.value_name ||
+            "";
+        return getCurrencySymbol(String(code));
+    }, [currencies, repairCurrencyId]);
+
+    const claimOptionsForForm = useMemo(() => claimStatuses, [claimStatuses]);
+
+    const usableServiceActions = useMemo(() => {
+        if (allowsReplaceServiceAction(formData.warrantyStatus, formData.claim, claimStatuses)) {
+            return serviceActionOptions;
+        }
+        if (!replaceActionCode) return serviceActionOptions;
+        return serviceActionOptions.filter((a) => getServiceActionCode(a) !== replaceActionCode);
+    }, [serviceActionOptions, formData.warrantyStatus, formData.claim, claimStatuses, replaceActionCode]);
+
+    // Default to Repair when Replace is not allowed (Expired, Rejected, etc.)
+    useEffect(() => {
+        if (!repairActionCode) return;
+        if (allowsReplaceServiceAction(formData.warrantyStatus, formData.claim, claimStatuses)) return;
+
+        const currentCode = resolveServiceActionToCode(formData.serviceAction, serviceActionOptions);
+        if (currentCode === repairActionCode) return;
+
+        setFormData((prev) => ({
+            ...prev,
+            serviceAction: repairActionCode as ServiceAction,
+            labourBillable: isExpiredWarrantyStatus(prev.warrantyStatus) ? true : prev.labourBillable,
+            newSerialNumber:
+                replaceActionCode && currentCode === replaceActionCode ? "" : prev.newSerialNumber,
+            replaceItems: [],
+        }));
+    }, [
+        formData.warrantyStatus,
+        formData.claim,
+        formData.serviceAction,
+        repairActionCode,
+        replaceActionCode,
+        serviceActionOptions,
+        claimStatuses,
+    ]);
 
     // Reset form
     const resetForm = () => {
         setFormData({
             clientName: "",
             serialNumber: "",
+            itemCode: "",
+            customerId: undefined,
+            batchId: null,
+            warrantyStatusId: undefined,
             batch: "",
             productionDate: "",
             invoiceDate: "",
@@ -250,15 +962,129 @@ function WarrantyService() {
             replaceItems: [],
             labourCost: 0,
             labourBillable: false,
-            serviceDate: format(new Date(), "yyyy-MM-dd") // Auto-generate today's date
+            serviceDate: format(new Date(), "yyyy-MM-dd"), // Auto-generate today's date
+            isPaidService: ""
         });
+        setRepairCurrencyId("");
         setEditingId(null);
+        setSerialDetailsLoaded(false);
+    };
+
+    /** Read serial lookup API fields (backend may use snake_case or title keys). */
+    const pickSerialField = (data: Record<string, unknown>, ...keys: string[]): string => {
+        for (const key of keys) {
+            const value = data[key];
+            if (value != null && String(value).trim() !== "") {
+                return String(value).trim();
+            }
+        }
+        return "";
+    };
+
+    const mapWarrantyStatusFromApi = (
+        statusName: string,
+        statusCode: string,
+        warrantyEndDate: string
+    ): WarrantyStatus => {
+        const code = normalizeWarrantyStatusKey(statusCode);
+        const name = statusName.trim().toLowerCase();
+        if (code === "UNDER_WARRANTY" || name === "under warranty") return "Under Warranty";
+        if (code === "EXPIRE" || code === "EXPIRED" || code === "OVERDUE" || name === "expire" || name === "expired" || name === "overdue") {
+            return "Expired";
+        }
+        if (statusName) return statusName as WarrantyStatus;
+        return calculateWarrantyStatus(warrantyEndDate);
+    };
+
+    const mapSerialNumberApiToForm = (raw: Record<string, unknown>) => {
+        const warrantyEndDate = parseDmyDate(
+            pickSerialField(raw, "warranty_end_date", "Warranty End Date", "warrantyEndDate")
+        );
+        const warrantyStatusName = pickSerialField(raw, "warranty_status_name");
+        const warrantyStatusCode = pickSerialField(raw, "warranty_status_code");
+        const warrantyStatusId =
+            raw.warranty_status_id != null && raw.warranty_status_id !== ""
+                ? Number(raw.warranty_status_id)
+                : undefined;
+
+        return {
+            itemCode: pickSerialField(raw, "item_code"),
+            itemName: pickSerialField(raw, "item_name", "itemName", "Item Name"),
+            customerId:
+                raw.customer_id != null && raw.customer_id !== ""
+                    ? Number(raw.customer_id)
+                    : undefined,
+            clientName: pickSerialField(
+                raw,
+                "customer_name",
+                "consumer_name",
+                "customerName",
+                "Consumer Name",
+                "Customer Name"
+            ),
+            batchId:
+                raw.batch_id != null && raw.batch_id !== ""
+                    ? Number(raw.batch_id)
+                    : null,
+            batch: pickSerialField(raw, "batch", "Batch", "batch_no", "batch_code"),
+            productionDate: parseDmyDate(
+                pickSerialField(raw, "production_date", "production_plan", "Production Date", "productionDate")
+            ),
+            invoiceDate: parseDmyDate(
+                pickSerialField(raw, "invoice_date", "Invoice Date", "invoiceDate")
+            ),
+            warrantyEndDate,
+            warrantyStatusId: Number.isFinite(warrantyStatusId) ? warrantyStatusId : undefined,
+            warrantyStatus: mapWarrantyStatusFromApi(
+                warrantyStatusName,
+                warrantyStatusCode,
+                warrantyEndDate
+            ),
+        };
+    };
+
+    const resolveWarrantyStatusId = (data: Partial<ServiceRequestData>): number | null =>
+        getWarrantyStatusIdFromEntities(data.warrantyStatus, warrantyStatuses, data.warrantyStatusId);
+
+    // Parse regional DMY date strings to ISO YYYY-MM-DD
+    const parseDmyDate = (dateStr: string | null | undefined): string => {
+        if (!dateStr) return "";
+        if (/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) return dateStr;
+        
+        const parts = dateStr.split(/[/\-]/);
+        if (parts.length === 3) {
+            if (parts[2].length === 4) {
+                const p0 = parts[0].padStart(2, '0');
+                const p1 = parts[1].padStart(2, '0');
+                const p2 = parts[2];
+                if (parseInt(p1, 10) > 12) {
+                    // MM/DD/YYYY
+                    return `${p2}-${p0}-${p1}`;
+                } else {
+                    // DD/MM/YYYY
+                    return `${p2}-${p1}-${p0}`;
+                }
+            } else if (parts[0].length === 4) {
+                // YYYY/MM/DD
+                return `${parts[0]}-${parts[1].padStart(2, '0')}-${parts[2].padStart(2, '0')}`;
+            }
+        }
+        
+        try {
+            const parsed = new Date(dateStr);
+            if (!isNaN(parsed.getTime())) {
+                return parsed.toISOString().split('T')[0];
+            }
+        } catch {}
+        
+        return dateStr;
     };
 
     // Handle serial number input with comprehensive error handling
-    const handleSerialNumberChange = (serialNumber: string) => {
+    const handleSerialNumberChange = async (serialNumber: string) => {
         try {
             if (!serialNumber) {
+                setSerialDetailsLoaded(false);
                 setFormData({
                     ...formData,
                     serialNumber: "",
@@ -279,30 +1105,38 @@ function WarrantyService() {
                 return;
             }
 
-            const serialData = MOCK_SERIAL_NUMBERS.find(s => s?.serialNumber === serialNumber);
+            setActionLoading("serial");
+            const response = await serviceCenterApi.getDetailFromSerialNumber(serialNumber);
             
-            if (serialData) {
-                const warrantyEndDate = safeDateString(serialData.warrantyEndDate);
-                const warrantyStatus = calculateWarrantyStatus(warrantyEndDate);
+            if (response.isSuccessful && response.data) {
+                const serialData = response.data as Record<string, unknown>;
+                const mapped = mapSerialNumberApiToForm(serialData);
 
+                setSerialDetailsLoaded(true);
                 setFormData({
                     ...formData,
-                    itemName: serialData.itemName || "",
-                    serialNumber: serialData.serialNumber || serialNumber,
-                    batch: serialData.batch || "",
-                    productionDate: safeDateString(serialData.productionDate),
-                    invoiceDate: safeDateString(serialData.invoiceDate),
-                    warrantyEndDate: warrantyEndDate,
-                    warrantyStatus: warrantyStatus,
-                    clientName: serialData.clientName || "",
+                    serialNumber,
+                    itemCode: mapped.itemCode,
+                    itemName: mapped.itemName,
+                    customerId: mapped.customerId,
+                    clientName: mapped.clientName,
+                    batchId: mapped.batchId,
+                    batch: mapped.batch,
+                    productionDate: mapped.productionDate,
+                    invoiceDate: mapped.invoiceDate,
+                    warrantyEndDate: mapped.warrantyEndDate,
+                    warrantyStatusId: mapped.warrantyStatusId,
+                    warrantyStatus: mapped.warrantyStatus,
                     claim: "",
                     reason: "",
+                    isPaidService: mapped.warrantyStatus === "Expired" ? formData.isPaidService || "" : "",
                     repairItems: formData.repairItems || [],
                     replaceItems: formData.replaceItems || [],
                     labourCost: formData.labourCost || 0,
                     labourBillable: formData.labourBillable || false
                 });
             } else {
+                setSerialDetailsLoaded(false);
                 setFormData({
                     ...formData,
                     serialNumber: serialNumber,
@@ -320,30 +1154,48 @@ function WarrantyService() {
                     labourCost: formData.labourCost || 0,
                     labourBillable: formData.labourBillable || false
                 });
+                toast({
+                    title: "Not found",
+                    description: response.message || "No details found for this serial number",
+                    variant: "destructive", duration: TOAST_DURATION
+                });
             }
         } catch (e) {
             console.error('Error handling serial number change:', e);
             toast({
                 title: "Error",
-                description: "Failed to load serial number data",
-                variant: "destructive"
+                description: "Failed to load serial number data from server",
+                variant: "destructive", duration: TOAST_DURATION
             });
+        } finally {
+            setActionLoading(null);
         }
     };
 
     // Handle claim change
-    const handleClaimChange = (claim: ClaimStatus) => {
-        // For Under Warranty + Reject, keep service action (allow repair/replace)
-        // For other Reject cases, clear service action
-        const shouldClearAction = claim === "Reject" && formData.warrantyStatus !== "Under Warranty";
-        
+    const handleClaimChange = (claim: string) => {
+        const claimCode = resolveClaimToCode(claim, claimStatuses);
+        const shouldClearAction = isClaimCode(claimCode, "REJECTED") && formData.warrantyStatus !== "Under Warranty";
+        const allowReplace = allowsReplaceServiceAction(formData.warrantyStatus, claimCode, claimStatuses);
+        const nextServiceAction = shouldClearAction
+            ? ""
+            : !allowReplace && repairActionCode
+              ? repairActionCode
+              : formData.serviceAction;
+
         setFormData({
             ...formData,
-            claim,
-            reason: claim === "Reject" ? formData.reason : "",
-            serviceAction: shouldClearAction ? "" : formData.serviceAction,
+            claim: claimCode as ClaimStatus,
+            reason: isClaimCode(claimCode, "REJECTED") ? formData.reason : "",
+            serviceAction: nextServiceAction as ServiceAction,
             repairItems: shouldClearAction ? [] : formData.repairItems,
-            newSerialNumber: shouldClearAction ? "" : formData.newSerialNumber
+            newSerialNumber: shouldClearAction || !allowReplace ? "" : formData.newSerialNumber,
+            replaceItems: !allowReplace ? [] : formData.replaceItems,
+            isPaidService: isClaimCode(claimCode, "REJECTED") ? formData.isPaidService : "",
+            labourBillable:
+                isExpiredWarrantyStatus(formData.warrantyStatus) && repairActionCode
+                    ? true
+                    : formData.labourBillable,
         });
     };
 
@@ -367,6 +1219,21 @@ function WarrantyService() {
         setFormData({ ...formData, repairItems: formData.repairItems?.filter(item => item.id !== id) });
     };
 
+    const handleRepairItemSelect = (rowId: number, itemIdStr: string) => {
+        const opt = repairItemOptions.find((o) => String(o.item_id) === itemIdStr);
+        const updatedItems = formData.repairItems?.map((item) => {
+            if (item.id !== rowId) return item;
+            return {
+                ...item,
+                item_id: opt ? Number(opt.item_id) : undefined,
+                itemCode: opt?.item_code,
+                itemName: opt?.item_name || "",
+                stock: opt ? getMrItemStockQty(opt) : 0,
+            };
+        });
+        setFormData({ ...formData, repairItems: updatedItems });
+    };
+
     const handleRepairItemChange = (id: number, field: keyof RepairItem, value: any) => {
         const updatedItems = formData.repairItems?.map(item => {
             if (item.id === id) {
@@ -384,12 +1251,7 @@ function WarrantyService() {
                     updatedValue = cleanedValue;
                 }
 
-                const updated = { ...item, [field]: updatedValue };
-                // Auto-update stock number when item name changes
-                if (field === "itemName" && value) {
-                    updated.stock = MOCK_STOCK_DATA[value] || 0;
-                }
-                return updated;
+                return { ...item, [field]: updatedValue };
             }
             return item;
         });
@@ -402,12 +1264,12 @@ function WarrantyService() {
 
 
     // Save as Draft
-    const handleSaveDraft = () => {
+    const handleSaveDraft = async () => {
         if (!formData.clientName?.trim()) {
             toast({
                 title: "Validation Error",
                 description: "Consumer name is required",
-                variant: "destructive"
+                variant: "destructive", duration: TOAST_DURATION
             });
             return;
         }
@@ -416,7 +1278,7 @@ function WarrantyService() {
             toast({
                 title: "Validation Error",
                 description: "Serial number is required",
-                variant: "destructive"
+                variant: "destructive", duration: TOAST_DURATION
             });
             return;
         }
@@ -425,54 +1287,126 @@ function WarrantyService() {
             toast({
                 title: "Validation Error",
                 description: "Complaint description is required",
-                variant: "destructive"
+                variant: "destructive", duration: TOAST_DURATION
             });
             return;
         }
 
-        const requestData: ServiceRequestData = {
-            id: editingId || Date.now(),
-            serviceRequestCode: editingId ? formData.serviceRequestCode : getNextServiceRequestCode(serviceRequests),
-            clientName: formData.clientName || "",
-            serialNumber: formData.serialNumber || "",
-            batch: formData.batch || "",
-            productionDate: formData.productionDate || "",
-            invoiceDate: formData.invoiceDate || "",
-            warrantyEndDate: formData.warrantyEndDate || "",
-            warrantyStatus: formData.warrantyStatus || "Under Warranty",
-            complaintDescription: formData.complaintDescription || "",
-            claim: formData.claim || "",
-            reason: formData.reason || "",
-            status: "Draft",
-            serviceAction: formData.serviceAction || "",
-            itemName: formData.itemName || "",
-            newSerialNumber: formData.newSerialNumber || "",
-            repairItems: formData.repairItems || [],
-            replaceItems: formData.replaceItems || [],
-            labourCost: formData.labourCost || 0,
-            labourBillable: formData.labourBillable || false,
-            serviceDate: formData.serviceDate || ""
-        };
-
-        if (editingId) {
-            setServiceRequests(serviceRequests.map(req => req.id === editingId ? requestData : req));
-            toast({ title: "Success", description: "Service request saved as draft" });
-        } else {
-            setServiceRequests([requestData, ...serviceRequests]);
-            toast({ title: "Success", description: "Service request saved as draft" });
+        if (!isExpiredWarrantyStatus(formData.warrantyStatus) && !formData.claim) {
+            toast({
+                title: "Validation Error",
+                description: "Claim status is required",
+                variant: "destructive", duration: TOAST_DURATION,
+            });
+            return;
         }
 
-        setIsFormModalOpen(false);
-        resetForm();
+        if (isExpiredWarrantyStatus(formData.warrantyStatus) && !formData.isPaidService) {
+            toast({
+                title: "Validation Error",
+                description: "Paid service selection is required",
+                variant: "destructive", duration: TOAST_DURATION,
+            });
+            return;
+        }
+
+        const warrantyStatusId = resolveWarrantyStatusId(formData);
+        if (warrantyStatusId == null) {
+            toast({
+                title: "Validation Error",
+                description: "Warranty status could not be resolved. Please reload the page or contact support.",
+                variant: "destructive", duration: TOAST_DURATION,
+            });
+            return;
+        }
+
+        const claimStatusId = getClaimStatusIdForPayload(formData.warrantyStatus, formData.claim, claimStatuses);
+        if (!isExpiredWarrantyStatus(formData.warrantyStatus) && claimStatusId == null) {
+            toast({
+                title: "Validation Error",
+                description: "Claim status could not be resolved from master data.",
+                variant: "destructive", duration: TOAST_DURATION,
+            });
+            return;
+        }
+
+        const draftPayload = {
+            service_date: formData.serviceDate || format(new Date(), "yyyy-MM-dd"),
+            serial_number: formData.serialNumber || "",
+            invoice_date: formData.invoiceDate || null,
+            warranty_end_date: formData.warrantyEndDate || null,
+            complaint_description: formData.complaintDescription || "",
+            warranty_status_id: warrantyStatusId,
+            claim_status_id: claimStatusId,
+            paid_services: getPaidServicesForPayload(
+                formData.warrantyStatus,
+                formData.claim,
+                formData.isPaidService,
+                claimStatuses
+            ),
+            rejection_remarks:
+                !isExpiredWarrantyStatus(formData.warrantyStatus) && isClaimCode(formData.claim, "REJECTED")
+                    ? formData.reason || null
+                    : null,
+            status_code: getStatusCode(findWarrantyRequestStatus(warrantyServiceRequestStatuses, "DRAFT")) || "DRAFT",
+        };
+
+        try {
+            setActionLoading("save-draft");
+            if (editingId) {
+                const response = await serviceCenterApi.updateWarrantyService(editingId, draftPayload);
+                if (response.isSuccessful) {
+                    toast({
+                        ...crudSuccessToast,
+                        title: "Success",
+                        description: response.message || "Service request saved as draft",
+                    });
+                    fetchWarrantyServices(1);
+                    setIsFormModalOpen(false);
+                    resetForm();
+                } else {
+                    toast({
+                        title: "Error",
+                        description: response.message || "Failed to save draft",
+                        variant: "destructive", duration: TOAST_DURATION,
+                    });
+                    return;
+                }
+            } else {
+                const response = await serviceCenterApi.createWarrantyService(draftPayload);
+                if (response.isSuccessful) {
+                    toast({ ...crudSuccessToast, title: "Success", description: response.message || "Service request saved as draft" });
+                    fetchWarrantyServices(1);
+                    setIsFormModalOpen(false);
+                    resetForm();
+                } else {
+                    toast({
+                        title: "Error",
+                        description: response.message || "Failed to save draft",
+                        variant: "destructive", duration: TOAST_DURATION,
+                    });
+                    return;
+                }
+            }
+        } catch (e) {
+            console.error('Error saving draft:', e);
+            toast({
+                title: "Error",
+                description: getApiErrorMessage(e, "Failed to save service request draft"),
+                variant: "destructive", duration: TOAST_DURATION
+            });
+        } finally {
+            setActionLoading(null);
+        }
     };
 
     // Save changes (for editing Submitted requests)
-    const handleSaveChanges = () => {
+    const handleSaveChanges = async () => {
         if (!formData.clientName?.trim()) {
             toast({
                 title: "Validation Error",
                 description: "Consumer name is required",
-                variant: "destructive"
+                variant: "destructive", duration: TOAST_DURATION
             });
             return;
         }
@@ -481,7 +1415,7 @@ function WarrantyService() {
             toast({
                 title: "Validation Error",
                 description: "Serial number is required",
-                variant: "destructive"
+                variant: "destructive", duration: TOAST_DURATION
             });
             return;
         }
@@ -490,7 +1424,7 @@ function WarrantyService() {
             toast({
                 title: "Validation Error",
                 description: "Complaint description is required",
-                variant: "destructive"
+                variant: "destructive", duration: TOAST_DURATION
             });
             return;
         }
@@ -516,22 +1450,53 @@ function WarrantyService() {
             replaceItems: formData.replaceItems || [],
             labourCost: formData.labourCost || 0,
             labourBillable: formData.labourBillable || false,
-            serviceDate: formData.serviceDate || ""
+            serviceDate: formData.serviceDate || "",
+            isPaidService: formData.isPaidService || ""
         };
 
-        setServiceRequests(serviceRequests.map(req => req.id === editingId ? requestData : req));
-        toast({ title: "Success", description: "Changes saved successfully" });
-        setIsFormModalOpen(false);
-        resetForm();
+        try {
+            setActionLoading("save-changes");
+            const statusCode =
+                statusMatchesCode(formData.status, "DRAFT", warrantyServiceRequestStatuses)
+                    ? getStatusCode(findWarrantyRequestStatus(warrantyServiceRequestStatuses, "DRAFT")) || "DRAFT"
+                    : getStatusCode(findWarrantyRequestStatus(warrantyServiceRequestStatuses, "SUBMITTED")) || "SUBMITTED";
+
+            const payload = {
+                complaint_description: formData.complaintDescription || "",
+                claim_status_id: getClaimStatusId(formData.claim || "", claimStatuses),
+                rejection_remarks: isClaimCode(formData.claim, "REJECTED") ? (formData.reason || null) : null,
+                status_code: statusCode
+            };
+
+            const response = await serviceCenterApi.updateWarrantyService(editingId!, payload);
+            if (response.isSuccessful) {
+                toast({ ...crudSuccessToast, title: "Success", description: response.message || "Changes saved successfully" });
+                fetchWarrantyServices(1);
+            } else {
+                toast({ title: "Error", description: response.message || "Failed to update request", variant: "destructive", duration: TOAST_DURATION });
+            }
+
+            setIsFormModalOpen(false);
+            resetForm();
+        } catch (e) {
+            console.error('Error saving changes:', e);
+            toast({
+                title: "Error",
+                description: getApiErrorMessage(e, "Failed to update request on server"),
+                variant: "destructive", duration: TOAST_DURATION
+            });
+        } finally {
+            setActionLoading(null);
+        }
     };
 
     // Submit service request
-    const handleSubmit = () => {
+    const handleSubmit = async () => {
         if (!formData.clientName?.trim()) {
             toast({
                 title: "Validation Error",
                 description: "Consumer name is required",
-                variant: "destructive"
+                variant: "destructive", duration: TOAST_DURATION
             });
             return;
         }
@@ -540,16 +1505,17 @@ function WarrantyService() {
             toast({
                 title: "Validation Error",
                 description: "Serial number is required",
-                variant: "destructive"
+                variant: "destructive", duration: TOAST_DURATION
             });
             return;
         }
 
-        if (!formData.batch) {
+        // Batch is only required for new requests (proves serial was searched). Edit already has a saved serial.
+        if (!editingId && !formData.batch && !(serialDetailsLoaded && formData.itemName)) {
             toast({
                 title: "Validation Error",
                 description: "Please select a valid serial number from the list",
-                variant: "destructive"
+                variant: "destructive", duration: TOAST_DURATION
             });
             return;
         }
@@ -558,192 +1524,352 @@ function WarrantyService() {
             toast({
                 title: "Validation Error",
                 description: "Complaint description is required",
-                variant: "destructive"
+                variant: "destructive", duration: TOAST_DURATION
             });
             return;
         }
 
-        if (!formData.claim) {
+        if (!isExpiredWarrantyStatus(formData.warrantyStatus) && !formData.claim) {
             toast({
                 title: "Validation Error",
                 description: "Claim status is required",
-                variant: "destructive"
+                variant: "destructive", duration: TOAST_DURATION
             });
             return;
         }
 
-        // Rejection reason is now optional
-        // if (formData.claim === "Reject" && !formData.reason?.trim()) {
-        //     toast({
-        //         title: "Validation Error",
-        //         description: "Reason is required when claim is rejected",
-        //         variant: "destructive"
-        //     });
-        //     return;
-        // }
-
-        const status: ServiceRequestStatus = 
-            formData.claim === "Accept" ? "Submitted Request" : 
-            formData.claim === "NA" ? "Submitted Request" : 
-            formData.claim === "Reject" && formData.warrantyStatus === "Under Warranty" ? "Submitted Request" :
-            "Rejected Request";
-
-        const requestData: ServiceRequestData = {
-            id: editingId || Date.now(),
-            serviceRequestCode: editingId ? formData.serviceRequestCode : getNextServiceRequestCode(serviceRequests),
-            clientName: formData.clientName!,
-            serialNumber: formData.serialNumber!,
-            batch: formData.batch!,
-            productionDate: formData.productionDate!,
-            invoiceDate: formData.invoiceDate!,
-            warrantyEndDate: formData.warrantyEndDate!,
-            warrantyStatus: formData.warrantyStatus!,
-            complaintDescription: formData.complaintDescription!,
-            claim: formData.claim!,
-            reason: formData.reason || "",
-            status: status,
-            serviceAction: formData.serviceAction || "",
-            itemName: formData.itemName || "",
-            newSerialNumber: formData.newSerialNumber || "",
-            repairItems: formData.repairItems || [],
-            replaceItems: formData.replaceItems || [],
-            labourCost: formData.labourCost || 0,
-            labourBillable: formData.labourBillable || false,
-            serviceDate: formData.serviceDate || ""
-        };
-
-        if (editingId) {
-            setServiceRequests(serviceRequests.map(req => req.id === editingId ? requestData : req));
-            toast({ title: "Success", description: "Service request submitted successfully" });
-        } else {
-            setServiceRequests([requestData, ...serviceRequests]);
-            toast({ title: "Success", description: "Service request submitted successfully" });
+        if (isExpiredWarrantyStatus(formData.warrantyStatus) && !formData.isPaidService) {
+            toast({
+                title: "Validation Error",
+                description: "Paid service selection is required",
+                variant: "destructive", duration: TOAST_DURATION
+            });
+            return;
         }
 
-        setIsFormModalOpen(false);
-        resetForm();
+        const claimStatusId = getClaimStatusIdForPayload(formData.warrantyStatus, formData.claim, claimStatuses);
+        if (!isExpiredWarrantyStatus(formData.warrantyStatus) && claimStatusId == null) {
+            toast({
+                title: "Validation Error",
+                description: "Claim status is required",
+                variant: "destructive", duration: TOAST_DURATION
+            });
+            return;
+        }
+
+        const rejectionRemarks =
+            !isExpiredWarrantyStatus(formData.warrantyStatus) && isClaimCode(formData.claim, "REJECTED")
+                ? formData.reason?.trim() || null
+                : null;
+
+        try {
+            setActionLoading("submit");
+            if (editingId) {
+                const response = await serviceCenterApi.updateWarrantyService(editingId, {
+                    complaint_description: formData.complaintDescription || "",
+                    claim_status_id: claimStatusId,
+                    rejection_remarks: rejectionRemarks,
+                    status_code: "SUBMITTED REQUEST",
+                });
+                if (response.isSuccessful) {
+                    toast({
+                        ...crudSuccessToast,
+                        title: "Success",
+                        description: response.message || "Service request submitted successfully",
+                    });
+                    fetchWarrantyServices(1);
+                } else {
+                    toast({
+                        title: "Error",
+                        description: response.message || "Failed to submit request",
+                        variant: "destructive", duration: TOAST_DURATION,
+                    });
+                    return;
+                }
+            } else {
+                const warrantyStatusId = resolveWarrantyStatusId(formData);
+                if (warrantyStatusId == null) {
+                    toast({
+                        title: "Validation Error",
+                        description: "Warranty status is required",
+                        variant: "destructive", duration: TOAST_DURATION,
+                    });
+                    return;
+                }
+                const response = await serviceCenterApi.createWarrantyService({
+                    service_date: formData.serviceDate || format(new Date(), "yyyy-MM-dd"),
+                    serial_number: formData.serialNumber || "",
+                    invoice_date: formData.invoiceDate || null,
+                    warranty_end_date: formData.warrantyEndDate || null,
+                    complaint_description: formData.complaintDescription || "",
+                    warranty_status_id: warrantyStatusId,
+                    claim_status_id: claimStatusId,
+                    paid_services: getPaidServicesForPayload(
+                        formData.warrantyStatus,
+                        formData.claim,
+                        formData.isPaidService,
+                        claimStatuses
+                    ),
+                    rejection_remarks: rejectionRemarks,
+                    status_code: "SUBMITTED REQUEST",
+                });
+                if (response.isSuccessful) {
+                    toast({
+                        ...crudSuccessToast,
+                        title: "Success",
+                        description: response.message || "Service request submitted successfully",
+                    });
+                    fetchWarrantyServices(1);
+                } else {
+                    toast({
+                        title: "Error",
+                        description: response.message || "Failed to submit request",
+                        variant: "destructive", duration: TOAST_DURATION,
+                    });
+                    return;
+                }
+            }
+            setIsFormModalOpen(false);
+            resetForm();
+        } catch (e) {
+            console.error('Error submitting service request:', e);
+            toast({
+                title: "Error",
+                description: getApiErrorMessage(e, "Failed to submit service request"),
+                variant: "destructive", duration: TOAST_DURATION
+            });
+        } finally {
+            setActionLoading(null);
+        }
     };
 
 
-    // Handle edit with safe data loading
-    const handleEdit = (request: ServiceRequestData) => {
+    // Map backend detail to ServiceRequestData interface
+    const mapDetailToServiceRequest = (detail: any): ServiceRequestDataWithCurrency => {
+        const action = detail.actions?.[0];
+        const currencyId =
+            action?.currency_id ??
+            detail?.currency_id ??
+            undefined;
+        const serviceAction = resolveServiceActionToCode(
+            action?.service_action_code || action?.service_action_name || "",
+            serviceActionOptions
+        ) as ServiceAction;
+        const newSerialNumber = action?.new_serial_number || "";
+        const labourCost = action?.labour_cost || 0;
+        const labourBillable = action?.is_labour_cost || false;
+
+        const repairItems = serviceActionMatchesCode(serviceAction, "REPAIR", serviceActionOptions) && action?.items
+            ? action.items.map((item: any, index: number) => {
+                const itemId = item.item_id != null ? Number(item.item_id) : undefined;
+                const fromOptions = itemId
+                    ? repairItemOptions.find((o) => Number(o.item_id) === itemId)
+                    : undefined;
+                return {
+                    id: item.id ?? Date.now() + index,
+                    item_id: itemId,
+                    itemCode: item.item_code ?? fromOptions?.item_code,
+                    itemName: item.item_name || fromOptions?.item_name || "",
+                    stock: Number(
+                        item.current_QTY ?? item.current_qty ?? (fromOptions ? getMrItemStockQty(fromOptions) : 0)
+                    ) || 0,
+                    qty: item.qty,
+                    price: item.price,
+                    billable: item.is_billable,
+                };
+            })
+            : [];
+
+        const replaceItems = serviceActionMatchesCode(serviceAction, "REPLACE", serviceActionOptions) && action?.items
+            ? action.items.map((item: any) => ({
+                id: item.id,
+                itemName: item.item_name,
+                newSerialNumber: action.new_serial_number || ""
+            }))
+            : [];
+
+        return {
+            id: detail.id,
+            serviceRequestCode: detail.service_code,
+            clientName: detail.consumer_name,
+            serialNumber: detail.serial_number,
+            itemName: detail.item_name,
+            batch: detail.batch || (detail as any).batch_no || (detail as any).batch_code || "",
+            productionDate: detail.production_date || (detail as any).production_plan || "",
+            invoiceDate: detail.invoice_date || "",
+            warrantyEndDate: detail.warranty_end_date || "",
+            warrantyStatus: (detail.warranty_status_name || detail.warranty_status_code || "Under Warranty") as WarrantyStatus,
+            complaintDescription: detail.complaint_description,
+            claim: resolveClaimToCode(
+                (detail as any).claim_status_code || detail.claim_status_name || "",
+                claimStatuses
+            ) as ClaimStatus,
+            reason: (detail as any).rejection_remarks || "",
+            status: (detail.status_name || "Draft") as ServiceRequestStatus,
+            serviceAction,
+            repairItems,
+            replaceItems,
+            newSerialNumber,
+            labourCost,
+            labourBillable,
+            serviceDate: detail.service_date,
+            isPaidService: mapPaidServicesFromApi((detail as any).paid_services),
+            currencyId: currencyId != null ? currencyId : undefined,
+        };
+    };
+
+    // Handle edit with API loading
+    const handleEdit = async (request: ServiceRequestData) => {
         try {
             if (!request) {
                 toast({
                     title: "Error",
                     description: "Invalid service request data",
-                    variant: "destructive"
+                    variant: "destructive", duration: TOAST_DURATION
                 });
                 return;
             }
 
-            setFormData({
-                serviceRequestCode: request.serviceRequestCode || "",
-                clientName: request.clientName || "",
-                serialNumber: request.serialNumber || "",
-                batch: request.batch || "",
-                productionDate: safeDateString(request.productionDate),
-                invoiceDate: safeDateString(request.invoiceDate),
-                warrantyEndDate: safeDateString(request.warrantyEndDate),
-                warrantyStatus: request.warrantyStatus || "Under Warranty",
-                complaintDescription: request.complaintDescription || "",
-                claim: request.claim || "",
-                reason: request.reason || "",
-                status: request.status || "Draft",
-                serviceAction: request.serviceAction || "",
-                itemName: request.itemName || "",
-                newSerialNumber: request.newSerialNumber || "",
-                repairItems: Array.isArray(request.repairItems) ? request.repairItems : [],
-                replaceItems: Array.isArray(request.replaceItems) ? request.replaceItems : [],
-                labourCost: typeof request.labourCost === 'number' ? request.labourCost : 0,
-                labourBillable: typeof request.labourBillable === 'boolean' ? request.labourBillable : false,
-                serviceDate: safeDateString(request.serviceDate) || format(new Date(), "yyyy-MM-dd") // Default to today if empty
-            });
-            setEditingId(request.id);
-            setIsFormModalOpen(true);
+            setActionLoading("edit-load");
+            const response = await serviceCenterApi.getWarrantyServiceById(request.id);
+            if (response.isSuccessful && response.data) {
+                const detailedRequest = mapDetailToServiceRequest(response.data);
+                setFormData({
+                    serviceRequestCode: detailedRequest.serviceRequestCode || "",
+                    clientName: detailedRequest.clientName || "",
+                    serialNumber: detailedRequest.serialNumber || "",
+                    batch: detailedRequest.batch || "",
+                    productionDate: safeDateString(detailedRequest.productionDate),
+                    invoiceDate: safeDateString(detailedRequest.invoiceDate),
+                    warrantyEndDate: safeDateString(detailedRequest.warrantyEndDate),
+                    warrantyStatus: detailedRequest.warrantyStatus || "Under Warranty",
+                    complaintDescription: detailedRequest.complaintDescription || "",
+                    claim: detailedRequest.claim || "",
+                    reason: detailedRequest.reason || "",
+                    status: detailedRequest.status || "Draft",
+                    serviceAction: detailedRequest.serviceAction || "",
+                    itemName: detailedRequest.itemName || "",
+                    newSerialNumber: detailedRequest.newSerialNumber || "",
+                    repairItems: detailedRequest.repairItems,
+                    replaceItems: detailedRequest.replaceItems,
+                    labourCost: typeof detailedRequest.labourCost === 'number' ? detailedRequest.labourCost : 0,
+                    labourBillable: typeof detailedRequest.labourBillable === 'boolean' ? detailedRequest.labourBillable : false,
+                    serviceDate: safeDateString(detailedRequest.serviceDate) || format(new Date(), "yyyy-MM-dd"),
+                    isPaidService: detailedRequest.isPaidService || ""
+                });
+                setRepairCurrencyId(
+                    detailedRequest.currencyId != null ? String(detailedRequest.currencyId) : ""
+                );
+                setEditingId(detailedRequest.id);
+                setSerialDetailsLoaded(!!detailedRequest.serialNumber);
+
+                // Fill batch/dates from serial lookup when detail API omits them (common for older records)
+                if (detailedRequest.serialNumber && !detailedRequest.batch) {
+                    try {
+                        const serialRes = await serviceCenterApi.getDetailFromSerialNumber(
+                            detailedRequest.serialNumber
+                        );
+                        if (serialRes.isSuccessful && serialRes.data) {
+                            const mapped = mapSerialNumberApiToForm(
+                                serialRes.data as Record<string, unknown>
+                            );
+                            setFormData((prev) => ({
+                                ...prev,
+                                itemCode: mapped.itemCode || prev.itemCode,
+                                itemName: mapped.itemName || prev.itemName,
+                                customerId: mapped.customerId ?? prev.customerId,
+                                clientName: mapped.clientName || prev.clientName,
+                                batchId: mapped.batchId ?? prev.batchId,
+                                batch: mapped.batch || prev.batch,
+                                productionDate: mapped.productionDate || prev.productionDate,
+                                invoiceDate: mapped.invoiceDate || prev.invoiceDate,
+                                warrantyEndDate: mapped.warrantyEndDate || prev.warrantyEndDate,
+                                warrantyStatusId: mapped.warrantyStatusId ?? prev.warrantyStatusId,
+                                warrantyStatus: mapped.warrantyStatus || prev.warrantyStatus,
+                            }));
+                        }
+                    } catch {
+                        /* keep detail form data if serial lookup fails */
+                    }
+                }
+
+                setIsFormModalOpen(true);
+            }
         } catch (e) {
             console.error('Error loading service request for edit:', e);
             toast({
                 title: "Error",
-                description: "Failed to load service request data",
-                variant: "destructive"
+                description: "Failed to load service request data from server",
+                variant: "destructive", duration: TOAST_DURATION
             });
+        } finally {
+            setActionLoading(null);
         }
     };
 
-    // Handle view with safe data loading
-    const handleView = (request: ServiceRequestData) => {
+    // Handle view with API loading
+    const handleView = async (request: ServiceRequestData) => {
         try {
             if (!request) {
                 toast({
                     title: "Error",
                     description: "Invalid service request data",
-                    variant: "destructive"
+                    variant: "destructive", duration: TOAST_DURATION
                 });
                 return;
             }
 
-            // Create a safe copy of the request with all fields validated
-            const safeRequest: ServiceRequestData = {
-                id: request.id,
-                serviceRequestCode: request.serviceRequestCode || "",
-                clientName: request.clientName || "",
-                serialNumber: request.serialNumber || "",
-                itemName: request.itemName || "",
-                batch: request.batch || "",
-                productionDate: safeDateString(request.productionDate),
-                invoiceDate: safeDateString(request.invoiceDate),
-                warrantyEndDate: safeDateString(request.warrantyEndDate),
-                warrantyStatus: request.warrantyStatus || "Under Warranty",
-                complaintDescription: request.complaintDescription || "",
-                claim: request.claim || "",
-                reason: request.reason || "",
-                status: request.status || "Draft",
-                serviceAction: request.serviceAction || "",
-                repairItems: Array.isArray(request.repairItems) ? request.repairItems : [],
-                replaceItems: Array.isArray(request.replaceItems) ? request.replaceItems : [],
-                newSerialNumber: request.newSerialNumber || "",
-                labourCost: typeof request.labourCost === 'number' ? request.labourCost : 0,
-                labourBillable: typeof request.labourBillable === 'boolean' ? request.labourBillable : false,
-                serviceDate: safeDateString(request.serviceDate)
-            };
-
-            setViewingRequest(safeRequest);
-            setIsViewModalOpen(true);
+            setActionLoading("view-load");
+            const response = await serviceCenterApi.getWarrantyServiceById(request.id);
+            if (response.isSuccessful && response.data) {
+                const detailedRequest = mapDetailToServiceRequest(response.data);
+                setViewingRequest(detailedRequest);
+                setIsViewModalOpen(true);
+            }
         } catch (e) {
             console.error('Error loading service request for view:', e);
             toast({
                 title: "Error",
-                description: "Failed to load service request data",
-                variant: "destructive"
+                description: "Failed to load service request data from server",
+                variant: "destructive", duration: TOAST_DURATION
             });
+        } finally {
+            setActionLoading(null);
         }
     };
 
     // Handle accept quotation (for Submitted Request status)
     const handleAcceptQuotation = () => {
-        if (viewingRequest && viewingRequest.status === "Submitted Request") {
+        if (viewingRequest && isRequestStatus(viewingRequest.status, "SUBMITTED")) {
             setServiceRequests(serviceRequests.map(req =>
                 req.id === viewingRequest.id ? { ...req, status: "Completed Request" } : req
             ));
-            toast({ title: "Success", description: "Service request accepted and moved to completed" });
+            toast({ ...crudSuccessToast, title: "Success", description: "Service request accepted and moved to completed" });
             
-            // Auto-switch to Completed Request filter
-            setFilterStatus("Completed Request");
+            // Auto-switch to Completed filter (value_code from entity values)
+            setFilterStatus(getStatusId(findWarrantyRequestStatus(warrantyServiceRequestStatuses, "COMPLETED")));
             
             setIsViewModalOpen(false);
             setViewingRequest(null);
         }
     };
 
+    const formatMoneyForRequest = (
+        request: ServiceRequestDataWithCurrency,
+        amount: number
+    ) => {
+        const symbol = resolveCurrencySymbolFromId(request.currencyId, currencies);
+        return `${symbol}${amount.toFixed(2)}`;
+    };
+
     // Export as PDF
-    const handleExportPDF = (request: ServiceRequestData) => {
+    const handleExportPDF = (request: ServiceRequestDataWithCurrency) => {
         // Validation before export (matching Quotations validation)
         if (!request.serviceRequestCode) {
             toast({
                 title: "Validation Error",
                 description: "Service request code is missing",
-                variant: "destructive"
+                variant: "destructive", duration: TOAST_DURATION
             });
             return;
         }
@@ -752,7 +1878,7 @@ function WarrantyService() {
             toast({
                 title: "Validation Error",
                 description: "Consumer name is required",
-                variant: "destructive"
+                variant: "destructive", duration: TOAST_DURATION
             });
             return;
         }
@@ -761,7 +1887,7 @@ function WarrantyService() {
             toast({
                 title: "Validation Error",
                 description: "Serial number is required",
-                variant: "destructive"
+                variant: "destructive", duration: TOAST_DURATION
             });
             return;
         }
@@ -770,37 +1896,37 @@ function WarrantyService() {
             toast({
                 title: "Validation Error",
                 description: "Complaint description is required",
-                variant: "destructive"
+                variant: "destructive", duration: TOAST_DURATION
             });
             return;
         }
 
         // Validate service action is selected for Completed Request
-        if (request.status === "Completed Request" && !request.serviceAction) {
+        if (isRequestStatus(request.status, "COMPLETED") && !request.serviceAction) {
             toast({
                 title: "Validation Error",
                 description: "Service action is required",
-                variant: "destructive"
+                variant: "destructive", duration: TOAST_DURATION
             });
             return;
         }
 
         // Validate repair items if service action is Repair
-        if (request.serviceAction === "Repair" && (!request.repairItems || request.repairItems.length === 0)) {
+        if (serviceActionMatchesCode(request.serviceAction, "REPAIR", serviceActionOptions) && (!request.repairItems || request.repairItems.length === 0)) {
             toast({
                 title: "Validation Error",
                 description: "At least one repair item is required for repair action",
-                variant: "destructive"
+                variant: "destructive", duration: TOAST_DURATION
             });
             return;
         }
 
         // Validate new serial number if service action is Replace
-        if (request.serviceAction === "Replace" && !request.newSerialNumber) {
+        if (serviceActionMatchesCode(request.serviceAction, "REPLACE", serviceActionOptions) && !request.newSerialNumber) {
             toast({
                 title: "Validation Error",
                 description: "New serial number is required for replacement action",
-                variant: "destructive"
+                variant: "destructive", duration: TOAST_DURATION
             });
             return;
         }
@@ -1192,12 +2318,12 @@ function WarrantyService() {
                     <div class="section-title">Service Action</div>
                     <div class="info-item">
                         <div class="info-label">Action Type</div>
-                        <div class="info-value">${request.serviceAction}</div>
+                        <div class="info-value">${getServiceActionDisplayName(request.serviceAction, serviceActionOptions)}</div>
                     </div>
                 </div>
                 ` : ''}
 
-                ${request.serviceAction === "Repair" && request.repairItems && request.repairItems.length > 0 ? `
+                ${serviceActionMatchesCode(request.serviceAction, "REPAIR", serviceActionOptions) && request.repairItems && request.repairItems.length > 0 ? `
                 <!-- Repair Items -->
                 <div class="section">
                     <div class="section-title">Repair Items</div>
@@ -1220,7 +2346,7 @@ function WarrantyService() {
                                     <td><strong>${item.itemName}</strong></td>
                                     <td class="text-center">${item.stock}</td>
                                     <td class="text-center">${item.qty}</td>
-                                    <td class="text-right">$${Number(item.price || 0).toFixed(2)}</td>
+                                    <td class="text-right">${formatMoneyForRequest(request, Number(item.price || 0))}</td>
                                 </tr>
                             `).join('')}
                         </tbody>
@@ -1231,18 +2357,28 @@ function WarrantyService() {
                         <div class="totals-box">
                             <div class="totals-row">
                                 <span class="totals-label">Labour Cost ${request.labourBillable ? '(Billable)' : ''}</span>
-                                <span class="totals-value">$${Number(request.labourCost || 0).toFixed(2)}</span>
+                                <span class="totals-value">${formatMoneyForRequest(request, Number(request.labourCost || 0))}</span>
                             </div>
                             <div class="totals-row total">
                                 <span class="totals-label">Total Price</span>
-                                <span class="totals-value">$${((request.repairItems || []).reduce((sum, item) => sum + (item.billable ? Number(item.price || 0) * Number(item.qty || 0) : 0), 0) + (request.labourBillable ? (Number(request.labourCost || 0)) : 0)).toFixed(2)}</span>
+                                <span class="totals-value">${formatMoneyForRequest(
+                                    request,
+                                    (request.repairItems || []).reduce(
+                                        (sum, item) =>
+                                            sum +
+                                            (item.billable
+                                                ? Number(item.price || 0) * Number(item.qty || 0)
+                                                : 0),
+                                        0
+                                    ) + (request.labourBillable ? Number(request.labourCost || 0) : 0)
+                                )}</span>
                             </div>
                         </div>
                     </div>
                 </div>
                 ` : ''}
 
-                ${request.serviceAction === "Replace" && request.newSerialNumber ? `
+                ${serviceActionMatchesCode(request.serviceAction, "REPLACE", serviceActionOptions) && request.newSerialNumber ? `
                 <!-- Replacement Details -->
                 <div class="section">
                     <div class="section-title">Replacement Details</div>
@@ -1304,203 +2440,185 @@ function WarrantyService() {
             toast({
                 title: "Error",
                 description: "Could not initialize printing",
-                variant: "destructive"
+                variant: "destructive", duration: TOAST_DURATION
             });
             document.body.removeChild(iframe);
         }
 
         toast({
             title: "Printing",
-            description: "Preparing service request for print..."
+            description: "Preparing service request for print...",
+            duration: TOAST_DURATION,
         });
     };
 
     // Handle fulfill
-    const handleFulfill = () => {
-        if (editingId && formData.status === "Submitted Request") {
-            // Validate from form modal
-            // Service action is optional for NA claim (expired warranty)
-            if (!formData.serviceAction && formData.claim !== "NA") {
+    const handleFulfill = async () => {
+        const id = editingId || viewingRequest?.id;
+        if (!id) {
+            toast({
+                title: "Error",
+                description: "No request is currently active",
+                variant: "destructive", duration: TOAST_DURATION
+            });
+            return;
+        }
+
+        const activeServiceAction = editingId ? formData.serviceAction : viewingRequest?.serviceAction;
+        const activeClaim = editingId ? formData.claim : viewingRequest?.claim;
+        const activeRepairItems = editingId ? formData.repairItems : viewingRequest?.repairItems;
+        const activeNewSerialNumber = editingId ? formData.newSerialNumber : viewingRequest?.newSerialNumber;
+        const activeLabourCost = editingId ? formData.labourCost : viewingRequest?.labourCost;
+        const activeLabourBillable = editingId ? formData.labourBillable : viewingRequest?.labourBillable;
+        const activeComplaintDescription = editingId ? formData.complaintDescription : viewingRequest?.complaintDescription;
+
+        // Validate from active state
+        // Service action is optional for NA claim (expired warranty)
+        if (!activeServiceAction && !isClaimCode(activeClaim, "NA")) {
+            toast({
+                title: "Validation Error",
+                description: "Service action is required to fulfill the request",
+                variant: "destructive", duration: TOAST_DURATION
+            });
+            return;
+        }
+
+        if (serviceActionMatchesCode(activeServiceAction, "REPAIR", serviceActionOptions) && (!activeRepairItems || activeRepairItems.length === 0)) {
+            toast({
+                title: "Validation Error",
+                description: "At least one repair item is required for repair action",
+                variant: "destructive", duration: TOAST_DURATION
+            });
+            return;
+        }
+
+        if (serviceActionMatchesCode(activeServiceAction, "REPLACE", serviceActionOptions) && !activeNewSerialNumber) {
+            toast({
+                title: "Validation Error",
+                description: "New Serial Number is required for replacement action",
+                variant: "destructive", duration: TOAST_DURATION
+            });
+            return;
+        }
+
+        try {
+            setActionLoading("complete");
+
+            // Calculate total amount
+            const itemsTotal = (serviceActionMatchesCode(activeServiceAction, "REPAIR", serviceActionOptions) && activeRepairItems)
+                ? activeRepairItems.reduce((sum: number, item: any) => sum + (item.billable ? Number(item.price || 0) * Number(item.qty || 0) : 0), 0)
+                : 0;
+            const labourAmount = activeLabourBillable ? Number(activeLabourCost || 0) : 0;
+            const totalAmount = itemsTotal + labourAmount;
+
+            // Map action items
+            const serviceActionId = getServiceActionId(activeServiceAction || "", serviceActionOptions);
+            if (serviceActionId == null) {
                 toast({
                     title: "Validation Error",
-                    description: "Service action is required to fulfill the request",
-                    variant: "destructive"
+                    description: "Service action could not be resolved from master data.",
+                    variant: "destructive", duration: TOAST_DURATION,
                 });
                 return;
             }
 
-            if (formData.serviceAction === "Repair" && (!formData.repairItems || formData.repairItems.length === 0)) {
+            const actionItems = serviceActionMatchesCode(activeServiceAction, "REPAIR", serviceActionOptions) && activeRepairItems
+                ? activeRepairItems.map((item: any) => ({
+                    item_id: item.item_id,
+                    qty: Number(item.qty || 1),
+                    price: Number(item.price || 0),
+                    is_billable: item.billable || false
+                  }))
+                : [];
+
+            if (
+                serviceActionMatchesCode(activeServiceAction, "REPAIR", serviceActionOptions) &&
+                actionItems.some((item) => item.item_id == null || !Number.isFinite(Number(item.item_id)))
+            ) {
                 toast({
                     title: "Validation Error",
-                    description: "At least one repair item is required for repair action",
-                    variant: "destructive"
+                    description: "Each repair item must be selected from inventory master data.",
+                    variant: "destructive", duration: TOAST_DURATION,
                 });
                 return;
             }
 
-            if (formData.serviceAction === "Replace" && !formData.newSerialNumber) {
-                toast({
-                    title: "Validation Error",
-                    description: "New Serial Number is required for replacement action",
-                    variant: "destructive"
-                });
-                return;
-            }
+            const isRepairAction = serviceActionMatchesCode(
+                activeServiceAction,
+                "REPAIR",
+                serviceActionOptions
+            );
+            const resolvedCurrencyId =
+                isRepairAction &&
+                repairCurrencyId &&
+                Number.isFinite(Number(repairCurrencyId))
+                    ? Number(repairCurrencyId)
+                    : undefined;
 
-            // Update the request
-            const updatedRequest: ServiceRequestData = {
-                id: editingId,
-                serviceRequestCode: formData.serviceRequestCode,
-                clientName: formData.clientName!,
-                serialNumber: formData.serialNumber!,
-                batch: formData.batch!,
-                productionDate: formData.productionDate!,
-                invoiceDate: formData.invoiceDate!,
-                warrantyEndDate: formData.warrantyEndDate!,
-                warrantyStatus: formData.warrantyStatus!,
-                complaintDescription: formData.complaintDescription!,
-                claim: formData.claim!,
-                reason: formData.reason || "",
-                status: "Completed Request",
-                serviceAction: formData.serviceAction || "",
-                itemName: formData.itemName || "",
-                newSerialNumber: formData.newSerialNumber || "",
-                repairItems: formData.repairItems || [],
-                replaceItems: formData.replaceItems || [],
-                labourCost: formData.labourCost || 0,
-                labourBillable: formData.labourBillable || false,
-                serviceDate: formData.serviceDate || ""
+            const payload = {
+                complaint_description: activeComplaintDescription || "",
+                status_code: "COMPLETED REQUEST",
+                ...(resolvedCurrencyId != null ? { currency_id: resolvedCurrencyId } : {}),
+                actions: [
+                    {
+                        service_action_id: serviceActionId,
+                        new_serial_number: serviceActionMatchesCode(activeServiceAction, "REPLACE", serviceActionOptions)
+                            ? (activeNewSerialNumber || null)
+                            : null,
+                        labour_cost: Number(activeLabourCost || 0),
+                        is_labour_cost: activeLabourBillable || false,
+                        total_amount: totalAmount,
+                        items: actionItems,
+                        ...(resolvedCurrencyId != null ? { currency_id: resolvedCurrencyId } : {}),
+                    },
+                ],
             };
 
-            setServiceRequests(serviceRequests.map(req => req.id === editingId ? updatedRequest : req));
-            toast({ title: "Success", description: "Service request completed successfully" });
+            const response = await serviceCenterApi.updateWarrantyService(id, payload);
 
-            // Auto-switch to Completed Request filter
-            setFilterStatus("Completed Request");
-
-            setIsFormModalOpen(false);
-            resetForm();
-        } else if (viewingRequest) {
-            // Validate from view modal
-            // Service action is optional for NA claim (expired warranty)
-            if (!viewingRequest.serviceAction && viewingRequest.claim !== "NA") {
-                toast({
-                    title: "Validation Error",
-                    description: "Service action is required to fulfill the request",
-                    variant: "destructive"
-                });
-                return;
+            if (response.isSuccessful) {
+                toast({ ...crudSuccessToast, title: "Success", description: response.message || "Service request completed successfully" });
+                
+                // Auto-switch to Completed filter (value_code from entity values)
+                setFilterStatus(getStatusId(findWarrantyRequestStatus(warrantyServiceRequestStatuses, "COMPLETED")));
+                fetchWarrantyServices(1);
+            } else {
+                toast({ title: "Error", description: response.message || "Failed to complete request", variant: "destructive", duration: TOAST_DURATION });
             }
 
-            if (viewingRequest.serviceAction === "Repair" && (!viewingRequest.repairItems || viewingRequest.repairItems.length === 0)) {
-                toast({
-                    title: "Validation Error",
-                    description: "At least one repair item is required for repair action",
-                    variant: "destructive"
-                });
-                return;
+            if (editingId) {
+                setIsFormModalOpen(false);
+                resetForm();
+            } else {
+                setIsViewModalOpen(false);
+                setViewingRequest(null);
             }
-
-            if (viewingRequest.serviceAction === "Replace" && !viewingRequest.newSerialNumber) {
-                toast({
-                    title: "Validation Error",
-                    description: "New Serial Number is required for replacement action",
-                    variant: "destructive"
-                });
-                return;
-            }
-
-            setServiceRequests(serviceRequests.map(sr =>
-                sr.id === viewingRequest.id ? { ...sr, status: "Completed Request" } : sr
-            ));
-            toast({ title: "Success", description: "Service request completed successfully" });
-
-            // Auto-switch to Completed Request filter
-            setFilterStatus("Completed Request");
-
-            setIsViewModalOpen(false);
-            setViewingRequest(null);
-        }
-    };
-
-    // Update service action in view modal
-    const handleServiceActionUpdate = (action: ServiceAction) => {
-        if (viewingRequest) {
-            // Auto-check labour billable if warranty is expired and action is Repair
-            const labourBillable = action === "Repair" && viewingRequest.warrantyStatus === "Expired";
-            const updatedRequest = { ...viewingRequest, serviceAction: action, labourBillable };
-            setViewingRequest(updatedRequest);
-            setServiceRequests(serviceRequests.map(req => req.id === viewingRequest.id ? updatedRequest : req));
-        }
-    };
-
-    // Update repair/replace items in view modal
-    const updateViewingRequest = (updates: Partial<ServiceRequestData>) => {
-        if (viewingRequest) {
-            const updatedRequest = { ...viewingRequest, ...updates };
-            setViewingRequest(updatedRequest);
-            setServiceRequests(serviceRequests.map(req => req.id === viewingRequest.id ? updatedRequest : req));
-        }
-    };
-
-    // Filtering and pagination with error handling
-    const filteredData = React.useMemo(() => {
-        try {
-            if (!Array.isArray(serviceRequests)) return [];
-            
-            return serviceRequests.filter((item) => {
-                try {
-                    const matchesSearch =
-                        (item.serviceRequestCode?.toLowerCase().includes(searchTerm.toLowerCase()) || false) ||
-                        (item.serialNumber?.toLowerCase().includes(searchTerm.toLowerCase()) || false);
-                    const matchesStatus = filterStatus === "All" || item.status === filterStatus;
-                    
-                    // Robust date matching
-                    let matchesDate = true;
-                    if (filterDate) {
-                        try {
-                            const selectedDateStr = format(filterDate, "yyyy-MM-dd");
-                            // Normalize item date - handle cases where it might be a Date object or string
-                            const itemDate = safeParseDate(item.serviceDate);
-                            const itemDateStr = itemDate ? format(itemDate, "yyyy-MM-dd") : "";
-                            matchesDate = itemDateStr === selectedDateStr;
-                        } catch (e) {
-                            console.error('Error matching date:', e);
-                            matchesDate = false;
-                        }
-                    }
-
-                    return matchesSearch && matchesStatus && matchesDate;
-                } catch (e) {
-                    console.error('Error filtering item:', e);
-                    return false;
-                }
+        } catch (e) {
+            console.error('Error completing service request:', e);
+            toast({
+                title: "Error",
+                description: getApiErrorMessage(e, "Failed to fulfill request on server"),
+                variant: "destructive", duration: TOAST_DURATION
             });
-        } catch (e) {
-            console.error('Error filtering data:', e);
-            return [];
+        } finally {
+            setActionLoading(null);
         }
-    }, [serviceRequests, searchTerm, filterStatus, filterDate]);
+    };
 
-    const paginatedData = React.useMemo(() => {
-        try {
-            if (!Array.isArray(filteredData)) return [];
-            return filteredData.slice(
-                (currentPage - 1) * itemsPerPage,
-                currentPage * itemsPerPage
-            );
-        } catch (e) {
-            console.error('Error paginating data:', e);
-            return [];
-        }
-    }, [filteredData, currentPage, itemsPerPage]);
+    const isFormActionBusy = actionLoading === "save-draft" || actionLoading === "submit" || actionLoading === "complete";
+    const canSaveRequest = editingId ? canEdit(WARRANTY_SERVICE_MODULE) : canCreate(WARRANTY_SERVICE_MODULE);
 
-    const totalPages = Math.max(1, Math.ceil((filteredData?.length || 0) / itemsPerPage));
+    // Backend API handles filtering and pagination. Set filteredData and paginatedData directly.
+    const filteredData = serviceRequests;
+    const paginatedData = serviceRequests;
 
     useEffect(() => {
         setCurrentPage(1);
     }, [searchTerm, filterStatus, filterDate]);
 
+    if (!hasModuleAccess) {
+        return <Unauthorized />;
+    }
 
     return (
         <div className="h-full flex flex-col gap-6 animate-in fade-in duration-500">
@@ -1528,22 +2646,22 @@ function WarrantyService() {
                         value: filterStatus,
                         options: [
                             { value: "All", label: "All Status" },
-                            { value: "Draft", label: "Draft" },
-                            { value: "Submitted Request", label: "Submitted Request" },
-                            { value: "Completed Request", label: "Completed Request" },
-                            { value: "Rejected Request", label: "Rejected Request" }
+                            ...(warrantyServiceRequestStatuses || []).map((s) => ({
+                                value: getStatusId(s),
+                                label: s.name || s.value_name || getStatusCode(s),
+                            })),
                         ],
                         onChange: setFilterStatus,
                         searchable: true
                     }
                 ]}
-                actions={[
+                actions={canCreate(WARRANTY_SERVICE_MODULE) ? [
                     {
                         label: "New Service Request",
                         icon: <Plus className="mr-2 h-4 w-4" />,
                         onClick: () => { resetForm(); setIsFormModalOpen(true); }
                     }
-                ]}
+                ] : []}
             />
 
             {/* Table */}
@@ -1564,7 +2682,16 @@ function WarrantyService() {
                                 </TableRow>
                             </TableHeader>
                             <TableBody>
-                                {paginatedData.length === 0 ? (
+                                {isListLoading ? (
+                                    <TableRow>
+                                        <TableCell colSpan={8} className="h-32 text-center">
+                                            <div className="flex items-center justify-center gap-2 text-muted-foreground">
+                                                <div className="h-4 w-4 animate-spin rounded-full border-2 border-primary border-t-transparent" />
+                                                Loading warranty services...
+                                            </div>
+                                        </TableCell>
+                                    </TableRow>
+                                ) : paginatedData.length === 0 ? (
                                     <TableRow>
                                         <TableCell colSpan={8} className="h-32 text-center text-muted-foreground">
                                             No service requests found
@@ -1598,22 +2725,27 @@ function WarrantyService() {
                                                     </TableCell>
                                                     <TableCell>
                                                         {item?.claim ? (
-                                                            <Badge variant={item.claim === "Accept" ? "default" : "destructive"}>
-                                                                {item.claim}
+                                                            <Badge variant={isClaimCode(item.claim, "ACCEPT") ? "default" : "destructive"}>
+                                                                {getClaimDisplayName(item.claim, claimStatuses)}
                                                             </Badge>
                                                         ) : (
                                                             "—"
                                                         )}
                                                     </TableCell>
                                                     <TableCell>
-                                                        <Badge variant={getStatusBadgeVariant(item?.status || "Draft")}>
+                                                        <Badge variant={getStatusBadgeVariant(item?.status || "Draft", warrantyServiceRequestStatuses)}>
                                                             {getDisplayStatus(item)}
                                                         </Badge>
                                                     </TableCell>
                                                     <TableCell className="text-center py-4">
                                                         <TableActionButtons
-                                                            onView={() => handleView(item)}
-                                                            onEdit={(item?.status === "Draft" || item?.status === "Submitted Request") ? () => handleEdit(item) : undefined}
+                                                            onView={canView(WARRANTY_SERVICE_MODULE) ? () => handleView(item) : undefined}
+                                                            onEdit={
+                                                                canEdit(WARRANTY_SERVICE_MODULE) &&
+                                                                (isRequestStatus(item?.status, "DRAFT") || isRequestStatus(item?.status, "SUBMITTED"))
+                                                                    ? () => handleEdit(item)
+                                                                    : undefined
+                                                            }
                                                         />
                                                     </TableCell>
                                                 </TableRow>
@@ -1629,11 +2761,11 @@ function WarrantyService() {
                     </div>
 
                     {/* Pagination */}
-                    {filteredData.length > 0 && (
+                    {totalRecords > 0 && (
                         <DataTablePagination
                             currentPage={currentPage}
                             totalPages={totalPages}
-                            totalItems={filteredData.length}
+                            totalItems={totalRecords}
                             itemsPerPage={itemsPerPage}
                             onPageChange={setCurrentPage}
                             onItemsPerPageChange={setItemsPerPage}
@@ -1646,21 +2778,24 @@ function WarrantyService() {
 
             {/* Create/Edit Form Modal */}
             <Dialog open={isFormModalOpen} onOpenChange={setIsFormModalOpen}>
-                <DialogContent className="max-w-3xl max-h-[90vh] overflow-y-auto">
-                    <DialogHeader>
+                <DialogContent
+                    className="flex! min-h-0 w-[95%] max-h-[78vh] flex-col gap-0 overflow-hidden bg-white p-0 sm:max-w-3xl md:max-w-4xl xl:max-w-5xl"
+                    onInteractOutside={(e) => e.preventDefault()}
+                >
+                    <DialogHeader className="shrink-0 border-b bg-white p-4 sm:p-6">
                         <DialogTitle className="text-2xl font-bold">
                             {editingId ? "Edit Service Request" : "New Service Request"}
                         </DialogTitle>
                     </DialogHeader>
 
-                    <div className="space-y-6">
+                    <div className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto overscroll-y-contain px-4 py-4 sm:px-6 space-y-6">
                         {/* Service Date - At the top */}
                         <div className="space-y-2">
                             <Label>Service Date</Label>
                             <Input
                                 value={formData.serviceDate ? formatDate(formData.serviceDate) : ""}
                                 disabled
-                                className="bg-slate-50"
+                                className="h-9 bg-muted/50"
                             />
                         </div>
 
@@ -1669,94 +2804,66 @@ function WarrantyService() {
                             <Label>
                                 Serial Number <span className="text-red-500">*</span>
                             </Label>
-                            <div className="flex gap-2">
+                            <div className="flex flex-col gap-2 sm:flex-row sm:items-end">
                                 <Input
                                     placeholder="Enter serial number"
                                     value={formData.serialNumber}
                                     onChange={(e) => setFormData({ ...formData, serialNumber: e.target.value })}
-                                    className="flex-1"
-                                    disabled={!!editingId && formData.status !== "Draft"}
+                                    className="h-9 flex-1"
+                                    disabled={!!editingId && !isRequestStatus(formData.status, "DRAFT")}
                                 />
-                                {(!editingId || formData.status === "Draft") && (
+                                {(!editingId || isRequestStatus(formData.status, "DRAFT")) && (
                                     <Button
-                                        className="h-10 shrink-0 bg-blue-600 hover:bg-blue-700"
+                                        className="h-9 shrink-0 bg-blue-600 hover:bg-blue-700 sm:px-4"
                                         onClick={() => {
                                             if (formData.serialNumber) {
                                                 handleSerialNumberChange(formData.serialNumber);
                                             }
                                         }}
                                     >
-                                        <Search className="h-4 w-4 mr-2" />
-                                        Search
+                                        <Search className="h-4 w-4 sm:mr-2" />
+                                        <span className="hidden sm:inline">Search</span>
                                     </Button>
                                 )}
                             </div>
                         </div>
 
                         {/* Item details box - Always show */}
-                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 p-4 bg-slate-50 rounded-lg border">
-                            <div className="space-y-2">
+                        <div className="grid grid-cols-1 gap-4 rounded-lg border bg-muted/20 p-4 sm:p-5 md:grid-cols-2 lg:grid-cols-3">
+                            <div className="min-w-0 space-y-1">
                                 <Label className="text-xs text-muted-foreground">Item Name</Label>
-                                <p className="font-semibold">{formData.itemName || "—"}</p>
+                                <p className="font-semibold whitespace-normal wrap-break-word">{formData.itemName || "—"}</p>
                             </div>
-                            <div className="space-y-2">
+                            <div className="min-w-0 space-y-1">
                                 <Label className="text-xs text-muted-foreground">Consumer Name</Label>
                                 <Input 
                                     value={formData.clientName || ""} 
                                     disabled 
-                                    className="bg-white font-semibold" 
+                                    className="h-9 bg-white/80 font-semibold" 
                                     placeholder="—"
                                 />
                             </div>
-                            {formData.serialNumber && formData.batch && (
+                            {serialDetailsLoaded && (
                                 <>
-                                    <div className="space-y-2">
+                                    <div className="min-w-0 space-y-1">
                                         <Label className="text-xs text-muted-foreground">Batch</Label>
                                         <p className="font-semibold">{formData.batch || "—"}</p>
                                     </div>
-                                    <div className="space-y-2">
+                                    <div className="min-w-0 space-y-1">
                                         <Label className="text-xs text-muted-foreground">Production Date</Label>
                                         <p className="font-semibold">{formatDate(formData.productionDate || "") || "—"}</p>
                                     </div>
-                                    <div className="space-y-2">
+                                    <div className="min-w-0 space-y-1">
                                         <Label className="text-xs text-muted-foreground">Invoice Date</Label>
-                                        <DatePicker
-                                            date={safeParseDate(formData.invoiceDate)}
-                                            setDate={(date) => {
-                                                try {
-                                                    setFormData({ ...formData, invoiceDate: date ? format(date, "yyyy-MM-dd") : "" });
-                                                } catch (e) {
-                                                    console.error('Error setting invoice date:', e);
-                                                }
-                                            }}
-                                        />
+                                        <p className="font-semibold">{formatDate(formData.invoiceDate || "") || "—"}</p>
                                     </div>
-                                    <div className="space-y-2">
+                                    <div className="min-w-0 space-y-1">
                                         <Label className="text-xs text-muted-foreground">Warranty End Date</Label>
-                                        <DatePicker
-                                            date={safeParseDate(formData.warrantyEndDate)}
-                                            setDate={(date) => {
-                                                try {
-                                                    if (date) {
-                                                        const newWarrantyEndDate = format(date, "yyyy-MM-dd");
-                                                        const newWarrantyStatus = calculateWarrantyStatus(newWarrantyEndDate);
-                                                        setFormData({
-                                                            ...formData,
-                                                            warrantyEndDate: newWarrantyEndDate,
-                                                            warrantyStatus: newWarrantyStatus
-                                                        });
-                                                    } else {
-                                                        setFormData({ ...formData, warrantyEndDate: "" });
-                                                    }
-                                                } catch (e) {
-                                                    console.error('Error setting warranty end date:', e);
-                                                }
-                                            }}
-                                        />
+                                        <p className="font-semibold">{formatDate(formData.warrantyEndDate || "") || "—"}</p>
                                     </div>
-                                    <div className="space-y-2">
+                                    <div className="min-w-0 space-y-1">
                                         <Label className="text-xs text-muted-foreground">Warranty Status</Label>
-                                        <div className="flex items-center h-10">
+                                        <div className="flex items-center h-9">
                                             <Badge
                                                 variant={formData.warrantyStatus === "Under Warranty" ? "default" : "outline"}
                                                 className={cn(
@@ -1785,33 +2892,70 @@ function WarrantyService() {
                             />
                         </div>
 
-                        {/* Claim */}
-                        <div className="space-y-2">
-                            <Label>
-                                Claim <span className="text-red-500">*</span>
-                            </Label>
-                            <Select
-                                value={formData.claim}
-                                onValueChange={(value) => handleClaimChange(value as ClaimStatus)}
-                            >
-                                <SelectTrigger className="h-10">
-                                    <SelectValue placeholder="Select claim status" />
-                                </SelectTrigger>
-                                <SelectContent>
-                                    {formData.warrantyStatus === "Expired" ? (
-                                        <SelectItem value="NA">NA</SelectItem>
-                                    ) : (
-                                        <>
-                                            <SelectItem value="Accept">Accept</SelectItem>
-                                            <SelectItem value="Reject">Reject</SelectItem>
-                                        </>
-                                    )}
-                                </SelectContent>
-                            </Select>
+                        {/* Claim + Paid Service: aligned row */}
+                        <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                            {/* Claim (hidden when warranty expired) */}
+                            {!isExpiredWarrantyStatus(formData.warrantyStatus) && (
+                                <div className="space-y-2 pb-0.5">
+                                    <Label>
+                                        Claim <span className="text-red-500">*</span>
+                                    </Label>
+                                    <Select
+                                        value={resolveClaimToCode(formData.claim, claimStatuses)}
+                                        onValueChange={handleClaimChange}
+                                        disabled={editingId !== null && !isRequestStatus(formData.status, "DRAFT")}
+                                    >
+                                        <SelectTrigger className={formSelectTriggerClass}>
+                                            <SelectValue placeholder="Select claim status" />
+                                        </SelectTrigger>
+                                        <SelectContent
+                                            position="popper"
+                                            sideOffset={4}
+                                            collisionPadding={24}
+                                            className="z-200 max-h-60"
+                                        >
+                                            {claimOptionsForForm.map((c) => {
+                                                const code = getClaimCode(c);
+                                                return (
+                                                    <SelectItem key={code} value={code}>
+                                                        {c.name || c.value_name || code}
+                                                    </SelectItem>
+                                                );
+                                            })}
+                                        </SelectContent>
+                                    </Select>
+                                </div>
+                            )}
+
+                            {/* Paid Service? (expired warranty, or rejected + under warranty) */}
+                            {(!editingId || isRequestStatus(formData.status, "DRAFT")) &&
+                                (isExpiredWarrantyStatus(formData.warrantyStatus) ||
+                                    (formData.warrantyStatus === "Under Warranty" && isClaimCode(formData.claim, "REJECTED"))) && (
+                                <div className="space-y-2 pb-0.5">
+                                    <Label>Paid Service? <span className="text-red-500">*</span></Label>
+                                    <Select
+                                        value={formData.isPaidService || ""}
+                                        onValueChange={(value) => setFormData({ ...formData, isPaidService: value as "Yes" | "No" })}
+                                    >
+                                        <SelectTrigger className={formSelectTriggerClass}>
+                                            <SelectValue placeholder="Select Yes/No" />
+                                        </SelectTrigger>
+                                        <SelectContent
+                                            position="popper"
+                                            sideOffset={4}
+                                            collisionPadding={24}
+                                            className="z-200 max-h-60"
+                                        >
+                                            <SelectItem value="Yes">Yes</SelectItem>
+                                            <SelectItem value="No">No</SelectItem>
+                                        </SelectContent>
+                                    </Select>
+                                </div>
+                            )}
                         </div>
 
-                        {/* Rejection Remarks (optional if Reject) */}
-                        {formData.claim === "Reject" && (
+                        {/* Rejection Remarks (optional if Reject, not for expired warranty) */}
+                        {!isExpiredWarrantyStatus(formData.warrantyStatus) && isClaimCode(formData.claim, "REJECTED") && (
                             <div className="space-y-2">
                                 <Label>
                                     Rejection Remarks
@@ -1826,39 +2970,71 @@ function WarrantyService() {
                         )}
 
                         {/* Service Action Section - For Submitted status when editing (both Accept and Reject) */}
-                        {editingId && formData.status === "Submitted Request" && (
-                            <div className="space-y-4 p-4 bg-blue-50 rounded-lg border border-blue-200">
-                                <h3 className="text-sm font-semibold text-blue-900 uppercase tracking-wide">
-                                    Service Action
-                                </h3>
+                        {editingId && isRequestStatus(formData.status, "SUBMITTED") && (
+                                <div className="space-y-4 p-4 bg-blue-50 rounded-lg border border-blue-200">
+                                    <h3 className="text-sm font-semibold text-blue-900 uppercase tracking-wide">
+                                        Service Action
+                                    </h3>
 
-                                <div className="space-y-2">
-                                    <Label>Select Action</Label>
-                                    <Select
-                                        value={formData.serviceAction}
-                                        onValueChange={(value) => {
-                                            const action = value as ServiceAction;
-                                            // Auto-check labour billable if warranty is expired and action is Repair
-                                            const labourBillable = action === "Repair" && formData.warrantyStatus === "Expired";
-                                            setFormData({ ...formData, serviceAction: action, labourBillable });
-                                        }}
-                                    >
-                                        <SelectTrigger className="h-10 bg-white">
-                                            <SelectValue placeholder="Select service action" />
-                                        </SelectTrigger>
-                                        <SelectContent>
-                                            <SelectItem value="Repair">Repair</SelectItem>
-                                            {/* Replace option only for Accept claim or NA claim, not for Reject */}
-                                            {formData.claim !== "Reject" && (
-                                                <SelectItem value="Replace">Replace</SelectItem>
-                                            )}
-                                        </SelectContent>
-                                    </Select>
-                                </div>
+                                    {isClaimCode(formData.claim, "REJECTED") &&
+                                    (formData.warrantyStatus === "Under Warranty" || formData.warrantyStatus === "Expired") ? (
+                                        <div className="space-y-2">
+                                            <Label>Paid Service</Label>
+                                            <div className="h-10 px-3 py-2 bg-white border rounded-md font-semibold text-slate-700 flex items-center">
+                                                {formData.isPaidService || "—"}
+                                            </div>
+                                        </div>
+                                    ) : (
+                                        <div className="space-y-2">
+                                            <Label>Select Action</Label>
+                                            <Select
+                                                value={resolveServiceActionToCode(formData.serviceAction, serviceActionOptions)}
+                                                onValueChange={(value) => {
+                                                    const actionCode = resolveServiceActionToCode(value, serviceActionOptions);
+                                                    const labourBillable =
+                                                        serviceActionMatchesCode(actionCode, "REPAIR", serviceActionOptions) &&
+                                                        formData.warrantyStatus === "Expired";
+                                                    setFormData({ ...formData, serviceAction: actionCode as ServiceAction, labourBillable });
+                                                }}
+                                            >
+                                                <SelectTrigger className={cn(formSelectTriggerClass, "bg-white")}>
+                                                    <SelectValue placeholder="Select service action" />
+                                                </SelectTrigger>
+                                                <SelectContent
+                                                    position="popper"
+                                                    sideOffset={4}
+                                                    collisionPadding={24}
+                                                    className="z-200 max-h-60"
+                                                >
+                                                    {usableServiceActions.map((action) => {
+                                                        const code = getServiceActionCode(action);
+                                                        return (
+                                                            <SelectItem key={String(action.id ?? code)} value={code}>
+                                                                {action.name || action.value_name || code}
+                                                            </SelectItem>
+                                                        );
+                                                    })}
+                                                </SelectContent>
+                                            </Select>
+                                        </div>
+                                    )}
 
-                                {/* Repair Section */}
-                                {formData.serviceAction === "Repair" && (
+                                    {/* Repair Section - Show if action is Repair OR if it's a Paid Service (Under Warranty Reject) */}
+                                    {((serviceActionMatchesCode(formData.serviceAction, "REPAIR", serviceActionOptions)) ||
+                                        (isClaimCode(formData.claim, "REJECTED") &&
+                                            (formData.warrantyStatus === "Under Warranty" || formData.warrantyStatus === "Expired") &&
+                                            formData.isPaidService === "Yes")) && (
                                     <div className="space-y-3 mt-4">
+                                        <div className="space-y-2">
+                                            <SearchableSelect
+                                                label="Currency"
+                                                value={repairCurrencyId}
+                                                options={repairCurrencyOptions}
+                                                onChange={setRepairCurrencyId}
+                                                placeholder="Select currency"
+                                                className={cn(formSelectTriggerClass, "bg-white")}
+                                            />
+                                        </div>
                                         <div className="flex items-center justify-between">
                                             <Label className="text-sm font-semibold">Repair Item Parts</Label>
                                             <Button
@@ -1878,7 +3054,7 @@ function WarrantyService() {
                                                     <TableRow className="bg-slate-50">
                                                         <TableHead className="w-[80px]">Billable</TableHead>
                                                         <TableHead className="w-[50px]">#</TableHead>
-                                                        <TableHead>Item Name</TableHead>
+                                                        <TableHead className="min-w-[300px]">Item Name</TableHead>
                                                         <TableHead className="w-[100px]">Stock</TableHead>
                                                         <TableHead className="w-[100px]">Qty</TableHead>
                                                         <TableHead className="w-[120px]">Price</TableHead>
@@ -1903,22 +3079,41 @@ function WarrantyService() {
                                                                     />
                                                                 </TableCell>
                                                                 <TableCell>{index + 1}</TableCell>
-                                                                <TableCell>
-                                                                    <Select
-                                                                        value={item.itemName}
-                                                                        onValueChange={(value) => handleRepairItemChange(item.id, "itemName", value)}
+                                                                <TableCell className="min-w-[300px]">
+                                                                    <div
+                                                                        className="w-full min-w-[280px]"
+                                                                        title={
+                                                                            item.item_id != null
+                                                                                ? repairItemSelectOptions.find(
+                                                                                      (opt) =>
+                                                                                          opt.value ===
+                                                                                          String(item.item_id)
+                                                                                  )?.label
+                                                                                : undefined
+                                                                        }
                                                                     >
-                                                                        <SelectTrigger className="h-9">
-                                                                            <SelectValue placeholder="Select item" />
-                                                                        </SelectTrigger>
-                                                                        <SelectContent>
-                                                                            {REPAIR_ITEMS.map((repairItem) => (
-                                                                                <SelectItem key={repairItem} value={repairItem}>
-                                                                                    {repairItem}
-                                                                                </SelectItem>
-                                                                            ))}
-                                                                        </SelectContent>
-                                                                    </Select>
+                                                                        <SearchableSelect
+                                                                            value={
+                                                                                item.item_id != null
+                                                                                    ? String(item.item_id)
+                                                                                    : ""
+                                                                            }
+                                                                            options={repairItemSelectOptions}
+                                                                            onChange={(value) =>
+                                                                                handleRepairItemSelect(item.id, value)
+                                                                            }
+                                                                            disabled={isRepairItemsLoading}
+                                                                            placeholder={
+                                                                                isRepairItemsLoading
+                                                                                    ? "Loading items..."
+                                                                                    : "Select item"
+                                                                            }
+                                                                            className="h-auto min-h-10 w-full min-w-[280px] items-start! py-2 bg-white"
+                                                                            selectedPrimaryLineClamp={2}
+                                                                            showSelectedTitle
+                                                                            selectedTruncate="end"
+                                                                        />
+                                                                    </div>
                                                                 </TableCell>
                                                                 <TableCell>
                                                                     <Input
@@ -1992,7 +3187,20 @@ function WarrantyService() {
                                                 <div className="flex items-center justify-between pt-2 border-t">
                                                     <Label className="font-bold text-lg">Total Price</Label>
                                                     <span className="font-bold text-lg text-primary">
-                                                        ${((formData.repairItems || []).reduce((sum, item) => sum + (item.billable ? Number(item.price || 0) * Number(item.qty || 0) : 0), 0) + (formData.labourBillable ? (Number(formData.labourCost || 0)) : 0)).toFixed(2)}
+                                                        {repairCurrencySymbol}
+                                                        {(
+                                                            (formData.repairItems || []).reduce(
+                                                                (sum, item) =>
+                                                                    sum +
+                                                                    (item.billable
+                                                                        ? Number(item.price || 0) * Number(item.qty || 0)
+                                                                        : 0),
+                                                                0
+                                                            ) +
+                                                            (formData.labourBillable
+                                                                ? Number(formData.labourCost || 0)
+                                                                : 0)
+                                                        ).toFixed(2)}
                                                     </span>
                                                 </div>
                                             </div>
@@ -2001,7 +3209,7 @@ function WarrantyService() {
                                 )}
 
                                 {/* Replace Section */}
-                                {formData.serviceAction === "Replace" && (
+                                {serviceActionMatchesCode(formData.serviceAction, "REPLACE", serviceActionOptions) && (
                                     <div className="space-y-3 mt-4">
                                         <Label className="text-sm font-semibold">New Serial Number</Label>
                                         <Input
@@ -2016,23 +3224,44 @@ function WarrantyService() {
                         )}
                     </div>
 
-                    <DialogFooter className="gap-2">
-                        <Button variant="outline" onClick={() => { setIsFormModalOpen(false); resetForm(); }}>
+                    <DialogFooter className="shrink-0 gap-2 border-t bg-white p-4 sm:p-6 mt-auto sm:flex-row sm:items-center sm:justify-end">
+                        <Button
+                            variant="outline"
+                            onClick={() => { setIsFormModalOpen(false); resetForm(); }}
+                            disabled={isFormActionBusy}
+                        >
                             Close
                         </Button>
-                        {editingId && formData.status === "Submitted Request" ? (
-                            <Button onClick={handleFulfill}>
-                                Complete
-                            </Button>
+                        {editingId && isRequestStatus(formData.status, "SUBMITTED") ? (
+                            canEdit(WARRANTY_SERVICE_MODULE) && (
+                                <Button
+                                    onClick={handleFulfill}
+                                    loading={actionLoading === "complete"}
+                                    disabled={!!actionLoading}
+                                >
+                                    Complete
+                                </Button>
+                            )
                         ) : (
-                            <>
-                                <Button variant="secondary" onClick={handleSaveDraft}>
-                                    Save
-                                </Button>
-                                <Button onClick={handleSubmit}>
-                                    Submit
-                                </Button>
-                            </>
+                            canSaveRequest && (
+                                <>
+                                    <Button
+                                        variant="secondary"
+                                        onClick={handleSaveDraft}
+                                        loading={actionLoading === "save-draft"}
+                                        disabled={!!actionLoading}
+                                    >
+                                        Save
+                                    </Button>
+                                    <Button
+                                        onClick={handleSubmit}
+                                        loading={actionLoading === "submit"}
+                                        disabled={!!actionLoading}
+                                    >
+                                        Submit
+                                    </Button>
+                                </>
+                            )
                         )}
                     </DialogFooter>
                 </DialogContent>
@@ -2041,7 +3270,10 @@ function WarrantyService() {
 
             {/* View Modal */}
             <Dialog open={isViewModalOpen} onOpenChange={setIsViewModalOpen}>
-                <DialogContent className="max-w-4xl max-h-[90vh] overflow-y-auto">
+                <DialogContent
+                    className="max-w-4xl max-h-[90vh] overflow-y-auto"
+                    onInteractOutside={(e) => e.preventDefault()}
+                >
                     <DialogHeader>
                         <DialogTitle className="text-2xl font-bold">
                             Service Request Details
@@ -2054,15 +3286,15 @@ function WarrantyService() {
                             <div className="grid grid-cols-1 md:grid-cols-4 gap-4 p-4 bg-slate-50 rounded-lg border">
                                 <div>
                                     <Label className="text-xs text-muted-foreground">Service Code</Label>
-                                    <p className="font-mono font-semibold">{viewingRequest.serviceRequestCode || "—"}</p>
+                                    <p className="font-mono font-semibold">{displayText(viewingRequest.serviceRequestCode)}</p>
                                 </div>
                                 <div>
                                     <Label className="text-xs text-muted-foreground">Consumer Name</Label>
-                                    <p className="font-semibold">{viewingRequest.clientName}</p>
+                                    <p className="font-semibold">{displayText(viewingRequest.clientName)}</p>
                                 </div>
                                 <div>
                                     <Label className="text-xs text-muted-foreground">Service Date</Label>
-                                    <p className="font-medium">{viewingRequest.serviceDate ? formatDate(viewingRequest.serviceDate) : "—"}</p>
+                                    <p className="font-medium">{displayDate(viewingRequest.serviceDate)}</p>
                                 </div>
                                 <div>
                                     <Label className="text-xs text-muted-foreground">Status</Label>
@@ -2075,18 +3307,40 @@ function WarrantyService() {
                             </div>
 
                             <div className="grid grid-cols-1 md:grid-cols-2 gap-4 p-4 bg-slate-50 rounded-lg border">
-                                <div>
-                                    <Label className="text-xs text-muted-foreground">Claim</Label>
-                                    <div className="mt-1">
-                                        {viewingRequest.claim ? (
-                                            <Badge variant={viewingRequest.claim === "Accept" ? "default" : "destructive"}>
-                                                {viewingRequest.claim}
-                                            </Badge>
-                                        ) : (
-                                            "—"
-                                        )}
+                                {!isExpiredWarrantyStatus(viewingRequest.warrantyStatus) && (
+                                    <div>
+                                        <Label className="text-xs text-muted-foreground">Claim</Label>
+                                        <div className="mt-1">
+                                            {viewingRequest.claim ? (
+                                                <Badge variant={isClaimCode(viewingRequest.claim, "ACCEPT") ? "default" : "destructive"}>
+                                                    {getClaimDisplayName(viewingRequest.claim, claimStatuses)}
+                                                </Badge>
+                                            ) : (
+                                                "—"
+                                            )}
+                                        </div>
                                     </div>
-                                </div>
+                                )}
+                                {isExpiredWarrantyStatus(viewingRequest.warrantyStatus) && (
+                                    <div>
+                                        <Label className="text-xs text-muted-foreground">Paid Service?</Label>
+                                        <div className="mt-1">
+                                            <Badge variant="outline" className="font-semibold">
+                                                {getPaidServiceDisplay(viewingRequest.isPaidService)}
+                                            </Badge>
+                                        </div>
+                                    </div>
+                                )}
+                                {!isExpiredWarrantyStatus(viewingRequest.warrantyStatus) && viewingRequest.isPaidService && (
+                                    <div>
+                                        <Label className="text-xs text-muted-foreground">Paid Service?</Label>
+                                        <div className="mt-1">
+                                            <Badge variant="outline" className="font-semibold">
+                                                {getPaidServiceDisplay(viewingRequest.isPaidService)}
+                                            </Badge>
+                                        </div>
+                                    </div>
+                                )}
                             </div>
 
                             {/* Serial Number & Warranty Details */}
@@ -2097,35 +3351,39 @@ function WarrantyService() {
                                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                                     <div>
                                         <Label className="text-xs text-muted-foreground">Serial Number</Label>
-                                        <p className="font-mono font-medium">{viewingRequest.serialNumber}</p>
+                                        <p className="font-mono font-medium">{displayText(viewingRequest.serialNumber)}</p>
                                     </div>
                                     <div>
                                         <Label className="text-xs text-muted-foreground">Batch</Label>
-                                        <p className="font-medium">{viewingRequest.batch}</p>
+                                        <p className="font-medium">{displayText(viewingRequest.batch)}</p>
                                     </div>
                                     <div>
                                         <Label className="text-xs text-muted-foreground">Production Date</Label>
-                                        <p className="font-medium">{formatDate(viewingRequest.productionDate)}</p>
+                                        <p className="font-medium">{displayDate(viewingRequest.productionDate)}</p>
                                     </div>
                                     <div>
                                         <Label className="text-xs text-muted-foreground">Invoice Date</Label>
-                                        <p className="font-medium">{formatDate(viewingRequest.invoiceDate)}</p>
+                                        <p className="font-medium">{displayDate(viewingRequest.invoiceDate)}</p>
                                     </div>
                                     <div>
                                         <Label className="text-xs text-muted-foreground">Warranty End Date</Label>
-                                        <p className="font-medium">{formatDate(viewingRequest.warrantyEndDate)}</p>
+                                        <p className="font-medium">{displayDate(viewingRequest.warrantyEndDate)}</p>
                                     </div>
                                     <div>
                                         <Label className="text-xs text-muted-foreground">Warranty Status</Label>
                                         <div className="mt-1">
-                                            <Badge
-                                                variant={viewingRequest.warrantyStatus === "Under Warranty" ? "default" : "outline"}
-                                                className={cn(
-                                                    viewingRequest.warrantyStatus === "Under Warranty" && "bg-green-500 hover:bg-green-600 border-green-500"
-                                                )}
-                                            >
-                                                {viewingRequest.warrantyStatus}
-                                            </Badge>
+                                            {viewingRequest.warrantyStatus ? (
+                                                <Badge
+                                                    variant={viewingRequest.warrantyStatus === "Under Warranty" ? "default" : "outline"}
+                                                    className={cn(
+                                                        viewingRequest.warrantyStatus === "Under Warranty" && "bg-green-500 hover:bg-green-600 border-green-500"
+                                                    )}
+                                                >
+                                                    {viewingRequest.warrantyStatus}
+                                                </Badge>
+                                            ) : (
+                                                <span className="font-medium">{EMPTY_DISPLAY}</span>
+                                            )}
                                         </div>
                                     </div>
                                 </div>
@@ -2134,7 +3392,7 @@ function WarrantyService() {
                             {/* Complaint Description */}
                             <div className="space-y-2">
                                 <Label className="text-xs text-muted-foreground">Complaint Description</Label>
-                                <p className="text-sm p-3 bg-slate-50 rounded border">{viewingRequest.complaintDescription}</p>
+                                <p className="text-sm p-3 bg-slate-50 rounded border">{displayText(viewingRequest.complaintDescription)}</p>
                             </div>
 
                             {/* Rejection Remarks (if rejected) */}
@@ -2145,232 +3403,8 @@ function WarrantyService() {
                                 </div>
                             )}
 
-                            {/* Service Action Section - For Submitted status with Accept, NA, or Reject (Under Warranty) */}
-                            {viewingRequest.status === "Submitted Request" && (
-                                viewingRequest.claim === "Accept" || 
-                                viewingRequest.claim === "NA" || 
-                                (viewingRequest.claim === "Reject" && viewingRequest.warrantyStatus === "Under Warranty")
-                            ) && (
-                                <div className="space-y-4 p-4 bg-blue-50 rounded-lg border border-blue-200">
-                                    <h3 className="text-sm font-semibold text-blue-900 uppercase tracking-wide">
-                                        Service Action
-                                    </h3>
-
-                                    <div className="space-y-2">
-                                        <Label>Select Action</Label>
-                                        <Select
-                                            value={viewingRequest.serviceAction}
-                                            onValueChange={(value) => handleServiceActionUpdate(value as ServiceAction)}
-                                        >
-                                            <SelectTrigger className="h-10 bg-white">
-                                                <SelectValue placeholder="Select service action" />
-                                            </SelectTrigger>
-                                            <SelectContent>
-                                                <SelectItem value="Repair">Repair</SelectItem>
-                                                {/* Replace option only for Accept claim or NA claim, not for Reject */}
-                                                {viewingRequest.claim !== "Reject" && (
-                                                    <SelectItem value="Replace">Replace</SelectItem>
-                                                )}
-                                            </SelectContent>
-                                        </Select>
-                                    </div>
-
-                                    {/* Repair Section */}
-                                    {viewingRequest.serviceAction === "Repair" && (
-                                        <div className="space-y-3 mt-4">
-                                            <div className="flex items-center justify-between">
-                                                <Label className="text-sm font-semibold">Repair Item Parts</Label>
-                                                <Button
-                                                    size="sm"
-                                                    variant="outline"
-                                                    onClick={() => {
-                                                        // Auto-check billable if warranty is expired
-                                                        const isBillable = viewingRequest.warrantyStatus === "Expired";
-                                                        const newItem: RepairItem = { id: Date.now(), itemName: "", stock: 0, qty: 1, price: 0, billable: isBillable };
-                                                        updateViewingRequest({ repairItems: [...(viewingRequest.repairItems || []), newItem] });
-                                                    }}
-                                                    className="h-8"
-                                                >
-                                                    <Plus className="h-3 w-3 mr-1" />
-                                                    Add Item
-                                                </Button>
-                                            </div>
-
-                                            <div className="max-h-[300px] overflow-y-auto border rounded-lg bg-white">
-                                                <Table>
-                                                    <TableHeader>
-                                                        <TableRow className="bg-slate-50">
-                                                            <TableHead className="w-[80px]">Billable</TableHead>
-                                                            <TableHead className="w-[50px]">#</TableHead>
-                                                            <TableHead>Item Name</TableHead>
-                                                            <TableHead className="w-[100px]">Stock</TableHead>
-                                                            <TableHead className="w-[100px]">Qty</TableHead>
-                                                            <TableHead className="w-[120px]">Price</TableHead>
-                                                            <TableHead className="w-[60px]"></TableHead>
-                                                        </TableRow>
-                                                    </TableHeader>
-                                                    <TableBody>
-                                                        {(!viewingRequest.repairItems || viewingRequest.repairItems.length === 0) ? (
-                                                            <TableRow>
-                                                                <TableCell colSpan={7} className="text-center text-muted-foreground py-4">
-                                                                    No repair items added
-                                                                </TableCell>
-                                                            </TableRow>
-                                                        ) : (
-                                                            viewingRequest.repairItems.map((item, index) => (
-                                                                <TableRow key={item.id}>
-                                                                    <TableCell className="text-center">
-                                                                        <Checkbox
-                                                                            checked={item.billable}
-                                                                            onCheckedChange={(checked) => {
-                                                                                const updatedItems = viewingRequest.repairItems?.map(i =>
-                                                                                    i.id === item.id ? { ...i, billable: !!checked } : i
-                                                                                );
-                                                                                updateViewingRequest({ repairItems: updatedItems });
-                                                                            }}
-                                                                            className="h-5 w-5"
-                                                                        />
-                                                                    </TableCell>
-                                                                    <TableCell>{index + 1}</TableCell>
-                                                                    <TableCell>
-                                                                        <Select
-                                                                            value={item.itemName}
-                                                                            onValueChange={(value) => {
-                                                                                const updatedItems = viewingRequest.repairItems?.map(i =>
-                                                                                    i.id === item.id ? { ...i, itemName: value, stock: MOCK_STOCK_DATA[value] || 0 } : i
-                                                                                );
-                                                                                updateViewingRequest({ repairItems: updatedItems });
-                                                                            }}
-                                                                        >
-                                                                            <SelectTrigger className="h-9">
-                                                                                <SelectValue placeholder="Select item" />
-                                                                            </SelectTrigger>
-                                                                            <SelectContent>
-                                                                                {REPAIR_ITEMS.map((repairItem) => (
-                                                                                    <SelectItem key={repairItem} value={repairItem}>
-                                                                                        {repairItem}
-                                                                                    </SelectItem>
-                                                                                ))}
-                                                                            </SelectContent>
-                                                                        </Select>
-                                                                    </TableCell>
-                                                                    <TableCell>
-                                                                        <Input
-                                                                            value={item.stock}
-                                                                            disabled
-                                                                            className="h-9 bg-slate-50"
-                                                                        />
-                                                                    </TableCell>
-                                                                    <TableCell>
-                                                                        <Input
-                                                                            type="text"
-                                                                            inputMode="numeric"
-                                                                            value={item.qty}
-                                                                            onChange={(e) => {
-                                                                                let val = e.target.value.replace(/[^0-9.]/g, '');
-                                                                                const parts = val.split('.');
-                                                                                if (parts.length > 2) val = parts[0] + '.' + parts.slice(1).join('');
-                                                                                if (parts[0].length > 6) val = parts[0].slice(0, 6) + (parts.length > 1 ? '.' + parts[1] : '');
-                                                                                const updatedItems = viewingRequest.repairItems?.map(i =>
-                                                                                    i.id === item.id ? { ...i, qty: val } : i
-                                                                                );
-                                                                                updateViewingRequest({ repairItems: updatedItems });
-                                                                            }}
-                                                                            className="h-9 text-center"
-                                                                        />
-                                                                    </TableCell>
-                                                                    <TableCell>
-                                                                        <Input
-                                                                            type="text"
-                                                                            inputMode="decimal"
-                                                                            placeholder="Price"
-                                                                            value={item.price}
-                                                                            onChange={(e) => {
-                                                                                let val = e.target.value.replace(/[^0-9.]/g, '');
-                                                                                const parts = val.split('.');
-                                                                                if (parts.length > 2) val = parts[0] + '.' + parts.slice(1).join('');
-                                                                                const updatedItems = viewingRequest.repairItems?.map(i =>
-                                                                                    i.id === item.id ? { ...i, price: val } : i
-                                                                                );
-                                                                                updateViewingRequest({ repairItems: updatedItems });
-                                                                            }}
-                                                                            className="h-9 text-right font-semibold"
-                                                                        />
-                                                                    </TableCell>
-                                                                    <TableCell>
-                                                                        <Button
-                                                                            variant="ghost"
-                                                                            size="icon"
-                                                                            className="h-8 w-8"
-                                                                            onClick={() => {
-                                                                                const updatedItems = viewingRequest.repairItems?.filter(i => i.id !== item.id);
-                                                                                updateViewingRequest({ repairItems: updatedItems });
-                                                                            }}
-                                                                        >
-                                                                            <Trash2 className="h-4 w-4 text-red-500" />
-                                                                        </Button>
-                                                                    </TableCell>
-                                                                </TableRow>
-                                                            ))
-                                                        )}
-                                                    </TableBody>
-                                                </Table>
-                                                
-                                                {/* Labour Cost Row */}
-                                                <div className="border-t p-4 space-y-3 bg-slate-50">
-                                                    <div className="flex items-center justify-between">
-                                                        <div className="flex items-center gap-3">
-                                                            <Checkbox
-                                                                checked={viewingRequest.labourBillable || false}
-                                                                onCheckedChange={(checked) => updateViewingRequest({ labourBillable: !!checked })}
-                                                                className="h-5 w-5"
-                                                            />
-                                                            <Label className="font-semibold">Labour Cost</Label>
-                                                        </div>
-                                                        <Input
-                                                            type="text"
-                                                            inputMode="decimal"
-                                                            placeholder="Amount"
-                                                            value={viewingRequest.labourCost || ""}
-                                                            onChange={(e) => {
-                                                                let val = e.target.value.replace(/[^0-9.]/g, '');
-                                                                const parts = val.split('.');
-                                                                if (parts.length > 2) val = parts[0] + '.' + parts.slice(1).join('');
-                                                                updateViewingRequest({ labourCost: val });
-                                                            }}
-                                                            className="h-9 w-32 text-right font-semibold"
-                                                        />
-                                                    </div>
-                                                    
-                                                    {/* Total Price */}
-                                                    <div className="flex items-center justify-between pt-2 border-t">
-                                                        <Label className="font-bold text-lg">Total Price</Label>
-                                                        <span className="font-bold text-lg text-primary">
-                                                            ${((viewingRequest.repairItems || []).reduce((sum, item) => sum + (item.billable ? Number(item.price || 0) * Number(item.qty || 0) : 0), 0) + (viewingRequest.labourBillable ? (Number(viewingRequest.labourCost || 0)) : 0)).toFixed(2)}
-                                                        </span>
-                                                    </div>
-                                                </div>
-                                            </div>
-                                        </div>
-                                    )}
-
-                                    {/* Replace Section */}
-                                    {viewingRequest.serviceAction === "Replace" && (
-                                        <div className="space-y-3 mt-4">
-                                            <Label className="text-sm font-semibold">New Serial Number</Label>
-                                            <Input
-                                                placeholder="Enter new serial number (FG remains same)"
-                                                value={viewingRequest.newSerialNumber || ""}
-                                                onChange={(e) => updateViewingRequest({ newSerialNumber: e.target.value })}
-                                                className="h-10 border-blue-200 focus:border-blue-400"
-                                            />
-                                        </div>
-                                    )}
-                                </div>
-                            )}
-
-                            {/* Display Service Action for other statuses */}
-                            {viewingRequest.status !== "Submitted Request" && viewingRequest.serviceAction && (
+                            {/* Display Service Action for completed and other non-submitted statuses */}
+                            {!isRequestStatus(viewingRequest.status, "SUBMITTED") && viewingRequest.serviceAction && (
                                 <div className="space-y-4 p-4 bg-slate-50 rounded-lg border">
                                     <h3 className="text-sm font-semibold text-slate-700 uppercase tracking-wide">
                                         Service Action Taken
@@ -2378,15 +3412,17 @@ function WarrantyService() {
                                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                                         <div>
                                             <Label className="text-xs text-muted-foreground">Service Date</Label>
-                                            <p className="font-medium">{viewingRequest.serviceDate ? formatDate(viewingRequest.serviceDate) : "—"}</p>
+                                            <p className="font-medium">{displayDate(viewingRequest.serviceDate)}</p>
                                         </div>
                                         <div>
                                             <Label className="text-xs text-muted-foreground">Action Type</Label>
-                                            <p className="font-medium">{viewingRequest.serviceAction}</p>
+                                            <p className="font-medium">
+                                                {displayText(getServiceActionDisplayName(viewingRequest.serviceAction, serviceActionOptions))}
+                                            </p>
                                         </div>
                                     </div>
 
-                                    {viewingRequest.serviceAction === "Repair" && viewingRequest.repairItems && viewingRequest.repairItems.length > 0 && (
+                                    {serviceActionMatchesCode(viewingRequest.serviceAction, "REPAIR", serviceActionOptions) && viewingRequest.repairItems && viewingRequest.repairItems.length > 0 && (
                                         <div className="space-y-2">
                                             <Label className="text-xs text-muted-foreground">Repair Items Used</Label>
                                             <div className="border rounded-lg bg-white">
@@ -2408,10 +3444,15 @@ function WarrantyService() {
                                                                     <Checkbox checked={item.billable} disabled className="h-5 w-5" />
                                                                 </TableCell>
                                                                 <TableCell>{index + 1}</TableCell>
-                                                                <TableCell>{item.itemName}</TableCell>
-                                                                <TableCell>{item.stock}</TableCell>
-                                                                <TableCell>{item.qty}</TableCell>
-                                                                <TableCell>${Number(item.price || 0).toFixed(2)}</TableCell>
+                                                                <TableCell>{displayText(item.itemName)}</TableCell>
+                                                                <TableCell>{displayText(item.stock)}</TableCell>
+                                                                <TableCell>{displayText(item.qty)}</TableCell>
+                                                                <TableCell>
+                                                                    {formatMoneyForRequest(
+                                                                        viewingRequest as ServiceRequestDataWithCurrency,
+                                                                        Number(item.price || 0)
+                                                                    )}
+                                                                </TableCell>
                                                             </TableRow>
                                                         ))}
                                                     </TableBody>
@@ -2424,14 +3465,33 @@ function WarrantyService() {
                                                             <Checkbox checked={viewingRequest.labourBillable || false} disabled className="h-5 w-5" />
                                                             <Label className="font-semibold">Labour Cost</Label>
                                                         </div>
-                                                        <span className="font-medium">${Number(viewingRequest.labourCost || 0).toFixed(2)}</span>
+                                                        <span className="font-medium">
+                                                            {formatMoneyForRequest(
+                                                                viewingRequest as ServiceRequestDataWithCurrency,
+                                                                Number(viewingRequest.labourCost || 0)
+                                                            )}
+                                                        </span>
                                                     </div>
                                                     
                                                     {/* Total Price */}
                                                     <div className="flex items-center justify-between pt-2 border-t">
                                                         <Label className="font-bold text-lg">Total Price</Label>
                                                         <span className="font-bold text-lg text-primary">
-                                                            ${((viewingRequest.repairItems || []).reduce((sum, item) => sum + (item.billable ? Number(item.price || 0) * Number(item.qty || 0) : 0), 0) + (viewingRequest.labourBillable ? (Number(viewingRequest.labourCost || 0)) : 0)).toFixed(2)}
+                                                            {formatMoneyForRequest(
+                                                                viewingRequest as ServiceRequestDataWithCurrency,
+                                                                (viewingRequest.repairItems || []).reduce(
+                                                                    (sum, item) =>
+                                                                        sum +
+                                                                        (item.billable
+                                                                            ? Number(item.price || 0) *
+                                                                              Number(item.qty || 0)
+                                                                            : 0),
+                                                                    0
+                                                                ) +
+                                                                    (viewingRequest.labourBillable
+                                                                        ? Number(viewingRequest.labourCost || 0)
+                                                                        : 0)
+                                                            )}
                                                         </span>
                                                     </div>
                                                 </div>
@@ -2439,10 +3499,10 @@ function WarrantyService() {
                                         </div>
                                     )}
 
-                                    {viewingRequest.serviceAction === "Replace" && viewingRequest.newSerialNumber && (
+                                    {serviceActionMatchesCode(viewingRequest.serviceAction, "REPLACE", serviceActionOptions) && viewingRequest.newSerialNumber && (
                                         <div>
                                             <Label className="text-xs text-muted-foreground">New Serial Number</Label>
-                                            <p className="font-mono text-blue-600 font-semibold">{viewingRequest.newSerialNumber}</p>
+                                            <p className="font-mono text-blue-600 font-semibold">{displayText(viewingRequest.newSerialNumber)}</p>
                                         </div>
                                     )}
                                 </div>
@@ -2454,13 +3514,12 @@ function WarrantyService() {
                         <Button variant="outline" onClick={() => { setIsViewModalOpen(false); setViewingRequest(null); }}>
                             Close
                         </Button>
-                        {viewingRequest?.status === "Submitted Request" && (
-                            <Button onClick={handleFulfill}>
-                                Complete
-                            </Button>
-                        )}
-                        {viewingRequest?.status === "Completed Request" && (
-                            <Button onClick={() => handleExportPDF(viewingRequest)} className="gap-2">
+                        {isRequestStatus(viewingRequest?.status, "COMPLETED") && canPrint(WARRANTY_SERVICE_MODULE) && (
+                            <Button
+                                onClick={() => viewingRequest && handleExportPDF(viewingRequest)}
+                                className="gap-2"
+                                disabled={!!actionLoading}
+                            >
                                 <Download className="h-4 w-4" />
                                 Export
                             </Button>

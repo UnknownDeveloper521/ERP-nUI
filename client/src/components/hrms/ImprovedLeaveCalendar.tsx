@@ -193,43 +193,49 @@ export default function ImprovedLeaveCalendar({
   };
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-4" style={{ marginRight: '16px' }}>
       {/* Main Calendar Container - White background with rounded corners */}
       <div className="bg-white rounded-lg overflow-hidden">
         {/* Horizontal scroll container for wide calendars */}
-        <div className="overflow-x-auto">
-          <div className="min-w-full inline-block">
+        <div className="overflow-x-auto" style={{ paddingBottom: '20px', marginBottom: '-8px' }}>
+          <div className="min-w-full inline-block" style={{ marginBottom: '8px' }}>
             
             {/* ===== HEADER ROW - Weekdays Only ===== */}
             {/* Sticky header that stays visible when scrolling vertically */}
-            <div className="border-b border-gray-200 sticky top-0 bg-gray-50 z-20">
-              <div className="flex">
-                {/* Empty cell aligned with employee name column */}
-                <div className="w-48 flex-shrink-0 px-3 py-2">
-                  <span className="text-xs font-semibold text-gray-700">Employee</span>
-                </div>
-                
-                {/* Weekday headers (Mo, Tu, We, etc.) */}
-                {monthDates.map((date, index) => {
-                  // Calculate weekday (0=Sunday, 6=Saturday) and adjust to start with Monday
-                  const dayOfWeek = weekdayAbbr[(date.getDay() + 6) % 7];
-                  const isWeekend = date.getDay() === 0 || date.getDay() === 6;
-                  
-                  return (
-                    <div
-                      key={`weekday-${index}`}
-                      className="flex-1 min-w-[36px] text-center py-2"
-                    >
-                      <div className={cn(
-                        "text-[9px] font-semibold uppercase",
-                        isWeekend ? "text-red-500" : "text-gray-600"  // Red for weekends
-                      )}>
-                        {dayOfWeek}
-                      </div>
-                    </div>
-                  );
-                })}
+            {/* ===== HEADER ROW - Weekdays Only ===== */}
+            {/* Sticky header that stays visible when scrolling vertically */}
+            <div 
+              className="border-b border-gray-200 sticky top-0 bg-gray-50 z-30"
+              style={{
+                display: 'grid',
+                gridTemplateColumns: `150px repeat(${daysInMonth}, minmax(18px, 1fr))`
+              }}
+            >
+              {/* Sticky employee column label */}
+              <div className="flex-shrink-0 px-3 py-2 border-r border-gray-200 sticky left-0 bg-gray-50 z-40">
+                <span className="text-xs font-semibold text-gray-700">Employee</span>
               </div>
+              
+              {/* Weekday headers (Mo, Tu, We, etc.) */}
+              {monthDates.map((date, index) => {
+                // Calculate weekday (0=Sunday, 6=Saturday) and adjust to start with Monday
+                const dayOfWeek = weekdayAbbr[(date.getDay() + 6) % 7];
+                const isWeekend = date.getDay() === 0 || date.getDay() === 6;
+                
+                return (
+                  <div
+                    key={`weekday-${index}`}
+                    className="text-center py-2 border-r border-gray-100 last:border-r-0"
+                  >
+                    <div className={cn(
+                      "text-[9px] font-semibold uppercase",
+                      isWeekend ? "text-red-500" : "text-gray-600"  // Red for weekends
+                    )}>
+                      {dayOfWeek}
+                    </div>
+                  </div>
+                );
+              })}
             </div>
 
             {/* ===== EMPLOYEE ROWS ===== */}
@@ -239,25 +245,30 @@ export default function ImprovedLeaveCalendar({
               const employeeLeaves = getEmployeeLeavesForMonth(employee);
 
               return (
-                <div key={`emp-${empIndex}`} className="border-b border-gray-100 last:border-b-0">
-                  <div className="flex">
-                    
-                    {/* ===== EMPLOYEE INFO COLUMN ===== */}
-                    {/* Sticky column that stays visible when scrolling horizontally */}
-                    <div className="w-48 flex-shrink-0 px-3 py-3 flex items-center gap-2 bg-white sticky left-0 z-10">
-                      {/* Avatar circle with employee initials */}
-                      <div 
-                        className="w-7 h-7 rounded-full flex items-center justify-center text-white text-[10px] font-bold flex-shrink-0"
-                        style={{ backgroundColor: getAvatarColor(employee) }}
-                      >
-                        {getInitials(employee)}
-                      </div>
-                      
-                      {/* Employee name with text truncation */}
-                      <span className="text-xs font-medium text-gray-900 truncate">
-                        {employee}
-                      </span>
+                <div 
+                  key={`emp-${empIndex}`} 
+                  className="border-b border-gray-100 last:border-b-0 hover:bg-gray-50 transition-colors"
+                  style={{
+                    display: 'grid',
+                    gridTemplateColumns: `150px repeat(${daysInMonth}, minmax(18px, 1fr))`
+                  }}
+                >
+                  {/* ===== EMPLOYEE INFO COLUMN ===== */}
+                  {/* Sticky column that stays visible when scrolling horizontally */}
+                  <div className="flex-shrink-0 px-3 py-3 flex items-center gap-2 bg-white sticky left-0 z-10 border-r border-gray-100 group-hover:bg-gray-50/80">
+                    {/* Avatar circle with employee initials */}
+                    <div 
+                      className="w-7 h-7 rounded-full flex items-center justify-center text-white text-[10px] font-bold flex-shrink-0"
+                      style={{ backgroundColor: getAvatarColor(employee) }}
+                    >
+                      {getInitials(employee)}
                     </div>
+                    
+                    {/* Employee name with text truncation */}
+                    <span className="text-xs font-medium text-gray-900 truncate">
+                      {employee}
+                    </span>
+                  </div>
 
                     {/* ===== DATE CELLS WITH LEAVE INDICATORS ===== */}
                     {/* One cell for each day of the month */}
@@ -275,19 +286,25 @@ export default function ImprovedLeaveCalendar({
                       return (
                         <div
                           key={`cell-${empIndex}-${dateIndex}`}
-                          className="flex-1 min-w-[36px] flex flex-col items-center justify-center relative py-3"
+                          className={cn(
+                            "flex flex-col items-center justify-center relative py-3 border-r border-gray-50 last:border-r-0 h-14",
+                            isWeekend && "bg-gray-50/50"
+                          )}
                         >
                           {/* ===== DATE NUMBER ===== */}
                           {/* Always visible, positioned above leave indicator */}
-                          <div className={cn(
-                            "text-xs font-medium relative z-10",
-                            isToday && "text-blue-600 font-bold",           // Blue for today
-                            !isToday && isWeekend && "text-red-600",        // Red for weekends
-                            !isToday && !isWeekend && "text-gray-700",      // Gray for regular days
-                            activeLeave && !isSingleDay && "text-white"     // White when on leave strip
-                          )}>
-                            {date.getDate()}
-                          </div>
+                          {/* ===== DATE NUMBER ===== */}
+                          {/* Visible only if NOT on leave; if on leave, it's rendered inside the leave indicator */}
+                          {!activeLeave && (
+                            <div className={cn(
+                              "text-[11px] font-medium relative z-10",
+                              isToday && "text-blue-600 font-bold",           // Blue for today
+                              !isToday && isWeekend && "text-red-600",        // Red for weekends
+                              !isToday && !isWeekend && "text-gray-700"       // Gray for regular days
+                            )}>
+                              {date.getDate()}
+                            </div>
+                          )}
 
                           {/* ===== LEAVE INDICATOR ===== */}
                           {/* Renders as continuous strip for multi-day or circle for single-day */}
@@ -295,14 +312,14 @@ export default function ImprovedLeaveCalendar({
                             <div
                               className={cn(
                                 "absolute flex items-center justify-center cursor-pointer transition-all",
-                                // Single-day leave: small circle
+                                // Single-day leave: Rounded pill/capsule
                                 isSingleDay 
-                                  ? "w-6 h-6 rounded-full hover:scale-110 inset-0 m-auto" 
-                                  // Multi-day leave: horizontal strip spanning full cell width
+                                  ? "inset-y-2 inset-x-0.5 rounded-full hover:scale-105" 
+                                  // Multi-day leave: strip spanning full cell width
                                   : "inset-y-2 inset-x-0 hover:opacity-90",
                                 // Rounded edges only on start/end of multi-day leave
-                                isStart && !isSingleDay && "rounded-l-full",  // Left edge rounded
-                                isEnd && !isSingleDay && "rounded-r-full"     // Right edge rounded
+                                isStart && !isSingleDay && "rounded-l-full",
+                                isEnd && !isSingleDay && "rounded-r-full"
                               )}
                               style={{ 
                                 backgroundColor: leaveTypeColors[activeLeave.leaveType] || '#8b5cf6',
@@ -319,9 +336,9 @@ export default function ImprovedLeaveCalendar({
                               }}
                               onMouseLeave={() => setHoveredLeave(null)}
                             >
-                              {/* Show date number inside circle for single-day leaves */}
-                              {isSingleDay && (
-                                <span className="text-white text-xs font-bold">
+                              {/* Date number always visible inside all active leave days */}
+                              {activeLeave && (
+                                <span className="text-white text-[10px] font-bold">
                                   {date.getDate()}
                                 </span>
                               )}
@@ -331,10 +348,9 @@ export default function ImprovedLeaveCalendar({
                       );
                     })}
                   </div>
-                </div>
-              );
-            })}
-          </div>
+                );
+              })}
+            </div>
         </div>
       </div>
 
@@ -342,7 +358,7 @@ export default function ImprovedLeaveCalendar({
       {/* Displays leave details when hovering over a leave indicator */}
       {hoveredLeave && (
         <div 
-          className="fixed z-[9999] bg-white border border-gray-300 rounded-lg shadow-xl p-3 max-w-xs pointer-events-none"
+          className="fixed z-[9999] bg-white border border-gray-300 rounded-lg shadow-xl p-3 w-80 pointer-events-none"
           style={{ 
             left: hoveredLeave.x,
             top: hoveredLeave.y,
@@ -351,14 +367,14 @@ export default function ImprovedLeaveCalendar({
         >
           <div className="space-y-2 text-xs">
             {/* Employee name header */}
-            <div className="font-bold text-sm border-b pb-1.5 text-gray-900">
+            <div className="font-bold text-sm border-b pb-1.5 text-gray-900 break-words">
               {`${hoveredLeave.leave.employeeCode} - ${hoveredLeave.leave.employeeName}`}
             </div>
             
             {/* Leave details grid */}
             <div className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1">
               <span className="text-gray-600">Leave Type:</span>
-              <span className="font-semibold text-gray-900">{hoveredLeave.leave.leaveType}</span>
+              <span className="font-semibold text-gray-900 break-words">{hoveredLeave.leave.leaveType}</span>
 
               <span className="text-gray-600">From:</span>
               <span className="text-gray-900">{formatDateTime(hoveredLeave.leave.fromDate)}</span>
@@ -374,7 +390,7 @@ export default function ImprovedLeaveCalendar({
             {hoveredLeave.leave.remark && (
               <div className="pt-1.5 border-t">
                 <span className="text-gray-600">Remark:</span>
-                <p className="mt-0.5 text-gray-900">{hoveredLeave.leave.remark}</p>
+                <p className="mt-0.5 text-gray-900 break-words" style={{ wordWrap: 'break-word', overflowWrap: 'break-word', wordBreak: 'break-word' }}>{hoveredLeave.leave.remark}</p>
               </div>
             )}
           </div>

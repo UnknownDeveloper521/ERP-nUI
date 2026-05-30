@@ -17,12 +17,12 @@ import { Label } from "@/components/ui/label";
 
 export interface FilterOption {
   label: string;
-  value: string;
+  value: string | number;
 }
 
 export type FilterField = 
-  | { type: 'select'; label: string; value: string; options: (string | { label: string; value: string })[]; onChange: (val: string) => void; placeholder?: string; required?: boolean; searchable?: boolean }
-  | { type: 'date'; label: string; value: string | Date | undefined; onChange: (val: Date | undefined) => void; placeholder?: string; required?: boolean; showClear?: boolean }
+  | { type: 'select'; label: string; value: string | number; options: (string | number | { label: string; value: string | number })[]; onChange: (val: any) => void; placeholder?: string; required?: boolean; searchable?: boolean }
+  | { type: 'date'; label: string; value: string | Date | undefined; onChange: (val: Date | undefined) => void; placeholder?: string; required?: boolean; showClear?: boolean; minDate?: Date; maxDate?: Date }
   | { type: 'year'; label: string; value: number | undefined; onChange: (val: number | undefined) => void; placeholder?: string; required?: boolean; showClear?: boolean; availableYears?: number[] }
   | { type: 'text'; label: string; value: string; onChange: (val: string) => void; placeholder?: string; required?: boolean };
 
@@ -102,8 +102,8 @@ export function AppListToolbar({
             <Input
               value={search.value}
               onChange={(e) => search.onChange(e.target.value)}
-              placeholder={search.placeholder || "Search..."}
-              className="pl-9 h-10 border-input bg-background"
+              placeholder={search.placeholder || "Search employees..."}
+              className="pl-9 h-10 border-input bg-background toolbar-search-input"
             />
           </div>
         </div>
@@ -112,14 +112,15 @@ export function AppListToolbar({
       {/* Filters Section */}
       <div className="flex flex-wrap items-end gap-3 flex-grow">
         {sortedFilters.map((filter, index) => {
-          const processedOptions = filter.type === 'select' ? filter.options.map((opt) => {
-            let label = typeof opt === 'string' ? opt : opt.label;
-            const value = typeof opt === 'string' ? opt : opt.value;
+          const processedOptions = filter.type === 'select' ? filter.options.filter(opt => opt != null).map((opt) => {
+            let label = typeof opt === 'string' || typeof opt === 'number' ? String(opt) : (opt.label || '');
+            const value = typeof opt === 'string' || typeof opt === 'number' ? String(opt) : (opt.value || '');
             
             // If it's the generic "all" string, make it descriptive
-            if (typeof opt === 'string' && opt.toLowerCase() === 'all') {
-              label = `All ${filter.label}`;
-            } else if (typeof opt === 'object' && opt.value.toLowerCase() === 'all' && opt.label.toLowerCase() === 'all') {
+            const optValue = typeof opt === 'object' ? String(opt.value || '') : String(opt || '');
+            const optLabel = typeof opt === 'object' ? String(opt.label || '') : String(opt || '');
+
+            if (optValue.toLowerCase() === 'all' && (optLabel.toLowerCase() === 'all' || optLabel.toLowerCase().startsWith('all '))) {
               label = `All ${filter.label}`;
             }
             
@@ -143,13 +144,13 @@ export function AppListToolbar({
                     <Label className="mb-1.5 block text-[10px] font-bold text-muted-foreground uppercase tracking-wider whitespace-nowrap">
                       {filter.label} {filter.required && <span className="text-red-500">*</span>}
                     </Label>
-                    <Select value={filter.value} onValueChange={filter.onChange}>
+                    <Select value={filter.value !== undefined && filter.value !== null ? String(filter.value) : undefined} onValueChange={filter.onChange}>
                       <SelectTrigger className="h-10 border-input bg-background">
                         <SelectValue placeholder={filter.placeholder || `Select ${filter.label}`} />
                       </SelectTrigger>
                       <SelectContent>
                         {processedOptions.map((opt) => (
-                          <SelectItem key={opt.value} value={opt.value}>
+                          <SelectItem key={String(opt.value)} value={String(opt.value)}>
                             {opt.label}
                           </SelectItem>
                         ))}
@@ -167,6 +168,8 @@ export function AppListToolbar({
                   setDate={filter.onChange}
                   placeholder={filter.placeholder}
                   showClear={filter.showClear}
+                  minDate={filter.minDate}
+                  maxDate={filter.maxDate}
                 />
               </>
             ) : filter.type === 'year' ? (

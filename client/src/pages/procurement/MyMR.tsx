@@ -1,4 +1,5 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useMemo, useRef } from "react";
+import { useDebounce } from "@/hooks/useDebounce";
 import { format, parseISO, parse, isValid } from "date-fns";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -21,33 +22,17 @@ import {
     DialogHeader,
     DialogTitle,
 } from "@/components/ui/dialog";
-import {
-    Command,
-    CommandInputBorderless,
-    CommandList,
-    CommandEmpty,
-    CommandGroup,
-    CommandItem,
-} from "@/components/ui/command";
-import {
-    Popover,
-    PopoverContent,
-    PopoverTrigger,
-} from "@/components/ui/popover";
 import { Badge } from "@/components/ui/badge";
-import {
-    Select,
-    SelectContent,
-    SelectItem,
-    SelectTrigger,
-    SelectValue
-} from "@/components/ui/select";
-import { Plus, Search, Check, ChevronsUpDown, Package, Trash2, Calendar as CalendarIcon, ChevronDown, ChevronLeft, ChevronRight } from "lucide-react";
+import { Plus, Search, Package, Trash2, Calendar as CalendarIcon, ChevronDown, ChevronLeft, ChevronRight, Loader2 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { cn } from "@/lib/utils";
 import { mockLocations, mockWorkCenters } from "@/lib/masterMockData";
 import { DataTablePagination } from "@/components/shared/DataTablePagination";
 import { AppListToolbar } from "@/components/shared/AppListToolbar";
+import { SearchableSelect } from "@/components/shared/SearchableSelect";
+import { commonApi, ProcurementStatusRecord, procurementApi, MRListRecord, ItemWithStockRecord } from "@/lib/api";
+import { useHasPermission } from "@/hooks/usePermissions";
+import Unauthorized from "@/pages/Unauthorized";
 
 // ============================================================================
 // TYPE DEFINITIONS
@@ -60,29 +45,13 @@ import {
     getStoredMRs,
     saveMRs
 } from "@/lib/procurementSharedData";
+import { useCommonStore } from "@/store/commonStore";
+import {
+    getAssignedIds,
+    getFirstAssignedMatch,
+    prioritizeByAssigned,
+} from "@/utils/assignedDropdown";
 
-interface MasterItem {
-    id: number;
-    code: string;
-    name: string;
-    type: "RM" | "Consumable";
-    uom: string;
-    availableQty: number;
-}
-
-// ============================================================================
-// MOCK DATA
-// ============================================================================
-
-const MOCK_ITEMS: MasterItem[] = [
-    { id: 101, code: "RM001", name: "Scrap Battery", type: "RM", uom: "Kg", availableQty: 500 },
-    { id: 102, code: "RM002", name: "Plastic Pallets", type: "RM", uom: "Pcs", availableQty: 200 },
-    { id: 103, code: "RM003", name: "Acid Type A", type: "RM", uom: "Ltr", availableQty: 150 },
-    { id: 104, code: "RM004", name: "Acid Type B", type: "RM", uom: "Ltr", availableQty: 120 },
-    { id: 105, code: "RM005", name: "Acid Type C", type: "RM", uom: "Ltr", availableQty: 100 },
-    { id: 106, code: "CON001", name: "Safety Gloves", type: "Consumable", uom: "Pair", availableQty: 300 },
-    { id: 107, code: "CON002", name: "Welding Wire", type: "Consumable", uom: "Kg", availableQty: 80 },
-];
 
 // INITIAL MOCK DATA IS NOW IN lib/procurementSharedData.ts
 
@@ -108,9 +77,17 @@ const formatDate = (date: Date | string): string => {
     return format(d, "dd-MM-yyyy");
 };
 
+const MAX_QTY_NEEDED_INTEGER_DIGITS = 10;
+
+const qtyNeededIntegerWithinLimit = (qty: number | string): boolean => {
+    const clean = String(qty).replace(/[^0-9.]/g, "");
+    const [intPart = ""] = clean.split(".");
+    return intPart.length > 0 && intPart.length <= MAX_QTY_NEEDED_INTEGER_DIGITS;
+};
+
 const SectionHeader = ({ title }: { title: string }) => (
-    <div className="flex items-center gap-2 pb-2 mb-4 border-b">
-        <h3 className="font-semibold text-sm text-primary">{title}</h3>
+    <div className="flex items-center gap-2 border-b pb-1.5 mb-3">
+        <h3 className="text-sm font-semibold text-primary">{title}</h3>
     </div>
 );
 
@@ -119,88 +96,336 @@ const SectionHeader = ({ title }: { title: string }) => (
 // ============================================================================
 
 export default function MRRequest() {
+    const { isMenuVisible, canCreate, canEdit, canDelete } = useHasPermission();
+    const permissionModule = "PROCUREMENT/MY_MR";
+
+    if (!isMenuVisible(permissionModule)) {
+        return <Unauthorized />;
+    }
+
     const { toast } = useToast();
+
+    // Access dynamic master data from the global store
+    const departments = useCommonStore((state) => state.departments);
+    const locations = useCommonStore((state) => state.locations);
+    const [workCenters, setWorkCenters] = useState<any[]>([]);
+
+    // Fetch Workcenters from API (reusable function)
+    const fetchWorkCenters = React.useCallback(async () => {
+        try {
+            const res = await commonApi.getWorkCenters();
+            if (res.isSuccessful && res.data?.records) {
+                setWorkCenters(res.data.records.map((wc: any) => ({
+                    id: wc.id,
+                    name: wc.work_center_name || wc.name || wc.value_name,
+                    code: wc.work_center_code || wc.code || wc.value_code
+                })));
+            }
+        } catch (error) {
+            console.error("Failed to fetch work centers:", error);
+        }
+    }, []);
 
     // Listing/Filtering state
     const [requests, setRequests] = useState<MRRequestData[]>([]);
-
-    useEffect(() => {
-        setRequests(getStoredMRs());
-
-        const handleStorageChange = (e: StorageEvent) => {
-            if (e.key === "erp_mock_mrs") {
-                setRequests(getStoredMRs());
-            }
-        };
-
-        window.addEventListener("storage", handleStorageChange);
-        return () => window.removeEventListener("storage", handleStorageChange);
-    }, []);
-
-    const updateRequests = (newRequests: MRRequestData[]) => {
-        setRequests(newRequests);
-        saveMRs(newRequests);
-    };
-
+    const [procurementStatuses, setProcurementStatuses] = useState<ProcurementStatusRecord[]>([]);
+    const [isLoading, setIsLoading] = useState(false);
+    const [isViewLoading, setIsViewLoading] = useState(false);
+    const [totalItems, setTotalItems] = useState(0);
+    const [inventoryItems, setInventoryItems] = useState<ItemWithStockRecord[]>([]);
+    const [isInventoryLoading, setIsInventoryLoading] = useState(false);
     const [searchTerm, setSearchTerm] = useState("");
+    const debouncedSearchTerm = useDebounce(searchTerm, 500);
     const [filterDate, setFilterDate] = useState<Date | undefined>(undefined);
-    const [filterStatus, setFilterStatus] = useState<string>("Requested MR");
+    const [filterStatus, setFilterStatus] = useState<string | number>("all");
     const [filterWorkCenter, setFilterWorkCenter] = useState<string>("all");
-    
+    const appliedWorkCenterFilterDefault = useRef(false);
+
+    const assignedWorkcenterIds = getAssignedIds("workcenter");
+    const assignedLocationIds = getAssignedIds("location");
+
+    const orderedWorkCenters = useMemo(
+        () => prioritizeByAssigned(workCenters, assignedWorkcenterIds, (wc) => wc.id),
+        [workCenters, assignedWorkcenterIds]
+    );
+
+    const orderedLocations = useMemo(
+        () => prioritizeByAssigned(locations, assignedLocationIds, (loc) => loc.id),
+        [locations, assignedLocationIds]
+    );
+
     // Pagination state - controls page number and rows per page
     const [currentPage, setCurrentPage] = useState(1);
     const [itemsPerPage, setItemsPerPage] = useState(10);
+
+    // Fetch procurement statuses from API
+    const fetchStatuses = React.useCallback(async () => {
+        try {
+            const res = await commonApi.getProcurementStatus();
+            if (res.isSuccessful && res.data?.records) {
+                setProcurementStatuses(res.data.records);
+                
+                // Statuses are fetched for the dropdown, but we keep "all" as default
+            }
+        } catch (error) {
+            console.error("Failed to fetch procurement statuses:", error);
+        }
+    }, []); // Removed filterStatus dependency to avoid circular calls
+
+    const fetchInventoryItems = React.useCallback(async () => {
+        setIsInventoryLoading(true);
+        try {
+            const res = await commonApi.getItemsWithStock("rm,consumables");
+            if (res.data && res.data.records) {
+                setInventoryItems(res.data.records);
+            }
+        } catch (error) {
+            console.error("Failed to fetch inventory items:", error);
+                toast({
+                    variant: "destructive",
+                    title: "Error",
+                    description: "Failed to load items with stock levels.",
+                    duration: 15000
+                });
+        } finally {
+            setIsInventoryLoading(false);
+        }
+    }, [toast]);
+
+    const fetchMRs = React.useCallback(async () => {
+        setIsLoading(true);
+        try {
+            // Map status name to ID if needed (for initial "Requested MR" default)
+            let status_id_to_send: any = filterStatus;
+            
+            // If it's a string name, try to find the ID
+            if (filterStatus !== 'all' && isNaN(Number(filterStatus))) {
+                // If we don't have statuses yet, we MUST wait to avoid sending a string ID to backend
+                if (procurementStatuses.length === 0) {
+                    console.log("Waiting for statuses to load before fetching MRs...");
+                    return;
+                }
+                
+                const found = procurementStatuses.find(s => s.status_name === filterStatus);
+                if (found) {
+                    status_id_to_send = found.status_id;
+                } else {
+                    // If not found in dynamic list, backend won't know it anyway
+                    // Better to send undefined than a string name that causes 500
+                    status_id_to_send = undefined;
+                }
+            }
+
+            const res = await procurementApi.getMRList({
+                page: currentPage,
+                limit: itemsPerPage,
+                search: debouncedSearchTerm,
+                workcenter_id: filterWorkCenter === 'all' ? undefined : filterWorkCenter,
+                status_id: (status_id_to_send === 'all' || status_id_to_send === 'Requested MR') ? undefined : Number(status_id_to_send),
+                date: filterDate ? format(filterDate, "yyyy-MM-dd") : undefined
+            });
+
+            if (res.isSuccessful && res.data) {
+                setRequests(res.data.records.map((r: MRListRecord) => ({
+                    id: r.id,
+                    mrCode: r.mr_code,
+                    mrDate: r.mr_date,
+                    location: r.location_name,
+                    workCenter: r.workcenter_name,
+                    department: r.department_name,
+                    status: (r.status_name || "Requested MR") as MRStatus,
+                    requestedBy: r.request_by,
+                    items: [] // Items will be fetched via separate detail API later
+                })));
+                setTotalItems(res.data.pagination.totalCount);
+            }
+        } catch (error) {
+            console.error("Failed to fetch MRs:", error);
+            toast({
+                variant: "destructive",
+                title: "Error",
+                description: "Failed to fetch material requests.",
+                duration: 15000
+            });
+        } finally {
+            setIsLoading(false);
+        }
+    }, [currentPage, itemsPerPage, debouncedSearchTerm, filterDate, filterStatus, filterWorkCenter, procurementStatuses, toast]);
+
+    const fetchMRDetail = React.useCallback(async (mr_id: number) => {
+        if (isLoading || isViewLoading) return;
+        setIsViewLoading(true);
+        setIsViewModalOpen(true);
+        try {
+            const res = await procurementApi.getMRDetail(mr_id);
+            if (res.isSuccessful && res.data) {
+                const detailed = res.data;
+                setViewingRequest({
+                    id: detailed.id,
+                    mrCode: detailed.mr_code,
+                    mrDate: detailed.mr_date,
+                    location: detailed.location_name,
+                    workCenter: detailed.work_center_name,
+                    department: detailed.department_name,
+                    status: detailed.status as MRStatus,
+                    requestedBy: detailed.requested_by,
+                    items: detailed.items.map((item) => ({
+                        id: item.item_id,
+                        itemCode: item.item_code,
+                        itemName: item.item_name,
+                        uom: item.uom,
+                        type: item.item_type as "RM" | "Consumable",
+                        availableQty: 0, // Not provided by detail API, used for read-only view
+                        requiredQty: Number(item.requested_qty) || 0,
+                        quotations: [],
+                        qtyReceived: 0
+                    }))
+                });
+            } else {
+                const errorTitle = (res as any).errorType === 'validation' ? "Validation Error" :
+                                   (res as any).errorType === 'business' ? "Business Error" : "Error";
+                toast({
+                    variant: "destructive",
+                    title: errorTitle,
+                    description: res.message,
+                    duration: 15000
+                });
+                setIsViewModalOpen(false);
+            }
+        } catch (error: any) {
+            console.error("Failed to fetch MR detail:", error);
+            toast({
+                variant: "destructive",
+                title: "Error",
+                description: error.message,
+                duration: 15000
+            });
+            setIsViewModalOpen(false);
+        } finally {
+            setIsViewLoading(false);
+        }
+    }, [toast, isLoading, isViewLoading]);
+
+    // Effect for initial mounting
+    useEffect(() => {
+        fetchWorkCenters();
+        fetchStatuses();
+    }, [fetchWorkCenters, fetchStatuses]);
+
+    // Auto-select first assigned workcenter in listing filter (once, when assigned exist)
+    useEffect(() => {
+        if (appliedWorkCenterFilterDefault.current) return;
+        if (!assignedWorkcenterIds.length || orderedWorkCenters.length === 0) return;
+
+        const firstAssigned = getFirstAssignedMatch(
+            assignedWorkcenterIds,
+            orderedWorkCenters.map((wc) => wc.id)
+        );
+        if (firstAssigned) {
+            setFilterWorkCenter(String(firstAssigned));
+            appliedWorkCenterFilterDefault.current = true;
+        }
+    }, [assignedWorkcenterIds, orderedWorkCenters]);
+
+    // Effect for fetching MR list when filters change
+    useEffect(() => {
+        fetchMRs();
+    }, [fetchMRs]);
+
+    const updateRequests = (newRequests: MRRequestData[]) => {
+        setRequests(newRequests);
+    };
+
+    const totalPages = Math.ceil(totalItems / itemsPerPage);
 
     // Modal states
     const [isFormModalOpen, setIsFormModalOpen] = useState(false);
     const [isViewModalOpen, setIsViewModalOpen] = useState(false);
     const [viewingRequest, setViewingRequest] = useState<MRRequestData | null>(null);
+    const [isSubmitting, setIsSubmitting] = useState(false);
 
     // Form states
     const [mrDate, setMrDate] = useState<Date>(new Date());
     const [selectedItemId, setSelectedItemId] = useState<string>("");
     const [itemQuantity, setItemQuantity] = useState<string>("");
     const [addedItems, setAddedItems] = useState<MRItem[]>([]);
-    const [isItemPopoverOpen, setIsItemPopoverOpen] = useState(false);
 
     // Update available quantity when item is selected
     useEffect(() => {
         if (selectedItemId) {
-            const item = MOCK_ITEMS.find(i => i.id.toString() === selectedItemId);
+            const item = inventoryItems.find(i => i.item_id.toString() === selectedItemId);
             if (item) {
-                setItemQuantity(item.availableQty.toString());
+                setItemQuantity(item.stock_qty.toString());
             }
         } else {
             setItemQuantity("");
         }
-    }, [selectedItemId]);
+    }, [selectedItemId, inventoryItems]);
 
     // Auto-selected fields (simulated)
     const [headerInfo, setHeaderInfo] = useState({
-        location: "Jinja",
-        workCenter: "Lead Furnace Center",
-        department: "Production",
+        location_id: 0,
+        work_center_id: 0,
+        department_id: 0,
         requestedBy: "Admin User"
     });
+
+    // Apply assigned defaults when create modal opens and master data finishes loading
+    useEffect(() => {
+        if (!isFormModalOpen) return;
+
+        setHeaderInfo((prev) => {
+            let location_id = prev.location_id;
+            let work_center_id = prev.work_center_id;
+
+            if (location_id === 0 && assignedLocationIds.length && orderedLocations.length) {
+                const firstLocation = getFirstAssignedMatch(
+                    assignedLocationIds,
+                    orderedLocations.map((loc) => loc.id)
+                );
+                if (firstLocation) location_id = Number(firstLocation);
+            }
+
+            if (work_center_id === 0 && assignedWorkcenterIds.length && orderedWorkCenters.length) {
+                const firstWorkCenter = getFirstAssignedMatch(
+                    assignedWorkcenterIds,
+                    orderedWorkCenters.map((wc) => wc.id)
+                );
+                if (firstWorkCenter) work_center_id = Number(firstWorkCenter);
+            }
+
+            if (location_id === prev.location_id && work_center_id === prev.work_center_id) {
+                return prev;
+            }
+
+            return { ...prev, location_id, work_center_id };
+        });
+    }, [
+        isFormModalOpen,
+        assignedLocationIds,
+        assignedWorkcenterIds,
+        orderedLocations,
+        orderedWorkCenters,
+    ]);
 
     // Handlers
     const handleAddItem = () => {
         if (!selectedItemId) {
-            toast({ variant: "destructive", title: "Validation Error", description: "Please select an item." });
+            toast({ variant: "destructive", title: "Validation Error", description: "Please select an item.", duration: 15000 });
             return;
         }
 
-        const masterItem = MOCK_ITEMS.find(i => i.id.toString() === selectedItemId);
+        const masterItem = inventoryItems.find(i => i.item_id.toString() === selectedItemId);
         if (!masterItem) return;
 
         const newItem: MRItem = {
-            id: Date.now(),
-            itemCode: masterItem.code,
-            itemName: masterItem.name,
+            id: Number(masterItem.item_id),
+            itemCode: masterItem.item_code,
+            itemName: masterItem.item_name,
             uom: masterItem.uom,
-            type: masterItem.type,
+            type: masterItem.item_type as "RM" | "Consumable",
+            availableQty: masterItem.stock_qty,
             requiredQty: 1, // Default quantity to 1 when added
-            availableQty: masterItem.availableQty,
             quotations: [],
             qtyReceived: 0
         };
@@ -208,58 +433,139 @@ export default function MRRequest() {
         setAddedItems(prev => [...prev, newItem]);
         setSelectedItemId("");
         setItemQuantity("");
-        toast({ title: "Item Added", description: `${masterItem.name} added to the request.` });
     };
 
     const handleRemoveItem = (id: number | string) => {
         setAddedItems(addedItems.filter(i => i.id !== id));
     };
 
+    const canSaveMR =
+        headerInfo.location_id !== 0 &&
+        headerInfo.department_id !== 0 &&
+        headerInfo.work_center_id !== 0 &&
+        isValid(mrDate) &&
+        addedItems.length > 0 &&
+        !addedItems.some(
+            (item) =>
+                Number(item.requiredQty) <= 0 || !qtyNeededIntegerWithinLimit(item.requiredQty)
+        );
+
     const handleUpdateItemQuantity = (id: number | string, newQty: string) => {
-        // Changed: Apply 6-digit limit and numeric-only validation
         const cleanValue = newQty.replace(/[^0-9.]/g, '');
         const parts = cleanValue.split('.');
         const integerPart = parts[0];
         const decimalPart = parts[1];
 
-        if (integerPart.length > 6) return;
+        if (integerPart.length > MAX_QTY_NEEDED_INTEGER_DIGITS) return;
         if (decimalPart !== undefined && decimalPart.length > 2) return;
 
         setAddedItems(prev => prev.map(item =>
-            item.id === id ? { ...item, requiredQty: cleanValue } : item
+            item.id === id ? { ...item, requiredQty: parseFloat(cleanValue) || 0 } : item
         ));
     };
 
-    const handleSaveMR = () => {
+    const handleSaveMR = async () => {
+        if (isSubmitting) return;
         if (addedItems.length === 0) {
-            toast({ variant: "destructive", title: "Validation Error", description: "Add at least one item." });
+            toast({ variant: "destructive", title: "Validation Error", description: "Add at least one item.", duration: 15000 });
             return;
         }
 
-        const newRequest: MRRequestData = {
-            id: Date.now(),
-            mrCode: `MR-${new Date().getFullYear()}-${String(requests.length + 1).padStart(3, '0')}`,
-            mrDate: format(mrDate, "dd-MM-yyyy"),
-            location: headerInfo.location,
-            workCenter: headerInfo.workCenter,
-            department: headerInfo.department,
-            status: "Requested MR",
-            requestedBy: headerInfo.requestedBy,
-            items: addedItems
-        };
+        const invalidQty = addedItems.some(
+            (item) => Number(item.requiredQty) <= 0 || !qtyNeededIntegerWithinLimit(item.requiredQty)
+        );
+        if (invalidQty) {
+            toast({
+                variant: "destructive",
+                title: "Validation Error",
+                description: `Quantity must be greater than 0 with at most ${MAX_QTY_NEEDED_INTEGER_DIGITS} digits before the decimal.`,
+                duration: 15000
+            });
+            return;
+        }
 
-        updateRequests([newRequest, ...requests]);
-        setIsFormModalOpen(false);
-        setAddedItems([]);
-        setMrDate(new Date());
-        toast({ title: "Success", description: "MR Request created successfully." });
+        setIsSubmitting(true);
+        try {
+            const res = await procurementApi.createMR({
+                mr_date: format(mrDate, "yyyy-MM-dd"),
+                location_id: Number(headerInfo.location_id),
+                work_center_id: Number(headerInfo.work_center_id),
+                department_id: Number(headerInfo.department_id),
+                items: addedItems.map(item => ({
+                    item_id: Number(item.id), // Item ID from internal state populated by API
+                    requested_qty: Number(item.requiredQty)
+                }))
+            });
+
+            if (res.isSuccessful) {
+                toast({
+                    variant: "success",
+                    title: "Success",
+                    description: res.message || "MR Request created successfully.",
+                    duration: 15000
+                });
+                setIsFormModalOpen(false);
+                setAddedItems([]);
+                setMrDate(new Date());
+                setHeaderInfo({
+                    location_id: 0,
+                    work_center_id: 0,
+                    department_id: 0,
+                    requestedBy: "Admin User"
+                });
+                // Refresh the listing
+                fetchMRs();
+            } else {
+                const errorTitle = (res as any).errorType === 'validation' ? "Validation Error" :
+                                   (res as any).errorType === 'business' ? "Business Error" : "Error";
+                toast({
+                    variant: "destructive",
+                    title: errorTitle,
+                    description: res.message,
+                    duration: 15000
+                });
+            }
+        } catch (error: any) {
+            console.error("Failed to save MR:", error);
+            toast({
+                variant: "destructive",
+                title: "Error",
+                description: error.message,
+                duration: 15000
+            });
+        } finally {
+            setIsSubmitting(false);
+        }
     };
 
     const handleOpenCreateModal = () => {
+        // Refresh workcenters and inventory items from API when opening the form
+        fetchWorkCenters();
+        fetchInventoryItems();
+
+        const defaultWorkCenterId = assignedWorkcenterIds.length
+            ? getFirstAssignedMatch(
+                  assignedWorkcenterIds,
+                  orderedWorkCenters.map((wc) => wc.id)
+              )
+            : undefined;
+        const defaultLocationId = assignedLocationIds.length
+            ? getFirstAssignedMatch(
+                  assignedLocationIds,
+                  orderedLocations.map((loc) => loc.id)
+              )
+            : undefined;
+
         setAddedItems([]);
         setMrDate(new Date());
         setSelectedItemId("");
         setItemQuantity("");
+        setHeaderInfo({
+            location_id: defaultLocationId ? Number(defaultLocationId) : 0,
+            work_center_id: defaultWorkCenterId ? Number(defaultWorkCenterId) : 0,
+            department_id: 0,
+            requestedBy: "Admin User"
+        });
         setIsFormModalOpen(true);
     };
 
@@ -273,34 +579,10 @@ export default function MRRequest() {
         }
     };
 
-    // Filtering Logic
-    const filtered = requests.filter(r => {
-        const matchesSearch = r.mrCode.toLowerCase().includes(searchTerm.toLowerCase()) ||
-            r.workCenter.toLowerCase().includes(searchTerm.toLowerCase()) ||
-            r.location.toLowerCase().includes(searchTerm.toLowerCase());
-
-        const matchesDate = filterDate ? r.mrDate === format(filterDate, "dd-MM-yyyy") : true;
-        const matchesStatus = filterStatus === "all" ? true : r.status === filterStatus;
-        const matchesWorkCenter = filterWorkCenter === "all" ? true : r.workCenter === filterWorkCenter;
-
-        return matchesSearch && matchesDate && matchesStatus && matchesWorkCenter;
-    });
-
-    // Pagination calculations - slice data for current page
-    const totalPages = Math.ceil(filtered.length / itemsPerPage);
-    const paginated = filtered.slice((currentPage - 1) * itemsPerPage, currentPage * itemsPerPage);
-
-    // Auto-adjust page when data changes (e.g., after filtering or deleting)
-    React.useEffect(() => {
-        if (currentPage > totalPages && totalPages > 0) {
-            setCurrentPage(totalPages);
-        }
-    }, [filtered.length, currentPage, totalPages]);
-
     // Reset to page 1 when filters change
     React.useEffect(() => {
         setCurrentPage(1);
-    }, [searchTerm, filterDate, filterStatus]);
+    }, [debouncedSearchTerm, filterDate, filterStatus, filterWorkCenter]);
 
     return (
         <div className="h-full flex flex-col gap-6 animate-in fade-in duration-500">
@@ -320,8 +602,14 @@ export default function MRRequest() {
                         type: 'select',
                         label: 'WorkCenter',
                         value: filterWorkCenter,
-                        options: [{ label: "All Work Centers", value: "all" }, ...mockWorkCenters.map(wc => wc.name)],
-                        onChange: setFilterWorkCenter,
+                        options: [
+                            { label: "All Work Centers", value: "all" }, 
+                            ...orderedWorkCenters.map(wc => ({ 
+                                label: wc.name, 
+                                value: String(wc.id)
+                            }))
+                        ],
+                        onChange: (val) => setFilterWorkCenter(val === "all" ? "all" : String(val)),
                         searchable: true
                     },
                     {
@@ -335,18 +623,24 @@ export default function MRRequest() {
                         type: 'select',
                         label: 'Status',
                         value: filterStatus,
-                        options: [{ label: "All Status", value: "all" }, "Requested MR", "MR in Fullfillment", "FullFilled MR", "MR Closed"],
+                        options: [
+                            { label: "All Status", value: "all" },
+                            ...procurementStatuses.map(s => ({ 
+                                label: s.status_name, 
+                                value: String(s.status_id) 
+                            }))
+                        ],
                         onChange: setFilterStatus,
                         searchable: true
                     }
                 ]}
-                actions={[
+                actions={canCreate(permissionModule) ? [
                     {
                         label: "Create MR",
                         icon: <Plus className="h-4 w-4" />,
                         onClick: handleOpenCreateModal
                     }
-                ]}
+                ] : []}
             />
 
             {/* Listing Table */}
@@ -365,7 +659,23 @@ export default function MRRequest() {
                                 </TableRow>
                             </TableHeader>
                             <TableBody>
-                                {paginated.length > 0 ? paginated.map((req) => (
+                                {isLoading ? (
+                                    <TableRow>
+                                        <TableCell colSpan={6} className="h-32 text-center">
+                                            <div className="flex flex-col items-center justify-center gap-3">
+                                                <Loader2 className="h-8 w-8 animate-spin text-primary" />
+                                                <p className="text-sm text-muted-foreground">Loading...</p>
+                                            </div>
+                                        </TableCell>
+                                    </TableRow>
+                                ) : requests.length === 0 ? (
+                                    <TableRow>
+                                        <TableCell colSpan={6} className="h-32 text-center text-muted-foreground">
+                                            No MR requests found
+                                        </TableCell>
+                                    </TableRow>
+                                ) : (
+                                    requests.map((req) => (
                                     <TableRow key={req.id} className="hover:bg-muted/30 transition-colors border-b">
                                         <TableCell className="py-4 font-medium font-mono">{req.mrCode}</TableCell>
                                         <TableCell>{formatDate(req.mrDate)}</TableCell>
@@ -373,28 +683,25 @@ export default function MRRequest() {
                                         <TableCell>{req.workCenter}</TableCell>
                                         <TableCell className="text-center">{getStatusBadge(req.status)}</TableCell>
                                         <TableCell className="text-center">
-                                            <TableActionButtons
-                                                onView={() => { setViewingRequest(req); setIsViewModalOpen(true); }}
-                                            />
+                                            <div className={cn((isLoading || isViewLoading) && "pointer-events-none opacity-50")}>
+                                                <TableActionButtons
+                                                    onView={() => fetchMRDetail(Number(req.id))}
+                                                />
+                                            </div>
                                         </TableCell>
                                     </TableRow>
-                                )) : (
-                                    <TableRow>
-                                        <TableCell colSpan={6} className="h-32 text-center text-muted-foreground">
-                                            No MR requests found
-                                        </TableCell>
-                                    </TableRow>
+                                    ))
                                 )}
                             </TableBody>
                         </Table>
                     </div>
 
                     {/* Pagination */}
-                    {filtered.length > 0 && (
+                    {requests.length > 0 && (
                         <DataTablePagination
                             currentPage={currentPage}
                             totalPages={totalPages}
-                            totalItems={filtered.length}
+                            totalItems={totalItems}
                             itemsPerPage={itemsPerPage}
                             onPageChange={setCurrentPage}
                             onItemsPerPageChange={setItemsPerPage}
@@ -406,183 +713,198 @@ export default function MRRequest() {
 
             {/* CREATE MR DIALOG */}
             <Dialog open={isFormModalOpen} onOpenChange={setIsFormModalOpen}>
-                <DialogContent className="sm:max-w-[700px] max-h-[90vh] flex flex-col p-0 bg-white">
-                    <DialogHeader className="p-6 pb-2">
-                        <DialogTitle className="text-xl font-bold">Add New MR Request</DialogTitle>
-                        <DialogDescription>
+                <DialogContent
+                    className="flex! min-h-0 w-[95%] max-h-[82vh] flex-col gap-0 overflow-hidden bg-white p-0 sm:max-w-3xl md:max-w-4xl lg:max-w-5xl xl:max-w-6xl"
+                    onPointerDownOutside={(e) => e.preventDefault()}
+                >
+                    <DialogHeader className="shrink-0 space-y-1 p-4 pb-2 sm:p-5 sm:pb-3">
+                        <DialogTitle className="text-lg font-bold sm:text-xl">Add New MR Request</DialogTitle>
+                        <DialogDescription className="text-xs leading-snug sm:text-sm">
                             Configure the details and items for this material request.
                         </DialogDescription>
                     </DialogHeader>
 
-                    <div className="flex-1 overflow-y-auto px-6 py-4 space-y-6">
-                        <div>
-                            <SectionHeader title="General Information" />
-                            <div className="grid grid-cols-2 gap-4">
-                                <div className="space-y-2">
-                                    <Label>MR Date *</Label>
-                                    <Input value={format(mrDate, "dd-MM-yyyy")} readOnly className="h-10 bg-muted/30" />
-                                </div>
-                                <div className="space-y-2">
-                                    <Label>Location *</Label>
-                                    <Select
-                                        value={headerInfo.location}
-                                        onValueChange={(val) => setHeaderInfo(prev => ({ ...prev, location: val }))}
-                                    >
-                                        <SelectTrigger className="h-10">
-                                            <SelectValue placeholder="Select Location" />
-                                        </SelectTrigger>
-                                        <SelectContent>
-                                            {mockLocations.map(loc => (
-                                                <SelectItem key={loc.id} value={loc.name}>{loc.name}</SelectItem>
-                                            ))}
-                                        </SelectContent>
-                                    </Select>
-                                </div>
-                                <div className="space-y-2">
-                                    <Label>Workcenter</Label>
-                                    <Select
-                                        value={headerInfo.workCenter}
-                                        onValueChange={(val) => setHeaderInfo(prev => ({ ...prev, workCenter: val }))}
-                                    >
-                                        <SelectTrigger className="h-10">
-                                            <SelectValue placeholder="Select Workcenter" />
-                                        </SelectTrigger>
-                                        <SelectContent>
-                                            {mockWorkCenters.map(wc => (
-                                                <SelectItem key={wc.id} value={wc.name}>{wc.name}</SelectItem>
-                                            ))}
-                                        </SelectContent>
-                                    </Select>
-                                </div>
-                                <div className="space-y-2">
-                                    <Label>Department *</Label>
-                                    <Select
-                                        value={headerInfo.department}
-                                        onValueChange={(val) => setHeaderInfo(prev => ({ ...prev, department: val }))}
-                                    >
-                                        <SelectTrigger className="h-10">
-                                            <SelectValue placeholder="Select Department" />
-                                        </SelectTrigger>
-                                        <SelectContent>
-                                            <SelectItem value="Production">Production</SelectItem>
-                                            <SelectItem value="Engineering">Engineering</SelectItem>
-                                            <SelectItem value="Human Resources">Human Resources</SelectItem>
-                                            <SelectItem value="Finance">Finance</SelectItem>
-                                        </SelectContent>
-                                    </Select>
+                    <div className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto px-4 py-3 sm:px-5 sm:py-4">
+                        <div className="space-y-5">
+                            <div>
+                                <SectionHeader title="General Information" />
+                                <div className="grid grid-cols-1 gap-x-5 gap-y-3 md:grid-cols-2">
+                                    <div className="space-y-1.5">
+                                        <Label id="mr-date-label" className="text-xs font-semibold">MR Date <span className="text-destructive">*</span></Label>
+                                        <div
+                                            id="mr-date-display"
+                                            role="textbox"
+                                            aria-readonly="true"
+                                            aria-labelledby="mr-date-label"
+                                            className="flex h-9 w-full items-center rounded-md border border-input bg-muted/30 px-3 text-sm text-foreground tabular-nums"
+                                        >
+                                            {format(mrDate, "dd-MM-yyyy")}
+                                        </div>
+                                    </div>
+                                    <div className="space-y-1.5">
+                                        <Label className="text-xs font-semibold">Location <span className="text-destructive">*</span></Label>
+                                        <SearchableSelect
+                                            value={String(headerInfo.location_id)}
+                                            options={orderedLocations.map((loc) => ({ label: loc.location_name || loc.name, value: String(loc.id) }))}
+                                            onChange={(val) => setHeaderInfo((prev) => ({ ...prev, location_id: Number(val) }))}
+                                            placeholder="Select location..."
+                                        />
+                                    </div>
+                                    <div className="space-y-1.5">
+                                        <Label className="text-xs font-semibold">Workcenter <span className="text-destructive">*</span></Label>
+                                        <SearchableSelect
+                                            value={String(headerInfo.work_center_id)}
+                                            options={orderedWorkCenters.map((wc) => ({ label: wc.name, value: String(wc.id) }))}
+                                            onChange={(val) => setHeaderInfo((prev) => ({ ...prev, work_center_id: Number(val) }))}
+                                            placeholder="Select workcenter..."
+                                        />
+                                    </div>
+                                    <div className="space-y-1.5">
+                                        <Label className="text-xs font-semibold">Department <span className="text-destructive">*</span></Label>
+                                        <SearchableSelect
+                                            value={String(headerInfo.department_id)}
+                                            options={departments.map((dept) => ({ label: dept.department_name || dept.name, value: String(dept.id) }))}
+                                            onChange={(val) => setHeaderInfo((prev) => ({ ...prev, department_id: Number(val) }))}
+                                            placeholder="Select department..."
+                                        />
+                                    </div>
                                 </div>
                             </div>
-                        </div>
 
-                        <div>
-                            <SectionHeader title="Material Requirements" />
-                            <div className="flex gap-2 items-end mb-4">
-                                <div className="flex-1 space-y-2">
-                                    <Label>Select Item (RM / Consumables)</Label>
-                                    <Popover open={isItemPopoverOpen} onOpenChange={setIsItemPopoverOpen}>
-                                        <PopoverTrigger asChild>
-                                            <Button variant="outline" role="combobox" className="w-full h-10 justify-between font-normal">
-                                                {selectedItemId ? MOCK_ITEMS.find(i => i.id.toString() === selectedItemId)?.name : "Choose Item..."}
-                                                <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
-                                            </Button>
-                                        </PopoverTrigger>
-                                        <PopoverContent className="p-0" style={{ width: "var(--radix-popover-trigger-width)" }}>
-                                            <Command>
-                                                <CommandInputBorderless placeholder="Search item..." />
-                                                <CommandList className="max-h-[130px] overflow-y-auto">
-                                                    <CommandEmpty>No item found.</CommandEmpty>
-                                                    <CommandGroup>
-                                                        {MOCK_ITEMS.map((item) => {
-                                                            const isAdded = addedItems.some(ai => ai.itemCode === item.code);
-                                                            return (
-                                                                <CommandItem
-                                                                    key={item.id}
-                                                                    value={item.name}
-                                                                    disabled={isAdded}
-                                                                    onSelect={() => {
-                                                                        if (!isAdded) {
-                                                                            setSelectedItemId(item.id.toString());
-                                                                            setIsItemPopoverOpen(false);
-                                                                        }
-                                                                    }}
-                                                                    className={cn(isAdded && "opacity-50 cursor-not-allowed")}
-                                                                >
-                                                                    <Check className={cn("mr-2 h-4 w-4", selectedItemId === item.id.toString() ? "opacity-100" : "opacity-0")} />
-                                                                    <span className={cn(isAdded && "text-muted-foreground")}>
-                                                                        {item.code} - {item.name} {isAdded && "(Added)"}
-                                                                    </span>
-                                                                </CommandItem>
-                                                            );
-                                                        })}
-                                                    </CommandGroup>
-                                                </CommandList>
-                                            </Command>
-                                        </PopoverContent>
-                                    </Popover>
-                                </div>
-                                <Button
-                                    onClick={handleAddItem}
-                                    className="h-10"
-                                    disabled={!selectedItemId}
-                                >
-                                    <Plus className="h-4 w-4 mr-2" />
-                                    Add
-                                </Button>
-                            </div>
-
-                            <div className="rounded-md border">
-                                <Table>
-                                    <TableHeader>
-                                        <TableRow className="bg-muted/50">
-                                            <TableHead>Item Details</TableHead>
-                                            <TableHead className="text-center">UOM</TableHead>
-                                            <TableHead className="text-center">Type</TableHead>
-                                            <TableHead className="text-center">Stock</TableHead>
-                                            <TableHead className="w-[120px] text-right">Qty Needed</TableHead>
-                                            <TableHead className="text-center w-[100px]">Actions</TableHead>
-                                        </TableRow>
-                                    </TableHeader>
-                                    <TableBody>
-                                        {addedItems.length > 0 ? addedItems.map((item) => (
-                                            <TableRow key={item.id}>
-                                                <TableCell>
-                                                    <div className="font-medium text-sm">{item.itemName}</div>
-                                                    <div className="text-[10px] text-muted-foreground uppercase">{item.itemCode}</div>
-                                                </TableCell>
-                                                <TableCell className="text-center text-xs">{item.uom}</TableCell>
-                                                <TableCell className="text-center">
-                                                    <Badge variant="outline" className="text-[9px] uppercase px-1.5">{item.type}</Badge>
-                                                </TableCell>
-                                                <TableCell className="text-center font-medium">{item.availableQty}</TableCell>
-                                                <TableCell className="text-right">
-                                                    <Input
-                                                        type="text"
-                                                        inputMode="decimal"
-                                                        className={cn("h-8 w-20 ml-auto text-right", Number(item.requiredQty) <= 0 && "border-destructive")}
-                                                        value={item.requiredQty || ""}
-                                                        onChange={(e) => handleUpdateItemQuantity(item.id, e.target.value)}
-                                                    />
-                                                </TableCell>
-                                                <TableCell className="text-center">
-                                                    <TableActionButtons
-                                                        onDelete={() => handleRemoveItem(item.id)}
-                                                    />
-                                                </TableCell>
-                                            </TableRow>
-                                        )) : (
-                                            <TableRow>
-                                                <TableCell colSpan={6} className="text-center text-muted-foreground h-20 text-sm italic">No items added.</TableCell>
-                                            </TableRow>
+                            <div>
+                                <SectionHeader title="Material Requirements" />
+                                <div className="mb-3 flex flex-col gap-3 sm:flex-row sm:items-end">
+                                    <div className="min-w-0 flex-1 space-y-1.5">
+                                        <Label className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">
+                                            Select Item (RM / Consumables)
+                                        </Label>
+                                        <SearchableSelect
+                                            value={selectedItemId}
+                                            options={inventoryItems.map((item) => {
+                                                const isAdded = addedItems.some((ai) => ai.id === item.item_id);
+                                                return {
+                                                    label: isAdded
+                                                        ? `${item.item_code} - ${item.item_name} (Added)`
+                                                        : `${item.item_code} - ${item.item_name}`,
+                                                    primaryText: isAdded
+                                                        ? `${item.item_name} (Added)`
+                                                        : item.item_name,
+                                                    secondaryText: item.item_code,
+                                                    value: item.item_id.toString(),
+                                                    disabled: isAdded,
+                                                };
+                                            })}
+                                            onChange={(val) => setSelectedItemId(String(val))}
+                                            placeholder={isInventoryLoading ? "Loading items..." : "Search item code or name..."}
+                                            disabled={isInventoryLoading}
+                                            className="h-9 sm:h-10"
+                                        />
+                                    </div>
+                                    <Button
+                                        onClick={handleAddItem}
+                                        disabled={!selectedItemId}
+                                        className={cn(
+                                            "h-9 w-full shrink-0 px-6 sm:h-10 sm:w-auto",
+                                            selectedItemId
+                                                ? "bg-blue-600 hover:bg-blue-600/90 text-white border-blue-600"
+                                                : "bg-muted text-muted-foreground border-muted hover:bg-muted disabled:opacity-100!"
                                         )}
-                                    </TableBody>
-                                </Table>
+                                    >
+                                        <Plus className="h-4 w-4 mr-2" />
+                                        Add
+                                    </Button>
+                                </div>
+
+                                <div
+                                    className={cn(
+                                        "overflow-hidden rounded-md border bg-white",
+                                        addedItems.length > 4 && "max-h-[min(42vh,380px)] overflow-y-auto custom-scrollbar"
+                                    )}
+                                >
+                                    <div className="overflow-x-auto">
+                                        <Table className="w-full min-w-[640px]">
+                                            <TableHeader>
+                                                <TableRow className="bg-muted/50">
+                                                    <TableHead className="min-w-[180px]">Item Details</TableHead>
+                                                    <TableHead className="text-center whitespace-nowrap">UOM</TableHead>
+                                                    <TableHead className="text-center whitespace-nowrap">Type</TableHead>
+                                                    <TableHead className="text-center whitespace-nowrap">Stock</TableHead>
+                                                    <TableHead className="w-[120px] text-right whitespace-nowrap">Qty Needed</TableHead>
+                                                    <TableHead className="w-[72px] text-center">Actions</TableHead>
+                                                </TableRow>
+                                            </TableHeader>
+                                            <TableBody>
+                                                {addedItems.length > 0 ? addedItems.map((item) => (
+                                                    <TableRow key={item.id}>
+                                                        <TableCell className="align-top py-2.5">
+                                                            <div className="text-sm font-medium leading-snug wrap-break-word" title={item.itemName}>
+                                                                {item.itemName}
+                                                            </div>
+                                                            <div className="mt-0.5 font-mono text-[10px] uppercase text-muted-foreground break-all">
+                                                                {item.itemCode}
+                                                            </div>
+                                                        </TableCell>
+                                                        <TableCell className="text-center text-xs whitespace-nowrap">{item.uom}</TableCell>
+                                                        <TableCell className="text-center">
+                                                            <Badge variant="outline" className="text-[9px] uppercase px-1.5">{item.type}</Badge>
+                                                        </TableCell>
+                                                        <TableCell className="text-center font-medium whitespace-nowrap">{item.availableQty}</TableCell>
+                                                        <TableCell className="text-right">
+                                                            <Input
+                                                                type="text"
+                                                                inputMode="decimal"
+                                                                className={cn(
+                                                                    "ml-auto h-8 w-full min-w-20 max-w-32 text-right",
+                                                                    (Number(item.requiredQty) <= 0 ||
+                                                                        !qtyNeededIntegerWithinLimit(item.requiredQty)) &&
+                                                                        "border-destructive"
+                                                                )}
+                                                                value={item.requiredQty || ""}
+                                                                onChange={(e) => handleUpdateItemQuantity(item.id, e.target.value)}
+                                                            />
+                                                        </TableCell>
+                                                        <TableCell className="text-center">
+                                                            <Button
+                                                                variant="ghost"
+                                                                size="icon"
+                                                                className="h-8 w-8 text-destructive hover:text-destructive hover:bg-destructive/10"
+                                                                onClick={() => handleRemoveItem(item.id)}
+                                                                title="Delete"
+                                                            >
+                                                                <Trash2 className="h-4 w-4" />
+                                                            </Button>
+                                                        </TableCell>
+                                                    </TableRow>
+                                                )) : (
+                                                    <TableRow>
+                                                        <TableCell colSpan={6} className="h-20 text-center text-sm italic text-muted-foreground">
+                                                            No items added.
+                                                        </TableCell>
+                                                    </TableRow>
+                                                )}
+                                            </TableBody>
+                                        </Table>
+                                    </div>
+                                </div>
                             </div>
                         </div>
                     </div>
 
-                    <DialogFooter className="p-6 pt-2 border-t mt-auto">
-                        <Button variant="outline" onClick={() => setIsFormModalOpen(false)}>Cancel</Button>
-                        <Button onClick={handleSaveMR} disabled={addedItems.length === 0 || addedItems.some(item => Number(item.requiredQty) <= 0)}>
+                    <DialogFooter className="shrink-0 gap-2 border-t bg-background px-4 pb-4 pt-3 sm:px-5 sm:justify-end">
+                        <Button variant="outline" onClick={() => setIsFormModalOpen(false)} className="w-full sm:w-auto">
+                            Cancel
+                        </Button>
+                        <Button
+                            onClick={handleSaveMR}
+                            disabled={!canSaveMR || isSubmitting}
+                            loading={isSubmitting}
+                            className={cn(
+                                "w-full sm:w-auto",
+                                canSaveMR
+                                    ? "bg-blue-600 hover:bg-blue-600/90 text-white border-blue-600"
+                                    : "bg-muted text-muted-foreground border-muted hover:bg-muted disabled:opacity-100!"
+                            )}
+                        >
                             Save Changes
                         </Button>
                     </DialogFooter>
@@ -591,19 +913,31 @@ export default function MRRequest() {
 
             {/* VIEW MR DIALOG */}
             <Dialog open={isViewModalOpen} onOpenChange={setIsViewModalOpen}>
-                <DialogContent className="sm:max-w-[700px] max-h-[90vh] flex flex-col p-0 bg-white">
+                <DialogContent
+                    className="sm:max-w-[700px] max-h-[90vh] flex flex-col p-0 bg-white"
+                    onPointerDownOutside={(e) => e.preventDefault()}
+                >
                     {viewingRequest && (
                         <>
                             <DialogHeader className="p-6 pb-2">
-                                <DialogTitle className="text-xl font-bold">MR Details</DialogTitle>
+                                <DialogTitle className="text-xl font-bold">
+                                    {isViewLoading ? "Loading MR Details..." : "MR Details"}
+                                </DialogTitle>
                                 <DialogDescription>
-                                    View material request details
+                                    {isViewLoading ? "Please wait while we fetch the information." : "View material request details"}
                                 </DialogDescription>
                             </DialogHeader>
 
-                            <div className="flex-1 overflow-y-auto px-6 py-4 space-y-6">
-                                {/* Header Info Grid */}
-                                <div className="grid grid-cols-2 gap-x-8 gap-y-4">
+                            <div className="flex-1 min-h-0 flex flex-col overflow-hidden px-6 py-4 space-y-6">
+                                {isViewLoading ? (
+                                    <div className="flex flex-col items-center justify-center h-64 gap-3">
+                                        <Loader2 className="h-8 w-8 animate-spin text-primary" />
+                                        <p className="text-sm text-muted-foreground">Loading...</p>
+                                    </div>
+                                ) : (
+                                    <>
+                                        {/* Header Info Grid */}
+                                        <div className="grid shrink-0 grid-cols-2 gap-x-8 gap-y-4">
                                     <div className="space-y-1">
                                         <Label className="text-xs text-muted-foreground">MR Code</Label>
                                         <p className="font-medium">{viewingRequest.mrCode}</p>
@@ -634,48 +968,52 @@ export default function MRRequest() {
                                     </div>
                                 </div>
 
-                                <div className="pt-4 border-t">
-                                    <Label className="text-sm font-semibold mb-3 block">Requested Items</Label>
-                                    <div className="rounded-md border">
-                                        <Table>
-                                            <TableHeader>
-                                                <TableRow className="bg-muted/50">
-                                                    <TableHead className="py-2.5">Item</TableHead>
-                                                    <TableHead className="py-2.5 text-center">Type</TableHead>
-                                                    <TableHead className="py-2.5 text-right pr-6">Quantity</TableHead>
-                                                </TableRow>
-                                            </TableHeader>
-                                            <TableBody>
-                                                {viewingRequest.items.map((item) => (
-                                                    <TableRow key={item.id} className="border-b last:border-none">
-                                                        <TableCell className="py-3">
-                                                            <div>
-                                                                <div className="font-medium text-sm">{item.itemCode}</div>
-                                                                <div className="text-xs text-muted-foreground mt-0.5">{item.itemName}</div>
-                                                                <div className="text-[10px] text-muted-foreground uppercase mt-0.5">{item.uom}</div>
-                                                            </div>
-                                                        </TableCell>
-                                                        <TableCell className="text-center">
-                                                            <Badge variant="outline" className="text-[9px] uppercase px-1.5">{item.type}</Badge>
-                                                        </TableCell>
-                                                        <TableCell className="text-right font-bold text-primary pr-6">
-                                                            {typeof item.requiredQty === 'number' ? item.requiredQty : Number(item.requiredQty).toLocaleString()}
-                                                        </TableCell>
+                                <div className="shrink-0 border-t pt-4">
+                                    <Label className="mb-3 block text-sm font-semibold">Requested Items</Label>
+                                    <div className="overflow-hidden rounded-md border bg-white">
+                                        <div className="max-h-[280px] overflow-y-auto custom-scrollbar">
+                                            <Table>
+                                                <TableHeader>
+                                                    <TableRow className="bg-muted/50">
+                                                        <TableHead className="py-2.5">Item</TableHead>
+                                                        <TableHead className="py-2.5 text-center">Type</TableHead>
+                                                        <TableHead className="py-2.5 text-right pr-6">Quantity</TableHead>
                                                     </TableRow>
-                                                ))}
-                                            </TableBody>
-                                        </Table>
+                                                </TableHeader>
+                                                <TableBody>
+                                                    {viewingRequest.items.map((item) => (
+                                                        <TableRow key={item.id} className="border-b last:border-none">
+                                                            <TableCell className="py-3">
+                                                                <div>
+                                                                    <div className="font-medium text-sm">{item.itemCode}</div>
+                                                                    <div className="text-xs text-muted-foreground mt-0.5">{item.itemName}</div>
+                                                                    <div className="text-[10px] text-muted-foreground uppercase mt-0.5">{item.uom}</div>
+                                                                </div>
+                                                            </TableCell>
+                                                            <TableCell className="text-center">
+                                                                <Badge variant="outline" className="text-[9px] uppercase px-1.5">{item.type}</Badge>
+                                                            </TableCell>
+                                                            <TableCell className="text-right font-bold text-primary pr-6">
+                                                                {typeof item.requiredQty === 'number' ? item.requiredQty : Number(item.requiredQty).toLocaleString()}
+                                                            </TableCell>
+                                                        </TableRow>
+                                                    ))}
+                                                </TableBody>
+                                            </Table>
+                                        </div>
                                     </div>
                                 </div>
-                            </div>
+                            </>
+                        )}
+                    </div>
 
-                            <DialogFooter className="p-6 border-t mt-auto">
-                                <Button variant="outline" onClick={() => setIsViewModalOpen(false)} className="w-full sm:w-auto">Close</Button>
-                            </DialogFooter>
-                        </>
-                    )}
-                </DialogContent>
+                    <DialogFooter className="p-6 border-t mt-auto">
+                        <Button variant="outline" onClick={() => setIsViewModalOpen(false)} className="w-full sm:w-auto">Close</Button>
+                    </DialogFooter>
+                </>
+            )}
+        </DialogContent>
             </Dialog>
-        </div >
+        </div>
     );
 }

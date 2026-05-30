@@ -1,15 +1,15 @@
 import { mockCustomers, mockFinishedGoods, mockLocations, mockWarehouses } from "./masterMockData";
 
-export type SOStatus = "Draft" | "Invoice Pending" | "Dispatch Pending" | "Dispatched" | "Closed SO";
+export type SOStatus = "Draft" | "Invoiced" | "Invoice Pending" | "Dispatch Pending" | "Dispatched" | "Close";
 
 export interface SOItem {
     id: number;
     itemCode: string;
     itemName: string;
     uom: string;
-    orderedQty: number | string;
+    orderedQty: number;
     dispatchedQty: number;
-    rate: number | string;
+    rate: number;
     price: number;
 }
 
@@ -20,7 +20,7 @@ export interface PaymentTerm {
     percentage: number; // Deprecated: kept for backward compatibility, use value instead
     termType: "Advance" | "Delivery" | "Days";
     date: string;
-    days?: number;
+    days?: number | string;
     note?: string;
     isGenerated?: boolean; // Track if an invoice has been generated for this term
     invoiceNo?: string;    // Store the generated invoice number
@@ -248,7 +248,7 @@ export const closeSalesOrder = (id: number): { success: boolean; message: string
     }
     
     // Close the SO
-    const updatedSO = updateSalesOrder(id, { status: "Closed SO" });
+    const updatedSO = updateSalesOrder(id, { status: "Close" });
     
     if (updatedSO) {
         return { success: true, message: "Sales Order closed successfully", so: updatedSO };

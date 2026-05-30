@@ -9,6 +9,7 @@ export interface QuotationPDFData {
     quotationValidity: string;
     deliveryTime?: string;
     currency: string;
+    currencySymbol?: string;
     customerName: string;
     contactPersonName?: string;
     contactNumber?: string;
@@ -20,7 +21,7 @@ export interface QuotationPDFData {
         terms: string;
         value?: number;
         percentage?: number;
-        days?: number;
+        days?: number | string;
         date?: string;
         valueType?: string;
     }>;
@@ -388,23 +389,19 @@ export const generateQuotationPDFHTML = (quotation: QuotationPDFData): string =>
                         const value = term.value || term.percentage || 0;
                         
                         let termText = "";
-                        let termDate = "";
                         
                         if (term.terms === "Advance") {
                             termText = `${value}% Advance`;
-                            termDate = formatDate(quotation.quotationDate);
                         } else if (term.terms === "Delivery") {
                             termText = `${value}% Delivery`;
-                            termDate = "On delivery";
                         } else if (term.terms === "Days") {
-                            termText = `${value}% Payment`;
-                            termDate = `${term.days || 0} days from invoice date`;
+                            termText = `${value}% Payment within ${term.days || 0} days`;
                         }
                         
                         return `
                             <div style="display: flex; align-items: flex-start; gap: 8px; margin-bottom: 6px;">
                                 <span style="color: #333; font-weight: bold; margin-top: 2px;">•</span>
-                                <p style="color: #333; font-size: 10px; line-height: 1.5; margin: 0;">${termText} – ${termDate}</p>
+                                <p style="color: #333; font-size: 10px; line-height: 1.5; margin: 0;">${termText}</p>
                             </div>
                         `;
                     }).join('')}
@@ -431,8 +428,8 @@ export const generateQuotationPDFHTML = (quotation: QuotationPDFData): string =>
                                 <td>${index + 1}</td>
                                 <td><strong>${item.item}</strong></td>
                                 <td class="text-right">${item.qty || 0}</td>
-                                <td class="text-right">${quotation.currency} ${(Number(item.rate) || 0).toFixed(2)}</td>
-                                <td class="text-right"><strong>${quotation.currency} ${(Number(item.amount) || 0).toFixed(2)}</strong></td>
+                                <td class="text-right">${quotation.currencySymbol || ''} ${(Number(item.rate) || 0).toFixed(2)}</td>
+                                <td class="text-right"><strong>${quotation.currencySymbol || ''} ${(Number(item.amount) || 0).toFixed(2)}</strong></td>
                             </tr>
                         `).join('')}
                     </tbody>
@@ -443,19 +440,19 @@ export const generateQuotationPDFHTML = (quotation: QuotationPDFData): string =>
                     <div class="totals-box">
                         <div class="totals-row subtotal">
                             <span class="totals-label">Subtotal</span>
-                            <span class="totals-value">${quotation.currency} ${(Number(quotation.subtotal) || 0).toFixed(2)}</span>
+                            <span class="totals-value">${quotation.currencySymbol || ''} ${(Number(quotation.subtotal) || 0).toFixed(2)}</span>
                         </div>
                         <div class="totals-row">
                             <span class="totals-label">Discount (${quotation.discountType === "%" ? (quotation.discountValue || 0) + "%" : "Amount"})</span>
-                            <span class="totals-value" style="color: #dc2626;">-${quotation.currency} ${(Number(quotation.discountAmount) || 0).toFixed(2)}</span>
+                            <span class="totals-value" style="color: #dc2626;">-${quotation.currencySymbol || ''} ${(Number(quotation.discountAmount) || 0).toFixed(2)}</span>
                         </div>
                         <div class="totals-row">
                             <span class="totals-label">Tax (${quotation.taxType === "%" ? (quotation.taxValue || quotation.taxPercentage || 0) + "%" : "Amount"})</span>
-                            <span class="totals-value">${quotation.currency} ${(Number(quotation.taxAmount) || 0).toFixed(2)}</span>
+                            <span class="totals-value">${quotation.currencySymbol || ''} ${(Number(quotation.taxAmount) || 0).toFixed(2)}</span>
                         </div>
                         <div class="totals-row total">
                             <span class="totals-label">Grand Total</span>
-                            <span class="totals-value">${quotation.currency} ${(Number(quotation.total) || 0).toFixed(2)}</span>
+                            <span class="totals-value">${quotation.currencySymbol || ''} ${(Number(quotation.total) || 0).toFixed(2)}</span>
                         </div>
                     </div>
                 </div>

@@ -14,6 +14,7 @@ export type BatchStatus = "Batch Created" | "Sent for QC" | "Verified QC" | "Bat
 
 export interface BatchItem {
     id: number | string;
+    item_id?: number | string;
     item: string;
     itemCode?: string;
     itemName?: string;
@@ -39,7 +40,7 @@ export interface BatchRecord {
     operation: string;
     workCenter: string;
     warehouse: string;
-    shift: "Morning" | "Night";
+    shift: string;
     totalInputItems?: number;
     totalOutputItems?: number;
     status: BatchStatus;

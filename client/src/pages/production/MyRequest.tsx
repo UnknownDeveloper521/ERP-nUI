@@ -9,7 +9,8 @@
 // - Supports shortage scenarios and auto-procurement
 // ============================================================================
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo, useRef } from "react";
+import { useDebounce } from "@/hooks/useDebounce";
 import { useLocation } from "wouter";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -26,6 +27,7 @@ import {
 import {
   Dialog,
   DialogContent,
+  DialogDescription,
   DialogFooter,
   DialogHeader,
   DialogTitle,
@@ -41,7 +43,7 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { Badge } from "@/components/ui/badge";
-import { Plus, Search, ChevronLeft, ChevronRight, ChevronsUpDown, Check, Trash2, Calendar as CalendarIcon, ChevronDown, X, Play, Clock, CheckCircle2, AlertCircle, FileText, Send, User } from "lucide-react";
+import { Plus, Search, ChevronLeft, ChevronRight, ChevronsUpDown, Check, Trash2, Calendar as CalendarIcon, ChevronDown, X, Play, Clock, CheckCircle2, AlertCircle, FileText, Send, User, Loader2 } from "lucide-react";
 import { DataTablePagination } from "@/components/shared/DataTablePagination";
 import { TableActionButtons } from "@/components/shared/TableActionButtons";
 import { useToast } from "@/hooks/use-toast";
@@ -58,8 +60,23 @@ import {
 import { AppListToolbar } from "@/components/shared/AppListToolbar";
 import { SearchableSelect as SharedSearchableSelect } from "@/components/shared/SearchableSelect";
 import { DatePicker as SharedDatePicker } from "@/components/shared/DatePicker";
-import { format } from "date-fns";
+import { useCommonStore } from "@/store/commonStore";
+import { commonApi, productionApi, hrCommonApi } from "@/lib/api";
+import { format, parse } from "date-fns";
 import { INITIAL_PLANS } from "@/lib/productionPlanSharedData";
+import { useHasPermission } from "@/hooks/usePermissions";
+import Unauthorized from "@/pages/Unauthorized";
+import {
+  getAssignedIds,
+  getFirstAssignedMatch,
+  prioritizeByAssigned,
+} from "@/utils/assignedDropdown";
+
+/** Green styling for successful actions; keep errors as destructive. */
+const crudSuccessToast = {
+  className:
+    "border-green-600 bg-green-50 text-green-950 shadow-md dark:border-green-700 dark:bg-green-950 dark:text-green-50",
+};
 
 // ============================================================================
 // HELPER FUNCTIONS
@@ -88,94 +105,18 @@ const parseDateString = (dateString: string): Date => {
   return new Date(year, month - 1, day);
 };
 
-// ============================================================================
-// TYPE DEFINITIONS
-// ============================================================================
-
-/**
- * Operation mapping interface
- * Maps operations to their default work centers and required items
- */
-interface OperationMapping {
-  operation: string;
-  workCenter: string;
-  items: {
-    itemCode: string;
-    itemName: string;
-    uom: string;
-    standardQty: number;
-  }[];
-}
-
-// ============================================================================
-// SEARCHABLE SELECT COMPONENT
-// ============================================================================
-
-
-// ============================================================================
-// MOCK DATA
-// ============================================================================
-
-const OPERATIONS = [
-  "Lead Generation & Purification",
-  "Case Creation",
-  "Grid Creation & Oxidization",
-  "Assembly line & Packaging"
-];
-
-const WORK_CENTERS = [
-  "Lead Furnace Center",
-  "Plastic Casing Center",
-  "Grid Generation Center",
-  "Assembly Line"
-];
-
-const WAREHOUSES = ["Jinja WH"];
-
-// Mock operation-to-item mapping (BOM-like data)
-const OPERATION_MAPPINGS: OperationMapping[] = [
-  {
-    operation: "Lead Generation & Purification",
-    workCenter: "Lead Furnace Center",
-    items: [
-      { itemCode: "rm-1", itemName: "Scrap Battery", uom: "KG", standardQty: 100 },
-    ]
-  },
-  {
-    operation: "Case Creation",
-    workCenter: "Plastic Casing Center",
-    items: [
-      { itemCode: "rm-2", itemName: "Plastic Pallets", uom: "KG", standardQty: 50 },
-    ]
-  },
-  {
-    operation: "Grid Creation & Oxidization",
-    workCenter: "Grid Generation Center",
-    items: [
-      { itemCode: "sfg-1", itemName: "Purified Lead", uom: "KG", standardQty: 10 },
-    ]
-  },
-  {
-    operation: "Assembly line & Packaging",
-    workCenter: "Assembly Line",
-    items: [
-      { itemCode: "sfg-2", itemName: "Battery Cases", uom: "NOS", standardQty: 1 },
-      { itemCode: "sfg-3", itemName: "Battery Lids", uom: "NOS", standardQty: 1 },
-      { itemCode: "rm-3", itemName: "Acid Type A", uom: "LTR", standardQty: 5 },
-    ]
-  },
-];
-
-// Mock warehouse stock data
-const WAREHOUSE_STOCK: { [warehouse: string]: { [itemCode: string]: number } } = {
-  "Jinja WH": {
-    "rm-1": 1500,
-    "rm-2": 500,
-    "rm-3": 200,
-    "sfg-1": 300,
-    "sfg-2": 100,
-    "sfg-3": 100,
-  }
+const resolveOperationCode = (
+  opId: number | string,
+  op: { code?: string } | undefined,
+  records: { id: number; code?: string; operation_code?: string }[]
+): string => {
+  const listOp = records.find((lo) => String(lo.id) === String(opId));
+  return String(
+    listOp?.operation_code ||
+    listOp?.code ||
+    op?.code ||
+    ""
+  ).trim();
 };
 
 // ============================================================================
@@ -183,12 +124,20 @@ const WAREHOUSE_STOCK: { [warehouse: string]: { [itemCode: string]: number } } =
 // ============================================================================
 
 export default function MyRequest() {
+  const { isMenuVisible, canCreate, canEdit, canView } = useHasPermission();
+  const permissionModule = "PRODUCTION/MY_REQUEST";
+
+  if (!isMenuVisible(permissionModule)) {
+    return <Unauthorized />;
+  }
+
   const { toast } = useToast();
   const [location, setLocation] = useLocation();
 
   // Removed route-based New MR Request page; now opened as modal from My Request list
   // Modal state for New/Edit MR Request form
   const [isFormModalOpen, setIsFormModalOpen] = useState(false);
+  const [formDialogEl, setFormDialogEl] = useState<HTMLDivElement | null>(null);
   const [editingId, setEditingId] = useState<number | null>(null);
 
   // ============================================================================
@@ -196,17 +145,92 @@ export default function MyRequest() {
   // ============================================================================
 
   const [searchTerm, setSearchTerm] = useState("");
+  const debouncedSearchTerm = useDebounce(searchTerm, 500);
   const [currentPage, setCurrentPage] = useState(1);
-  // Pagination state - using DataTablePagination component
   const [itemsPerPage, setItemsPerPage] = useState(10);
-  const [statusFilter, setStatusFilter] = useState("Requested to Warehouse");
+  const [statusFilter, setStatusFilter] = useState<string>("");
   const [operationFilter, setOperationFilter] = useState("All");
+  const appliedOperationFilterDefault = useRef(false);
+  const appliedStatusFilterDefault = useRef(false);
+  const [areListFiltersReady, setAreListFiltersReady] = useState(
+    () => getAssignedIds("operation").length === 0
+  );
   const [shiftFilter, setShiftFilter] = useState("All");
   const [filterDate, setFilterDate] = useState("");
+  const [isListLoading, setIsListLoading] = useState(false);
+  const [isViewLoading, setIsViewLoading] = useState(false);
+  const [isDetailLoading, setIsDetailLoading] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
+  const [isFormOpening, setIsFormOpening] = useState(false);
+  const [openingMRId, setOpeningMRId] = useState<number | null>(null);
+  const [totalRecords, setTotalRecords] = useState(0);
+  const [listOperations, setListOperations] = useState<{ id: number; name: string; code?: string; operation_code?: string }[]>([]);
+  const [formOperations, setFormOperations] = useState<any[]>([]);
+  const [workCenters, setWorkCenters] = useState<{ id: number; name: string }[]>([]);
+  const [warehouses, setWarehouses] = useState<{ id: number; name: string }[]>([]);
+  const [shifts, setShifts] = useState<any[]>([]);
+  const [activePlans, setActivePlans] = useState<{ id: number; code: string }[]>([]);
+  const [operationMappings, setOperationMappings] = useState<any[]>([]);
+
+  const assignedWorkcenterIds = getAssignedIds("workcenter");
+  const assignedOperationIds = getAssignedIds("operation");
+  const assignedWarehouseIds = getAssignedIds("warehouse");
+
+  const orderedWorkCenters = useMemo(
+    () => prioritizeByAssigned(workCenters, assignedWorkcenterIds, (wc) => wc.id),
+    [workCenters, assignedWorkcenterIds]
+  );
+
+  const orderedWarehouses = useMemo(
+    () => prioritizeByAssigned(warehouses, assignedWarehouseIds, (wh) => wh.id),
+    [warehouses, assignedWarehouseIds]
+  );
+
+  const defaultWarehouseIdStr = useMemo(() => {
+    if (orderedWarehouses.length === 0) return "";
+    if (assignedWarehouseIds.length > 0) {
+      const first = getFirstAssignedMatch(
+        assignedWarehouseIds,
+        orderedWarehouses.map((wh) => wh.id),
+      );
+      if (first) return String(first);
+    }
+    return String(orderedWarehouses[0].id);
+  }, [orderedWarehouses, assignedWarehouseIds]);
+
+  const orderedListOperations = useMemo(
+    () => prioritizeByAssigned(listOperations, assignedOperationIds, (op) => op.id),
+    [listOperations, assignedOperationIds]
+  );
+
+  const orderedFormOperations = useMemo(
+    () => prioritizeByAssigned(formOperations, assignedOperationIds, (op) => op.id),
+    [formOperations, assignedOperationIds]
+  );
+
+  const operationSelectOptions = useMemo(
+    () =>
+      orderedFormOperations.map((op) => {
+        const name = String(op.name || "").trim();
+        const code =
+          resolveOperationCode(op.id, op, listOperations) ||
+          `OP${String(op.id).padStart(3, "0")}`;
+        return {
+          value: String(op.id),
+          label: `${name} — ${code}`,
+          primaryText: name,
+          secondaryText: code,
+        };
+      }),
+    [orderedFormOperations, listOperations]
+  );
+
+  // Get master data from global common store
+  const mrStatuses = useCommonStore(s => s.mrStatuses);
 
   // Modal state
   const [isViewModalOpen, setIsViewModalOpen] = useState(false);
-  const [viewingMR, setViewingMR] = useState<MRRequest | null>(null);
+  const [viewingMR, setViewingMR] = useState<any>(null);
   const [showShortageDialog, setShowShortageDialog] = useState(false);
   const [isDeleteOpen, setIsDeleteOpen] = useState(false);
 
@@ -214,55 +238,417 @@ export default function MyRequest() {
   const [qtyValidationErrors, setQtyValidationErrors] = useState<Record<string | number, string>>({});
 
   // Sample MR Requests data - using shared data
-  const [mrRequests, setMrRequests] = useState<MRRequest[]>(mockMRRequests);
+  const [mrRequests, setMrRequests] = useState<any[]>([]);
 
   // Form data state
-  const [formData, setFormData] = useState<Partial<MRRequest>>({
-    mrNo: `MR-${new Date().getFullYear()}-${String(mrRequests.length + 1).padStart(3, '0')}`,
+  const [formData, setFormData] = useState<any>({
+    mrNo: "",
     date: getCurrentDateForInput(),
     requestedBy: "Current User",
     requiredByDate: getCurrentDateForInput(),
-    operation: "",
-    workCenter: "",
-    warehouse: "Jinja WH",
-    shift: "",
+    operation_id: "",
+    work_center_id: "",
+    shift_id: "",
+    production_plan_id: "",
     items: []
   });
 
   // ============================================================================
-  // EFFECTS - Form initialization now handled in handleOpenNewForm
+  // FETCH LOGIC
   // ============================================================================
+
+  const pickWarehouseFields = (comp: any) => {
+    const warehouseId =
+      comp.warehouse_id ??
+      comp.warehouseId ??
+      comp.warehouse?.id ??
+      comp.warehouse?.warehouse_id;
+    const warehouseName = String(
+      comp.warehouse_name ??
+        comp.warehouseName ??
+        comp.warehouse?.name ??
+        comp.warehouse?.warehouse_name ??
+        "",
+    ).trim();
+    return { warehouse_id: warehouseId, warehouse_name: warehouseName };
+  };
+
+  const resolveWarehouseName = (warehouseId: unknown, fallbackName?: string) => {
+    if (fallbackName?.trim()) return fallbackName.trim();
+    if (warehouseId == null || warehouseId === "") return "";
+    const match = orderedWarehouses.find((wh) => String(wh.id) === String(warehouseId));
+    return match?.name ?? "";
+  };
+
+  const appendOperationComponents = (
+    target: any[],
+    components: any[],
+    getQty: (c: any) => number
+  ) => {
+    (components || []).forEach((comp: any) => {
+      if (!comp?.item_id) return;
+      if (target.some((o: any) => o.item_id === comp.item_id)) return;
+      const warehouse = pickWarehouseFields(comp);
+      target.push({
+        item_id: comp.item_id,
+        availableQty: getQty(comp),
+        warehouse_id: warehouse.warehouse_id,
+        warehouse_name: resolveWarehouseName(
+          warehouse.warehouse_id,
+          warehouse.warehouse_name,
+        ),
+        item: {
+          id: comp.item_id,
+          name: comp.item_name || "",
+          code: comp.item_code || "",
+          uom: comp.uom || "",
+          type: comp.item_type || "",
+        },
+      });
+    });
+  };
+
+  const loadFormOperations = async () => {
+    try {
+      const res = await commonApi.getOperationsWithOutput();
+      if (res.isSuccessful && res.data?.records) {
+        const opsMap = new Map<number, any>();
+        res.data.records.forEach((record: any) => {
+          const opId = record.operation?.operation_id;
+          if (!opId) return;
+
+          if (!opsMap.has(opId)) {
+            opsMap.set(opId, {
+              id: opId,
+              name: record.operation?.operation_name || "Unknown Operation",
+              code: String(record.operation?.operation_code || record.operation?.code || "").trim(),
+              inputs: [],
+              outputs: [],
+            });
+          }
+
+          const op = opsMap.get(opId);
+          const inputList = Array.isArray(record.input_components)
+            ? record.input_components
+            : record.input_component
+              ? [record.input_component]
+              : [];
+          const outputList = Array.isArray(record.output_components)
+            ? record.output_components
+            : record.output_component
+              ? [record.output_component]
+              : [];
+
+          appendOperationComponents(op.inputs, inputList, (c) =>
+            Number(c.current_qty ?? c.current_QTY ?? 0) || 0
+          );
+          appendOperationComponents(op.outputs, outputList, (c) =>
+            Number(c.current_qty ?? c.current_QTY ?? 0) || 0
+          );
+        });
+        const ops = Array.from(opsMap.values());
+        setFormOperations(ops);
+        return ops;
+      }
+    } catch (err) {
+      console.error("Failed to load operations with output", err);
+    }
+    return [];
+  };
+  const loadFormWorkCenters = async () => {
+    try {
+      const res = await commonApi.getWorkCenters();
+      if (res.isSuccessful && res.data?.records) {
+        const mapped = res.data.records.map((wc: any) => ({
+          id: wc.id ?? wc.work_center_id,
+          name: wc.work_center_name || wc.name || wc.value_name,
+        }));
+        setWorkCenters(mapped);
+        return mapped;
+      }
+    } catch (err) {
+      console.error("Failed to load work centers", err);
+    }
+    return [];
+  };
+
+  const loadFormWarehouses = async () => {
+    try {
+      const res = await commonApi.getWarehouses();
+      if (res.isSuccessful && res.data?.records) {
+        const mapped = res.data.records.map((r: any) => ({
+          id: r.warehouse_id ?? r.id,
+          name: r.warehouse_name || r.name || r.value_name,
+        }));
+        setWarehouses(mapped);
+        return mapped;
+      }
+    } catch (err) {
+      console.error("Failed to load warehouses", err);
+    }
+    return [];
+  };
+
+  const fetchInitialData = async () => {
+    try {
+      const [opRes, shiftRes] = await Promise.all([
+        commonApi.getOperations(),
+        productionApi.getShiftForProduction()
+      ]);
+
+      if (shiftRes.isSuccessful && shiftRes.data?.records) {
+        setShifts(shiftRes.data.records.map((r: any) => ({
+          ...r,
+          id: r.shift_id || r.id || r.value_id,
+          name: r.shift_name || r.name || r.value_name || "Unknown",
+          value_name: r.shift_name || r.name || r.value_name || "Unknown",
+        })));
+      }
+
+
+      if (opRes.isSuccessful && opRes.data?.records) {
+        const operationRecords = opRes.data.records.map((r: any) => ({
+          id: r.id ?? r.operation_id,
+          name: r.name || r.operation_name,
+          code: r.operation_code || r.code,
+          operation_code: r.operation_code || r.code,
+        }));
+        setListOperations(operationRecords);
+
+        if (
+          !appliedOperationFilterDefault.current &&
+          assignedOperationIds.length > 0 &&
+          operationRecords.length > 0
+        ) {
+          const ordered = prioritizeByAssigned<{ id: number; name: string }>(
+            operationRecords,
+            assignedOperationIds,
+            (o) => o.id
+          );
+          const firstAssigned = getFirstAssignedMatch(
+            assignedOperationIds,
+            ordered.map((o) => o.id)
+          );
+          if (firstAssigned) {
+            setOperationFilter(String(firstAssigned));
+            appliedOperationFilterDefault.current = true;
+          }
+        }
+      }
+    } catch (error) {
+      console.error("Error fetching initial data:", error);
+    } finally {
+      setAreListFiltersReady(true);
+    }
+  };
+
+  const fetchProductionPlans = async (operationId?: string, shiftId?: string) => {
+    try {
+      const op = operationId || formData.operation_id;
+      const sh = shiftId || formData.shift_id;
+      
+      const res = await commonApi.getProductionPlans({ 
+        operation_id: op,
+        shift_id: sh,
+        status_id: "" // Add specific status if needed
+      });
+      if (res.isSuccessful && res.data?.records) {
+        setActivePlans(res.data.records.map((r: any) => ({
+          id: r.production_plan_id,
+          code: r.display_name || r.plan_code
+        })));
+      } else {
+        setActivePlans([]);
+      }
+    } catch (error) {
+      console.error("Error fetching production plans:", error);
+      setActivePlans([]);
+    }
+  };
+
+  const fetchRequests = async () => {
+    setIsListLoading(true);
+    try {
+      const response = await productionApi.getMyRequestList({
+        page: currentPage,
+        limit: itemsPerPage,
+        search: debouncedSearchTerm,
+        operation_id: operationFilter === "All" ? "" : operationFilter,
+        shift_id: shiftFilter === "All" ? "" : shiftFilter,
+        status_id: statusFilter === "All" ? "" : statusFilter,
+        request_date: filterDate ? format(parse(filterDate, "dd-MM-yyyy", new Date()), "yyyy-MM-dd") : ""
+      });
+
+      if (response.isSuccessful && response.data?.records) {
+        const selectedStatusId = statusFilter !== "All" ? String(statusFilter).trim() : "";
+        const selectedStatus = selectedStatusId
+          ? mrStatuses.find((s: any) => String(s?.id ?? s?.value_id ?? "").trim() === selectedStatusId)
+          : null;
+        const selectedStatusName = String(selectedStatus?.value_name || selectedStatus?.name || "")
+          .trim()
+          .toLowerCase();
+        const selectedStatusNameAliases =
+          selectedStatusName === "requested to warehouse"
+            ? ["requested to warehouse", "request to warehouse"]
+            : [selectedStatusName];
+
+        const mappedRequests = response.data.records.map((r: any) => ({
+          id: r.id,
+          mrNo: r.mr_code,
+          date: r.request_date,
+          shift: r.shift_name,
+          shift_id: r.shift_id,
+          operation: r.operation_name,
+          operation_id: r.operation_id,
+          workCenter: r.work_center_name,
+          work_center_id: r.work_center_id,
+          warehouse: r.warehouse_name,
+          warehouse_id: r.warehouse_id,
+          status: r.status_name,
+          status_id: r.status_id,
+          requestedBy: r.requested_by_name || "System",
+          requiredByDate: r.required_by_date || r.request_date,
+          productionPlanId: r.production_plan_id,
+          items: r.items || []
+        }));
+
+        const filteredRequests =
+          statusFilter === "All"
+            ? mappedRequests
+            : mappedRequests.filter((req: any) => {
+                const reqStatusId = String(req.status_id ?? "").trim();
+                const selStatusId = String(statusFilter).trim();
+                
+                // Primary check: ID comparison
+                if (selStatusId && reqStatusId) {
+                  return reqStatusId === selStatusId;
+                }
+                
+                // Fallback: Name comparison
+                const reqStatusName = String(req.status || "").trim().toLowerCase();
+                const selStatusName = selectedStatusName;
+                if (!selStatusName) return true; // If we can't resolve the name, don't filter out yet
+                
+                const selStatusNameAliases = 
+                  selStatusName === "requested to warehouse"
+                    ? ["requested to warehouse", "request to warehouse"]
+                    : [selStatusName];
+                
+                return selStatusNameAliases.includes(reqStatusName);
+              });
+
+        setMrRequests(filteredRequests);
+        setTotalRecords(
+          statusFilter === "All"
+            ? response.data.pagination?.totalRecords || response.data.records.length
+            : filteredRequests.length
+        );
+      }
+    } catch (error) {
+      console.error("Error fetching material requests:", error);
+      toast({
+        variant: "destructive",
+        title: "Error",
+        description: "Failed to load material requests"
+      });
+    } finally {
+      setIsListLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    fetchInitialData();
+  }, []);
+
+  // Default list status filter to "Requested to Warehouse" (dynamic from entity values).
+  useEffect(() => {
+    if (appliedStatusFilterDefault.current) return;
+
+    if (!Array.isArray(mrStatuses) || mrStatuses.length === 0) {
+      const timer = setTimeout(() => {
+        if (!appliedStatusFilterDefault.current) {
+          setStatusFilter("All");
+          appliedStatusFilterDefault.current = true;
+        }
+      }, 2000);
+      return () => clearTimeout(timer);
+    }
+
+    const requested = mrStatuses.find((s: { value_name?: string; name?: string }) => {
+      const name = String(s?.value_name || s?.name || "").trim().toLowerCase();
+      return name === "requested to warehouse";
+    });
+    const requestedId = requested != null ? String((requested as any).id ?? (requested as any).value_id ?? "").trim() : "";
+
+    setStatusFilter(requestedId || "All");
+    appliedStatusFilterDefault.current = true;
+  }, [mrStatuses]);
+
+  useEffect(() => {
+    // Prevent fetching until statusFilter is initialized (either to a specific ID or "All")
+    if (statusFilter === "") return;
+    if (!areListFiltersReady) return;
+
+    fetchRequests();
+  }, [currentPage, itemsPerPage, debouncedSearchTerm, statusFilter, operationFilter, shiftFilter, filterDate, areListFiltersReady]);
 
   // ============================================================================
   // HANDLERS
   // ============================================================================
 
-  const handleOperationChange = (operation: string) => {
-    const mapping = OPERATION_MAPPINGS.find(m => m.operation === operation);
-    if (mapping) {
-      const workCenter = mapping.workCenter;
-      const items: MRItem[] = mapping.items.map((item, index) => ({
-        id: index + 1,
-        itemCode: item.itemCode,
-        itemName: item.itemName,
-        uom: item.uom,
-        availableQty: WAREHOUSE_STOCK[formData.warehouse || "Jinja WH"]?.[item.itemCode] || 0,
-        requiredQty: item.standardQty
+  const handleOperationChange = async (operationId: string, operationsSource?: any[]) => {
+    const opId = Number(operationId);
+    setFormData((prev: any) => ({ 
+      ...prev, 
+      operation_id: operationId, 
+      production_plan_id: "", // Clear plan when operation changes
+      items: [] 
+    }));
+    setQtyValidationErrors({});
+
+    const ops = operationsSource ?? formOperations;
+    const operation = ops.find((o: any) => Number(o.id) === opId);
+    if (operation && (operation.inputs?.length || operation.outputs?.length)) {
+      const sourceItems =
+        operation.inputs?.length > 0 ? operation.inputs : operation.outputs || [];
+      const items = sourceItems.map((out: any) => {
+        const warehouseId = out.warehouse_id ?? defaultWarehouseIdStr;
+        const warehouseName =
+          out.warehouse_name ||
+          resolveWarehouseName(warehouseId) ||
+          "—";
+        return {
+          id: out.item_id,
+          item_id: out.item_id,
+          itemCode: out.item?.code || "",
+          itemName: out.item?.name || "",
+          uom: out.item?.uom || "",
+          warehouse_id: warehouseId != null ? String(warehouseId) : "",
+          warehouse_name: warehouseName,
+          availableQty: out.availableQty || out.stock_qty || 0,
+          requiredQty: 0,
+        };
+      });
+
+      setFormData((prev: any) => ({ 
+        ...prev, 
+        operation_id: operationId, 
+        production_plan_id: "",
+        items 
       }));
-      setFormData({ ...formData, operation, workCenter, items });
-      setQtyValidationErrors({});
+      fetchProductionPlans(operationId, formData.shift_id);
     } else {
-      setFormData({ ...formData, operation, items: [] });
-      setQtyValidationErrors({});
+      fetchProductionPlans(operationId, formData.shift_id);
     }
   };
 
-  const handleWarehouseChange = (warehouse: string) => {
-    const updatedItems = formData.items?.map(item => ({
-      ...item,
-      availableQty: WAREHOUSE_STOCK[warehouse]?.[item.itemCode] || 0
-    })) || [];
-    setFormData({ ...formData, warehouse, items: updatedItems });
+  const handleShiftChange = (shiftId: string) => {
+    setFormData((prev: any) => ({ 
+      ...prev, 
+      shift_id: shiftId,
+      production_plan_id: "" // Clear plan when shift changes
+    }));
+    fetchProductionPlans(formData.operation_id, shiftId);
   };
 
   const handleRequiredQtyChange = (itemId: number, newQty: string) => {
@@ -272,14 +658,14 @@ export default function MyRequest() {
       error = "Must be greater than 0";
     }
     setQtyValidationErrors(prev => ({ ...prev, [itemId]: error }));
-    const updatedItems = formData.items?.map(item =>
+    const updatedItems = formData.items?.map((item: any) =>
       item.id === itemId ? { ...item, requiredQty: newQty } : item
     ) || [];
     setFormData({ ...formData, items: updatedItems });
   };
 
   const hasShortage = (): boolean => {
-    return formData.items?.some(item => parseFloat(item.requiredQty.toString()) > item.availableQty) || false;
+    return formData.items?.some((item: any) => parseFloat(item.requiredQty.toString()) > item.availableQty) || false;
   };
 
   const handleSubmit = () => {
@@ -287,31 +673,27 @@ export default function MyRequest() {
       toast({ variant: "destructive", title: "Validation Error", description: "Required By Date is required" });
       return;
     }
-    if (!formData.shift) {
+    if (!formData.shift_id) {
       toast({ variant: "destructive", title: "Validation Error", description: "Shift is required" });
       return;
     }
-    if (!formData.operation) {
+    if (!formData.operation_id) {
       toast({ variant: "destructive", title: "Validation Error", description: "Operation is required" });
       return;
     }
-    if (!formData.workCenter) {
+    if (!formData.work_center_id) {
       toast({ variant: "destructive", title: "Validation Error", description: "Work Center is required" });
-      return;
-    }
-    if (!formData.warehouse) {
-      toast({ variant: "destructive", title: "Validation Error", description: "Warehouse is required" });
       return;
     }
     if (!formData.items || formData.items.length === 0) {
       toast({ variant: "destructive", title: "Validation Error", description: "No items mapped for this operation" });
       return;
     }
-    if (formData.items.some(item => parseFloat(item.requiredQty.toString()) <= 0)) {
+    if (formData.items.some((item: any) => parseFloat(item.requiredQty.toString()) <= 0)) {
       toast({ variant: "destructive", title: "Validation Error", description: "Required Qty must be greater than 0 for all items" });
       return;
     }
-    if (!formData.productionPlanId) {
+    if (!formData.production_plan_id) {
       toast({ variant: "destructive", title: "Validation Error", description: "Production Plan is required" });
       return;
     }
@@ -322,53 +704,126 @@ export default function MyRequest() {
     }
   };
 
-  const submitMRRequest = () => {
-    const newMR: MRRequest = {
-      id: editingId || mrRequests.length + 1,
-      mrNo: formData.mrNo!,
-      date: formData.date!,
-      requiredByDate: formData.requiredByDate!,
-      operation: formData.operation!,
-      workCenter: formData.workCenter!,
-      warehouse: formData.warehouse!,
-      requestedBy: formData.requestedBy!,
-      status: "Requested to Warehouse",
-      shift: formData.shift!,
-      items: formData.items ?? []
-    };
+  const submitMRRequest = async () => {
+    if (isSaving) return;
+    setIsSaving(true);
+    try {
+      const headerWarehouseId = Number(formData.items[0]?.warehouse_id);
+      if (!Number.isFinite(headerWarehouseId) || headerWarehouseId <= 0) {
+        toast({
+          variant: "destructive",
+          title: "Validation Error",
+          description: "Warehouse is missing on material lines from the server.",
+        });
+        setIsSaving(false);
+        return;
+      }
+      const payload = {
+        request_date: format(parseDateString(formData.date!), "yyyy-MM-dd"),
+        required_by_date: format(parseDateString(formData.requiredByDate!), "yyyy-MM-dd"),
+        operation_id: Number(formData.operation_id),
+        work_center_id: Number(formData.work_center_id),
+        warehouse_id: headerWarehouseId,
+        shift_id: Number(formData.shift_id),
+        production_plan_id: Number(formData.production_plan_id),
+        items: formData.items.map((item: { mr_item_id?: number; item_id: number; id: number; requiredQty: number | string }) => ({
+          ...(item.mr_item_id && { id: Number(item.mr_item_id) }),
+          item_id: Number(item.item_id || item.id),
+          required_qty: Number(item.requiredQty),
+        }))
+      };
 
-    if (editingId) {
-      updateMRRequest(editingId, newMR);
+      let response;
+      if (editingId) {
+        response = await productionApi.updateMyRequest(editingId, payload);
+      } else {
+        response = await productionApi.createMyRequest(payload);
+      }
+
+      if (response.isSuccessful) {
+        toast({
+          ...crudSuccessToast,
+          title: "Success",
+          description: response.message || (editingId ? "Material request updated successfully" : "Material request created successfully"),
+          duration: 15000,
+        });
+        fetchRequests(); // Refresh the list
+        handleCloseForm();
+      } else {
+        toast({
+          variant: "destructive",
+          title: "Error",
+          description: response.message || "Failed to save material request",
+        });
+      }
+    } catch (error: any) {
       toast({
-        variant: "success",
-        title: "Success",
-        description: "MR Request updated successfully",
+        variant: "destructive",
+        title: "Error",
+        description: error.message || "Something went wrong",
       });
-    } else {
-      addMRRequest(newMR);
-      toast({
-        variant: "success",
-        title: "Success",
-        description: "MR Request created successfully",
-      });
+    } finally {
+      setIsSaving(false);
     }
-    setMrRequests([...mockMRRequests]);
     setShowShortageDialog(false);
-    handleCloseForm(); // Close modal instead of navigating
   };
 
-  const handleView = (id: number) => {
-    const mr = mrRequests.find(m => m.id === id);
-    if (mr) {
-      setViewingMR(mr);
-      setIsViewModalOpen(true);
+  const handleShortageRedirect = () => {
+    setShowShortageDialog(false);
+    setLocation("/procurement/my-mr");
+  };
+
+  const handleView = async (id: number) => {
+    if (openingMRId !== null || isSaving) return;
+
+    setOpeningMRId(id);
+    setIsViewLoading(true);
+    setIsViewModalOpen(true);
+    setViewingMR(null);
+    try {
+      const res = await productionApi.getMyRequestById(id);
+      if (res.isSuccessful && res.data) {
+        const mr = res.data;
+        setViewingMR({
+          id: id,
+          mrNo: mr.mr_code,
+          date: mr.request_date,
+          requestedBy: mr.requested_by_name?.trim() || mr.requested_by || "System",
+          requiredByDate: mr.required_by_date,
+          shift: mr.shift_name,
+          operation: mr.operation_name,
+          workCenter: mr.work_center_name,
+          warehouse: mr.warehouse_name,
+          receivedDate: mr.received_date,
+          status: mrRequests.find(r => r.id === id)?.status, // Keep status from list
+          items: mr.items.map(item => ({
+            id: item.id,
+            item_id: item.item_id,
+            itemCode: item.item_code,
+            itemName: item.item_name,
+            uom: item.uom,
+            requiredQty: item.required_qty,
+            issuedQty: item.issued_qty,
+            receivedQty: item.received_qty
+          }))
+        });
+      } else {
+        setIsViewModalOpen(false);
+      }
+    } catch (error) {
+      console.error("Error fetching MR details:", error);
+      toast({ variant: "destructive", title: "Error", description: "Failed to fetch request details" });
+      setIsViewModalOpen(false);
+    } finally {
+      setIsViewLoading(false);
+      setOpeningMRId(null);
     }
   };
 
-  const handleMarkAsReceived = () => {
+  const handleMarkAsReceived = async () => {
     if (!viewingMR || viewingMR.status !== "Issued by Warehouse") return;
 
-    const hasInvalidQty = viewingMR.items.some(item => {
+    const hasInvalidQty = viewingMR.items.some((item: { receivedQty?: number | string; issuedQty?: number }) => {
       const receivedQty = parseFloat(item.receivedQty?.toString() || "0");
       const issuedQty = item.issuedQty || 0;
       return receivedQty < 0 || receivedQty > issuedQty;
@@ -383,66 +838,167 @@ export default function MyRequest() {
       return;
     }
 
-    // Default receivedQty to issuedQty if not set
-    const updatedItems = viewingMR.items.map(item => ({
-      ...item,
-      receivedQty: item.receivedQty ?? item.issuedQty ?? 0
-    }));
+    try {
+      setIsSaving(true);
+      const requestId = Number(viewingMR.id);
+      if (!Number.isFinite(requestId) || requestId <= 0) {
+        toast({ variant: "destructive", title: "Error", description: "Invalid request id" });
+        return;
+      }
+      const response = await productionApi.receiveMaterials(requestId, {
+        items: viewingMR.items.map((item: { id: number; receivedQty?: number | string; issuedQty?: number }) => ({
+          id: Number(item.id),
+          received_qty: Number(item.receivedQty ?? item.issuedQty ?? 0)
+        }))
+      });
 
-    const updatedRequest: MRRequest = {
-      ...viewingMR,
-      status: "Received by Production",
-      receivedDate: new Date().toISOString(),
-      receivedBy: "Current User",
-      items: updatedItems,
-    };
-
-    updateMRRequest(viewingMR.id, updatedRequest);
-    setMrRequests([...mockMRRequests]);
-    setIsViewModalOpen(false);
-    setViewingMR(null);
-    toast({
-      variant: "success",
-      title: "Success",
-      description: `MR ${viewingMR.mrNo} marked as received.`,
-    });
+      if (response.isSuccessful) {
+        toast({
+          ...crudSuccessToast,
+          title: "Success",
+          description: response.message || `MR ${viewingMR.mrNo} marked as received.`,
+          duration: 15000,
+        });
+        fetchRequests(); // Refresh the list
+        setIsViewModalOpen(false);
+        setViewingMR(null);
+      } else {
+        toast({
+          variant: "destructive",
+          title: "Error",
+          description: response.message || "Failed to mark as received",
+        });
+      }
+    } catch (error: any) {
+      toast({
+        variant: "destructive",
+        title: "Error",
+        description: error.message || "Something went wrong",
+      });
+    } finally {
+      setIsSaving(false);
+    }
   };
 
   // MR Request form logic unchanged; only UI container changed to Modal
-  const handleOpenNewForm = () => {
-    setEditingId(null);
-    setFormData({
-      mrNo: `MR-${new Date().getFullYear()}-${String(mrRequests.length + 1).padStart(3, '0')}`,
-      date: getCurrentDateForInput(),
-      requestedBy: "Current User",
-      requiredByDate: getCurrentDateForInput(),
-      operation: "",
-      workCenter: "",
-      warehouse: "Jinja WH",
-      shift: "",
-      items: []
-    });
-    setIsFormModalOpen(true);
+  const handleOpenNewForm = async () => {
+    if (openingMRId !== null || isSaving || isFormOpening) return;
+
+    setIsFormOpening(true);
+    try {
+      const [opsList, wcList, whList] = await Promise.all([
+        loadFormOperations(),
+        loadFormWorkCenters(),
+        loadFormWarehouses(),
+      ]);
+
+      const defaultWorkCenterId =
+        assignedWorkcenterIds.length > 0 && wcList.length > 0
+          ? getFirstAssignedMatch(
+              assignedWorkcenterIds,
+              prioritizeByAssigned<{ id: number; name: string }>(
+                wcList,
+                assignedWorkcenterIds,
+                (wc) => wc.id
+              ).map((wc) => wc.id)
+            )
+          : undefined;
+      const defaultOperationId =
+        assignedOperationIds.length > 0 && opsList.length > 0
+          ? getFirstAssignedMatch(
+              assignedOperationIds,
+              prioritizeByAssigned<{ id: number; name: string }>(
+                opsList,
+                assignedOperationIds,
+                (op) => op.id
+              ).map((op) => op.id)
+            )
+          : undefined;
+      setEditingId(null);
+      setFormData({
+        mrNo: "",
+        date: getCurrentDateForInput(),
+        requestedBy: "Current User",
+        requiredByDate: getCurrentDateForInput(),
+        operation_id: defaultOperationId ? String(defaultOperationId) : "",
+        work_center_id: defaultWorkCenterId ? String(defaultWorkCenterId) : "",
+        shift_id: "",
+        production_plan_id: "",
+        items: [],
+      });
+      setIsFormModalOpen(true);
+
+      if (defaultOperationId) {
+        await handleOperationChange(String(defaultOperationId), opsList);
+      } else {
+        fetchProductionPlans();
+      }
+    } catch (error) {
+      console.error("Failed to open MR form:", error);
+      toast({
+        variant: "destructive",
+        title: "Error",
+        description: "Failed to open the request form. Please try again.",
+      });
+    } finally {
+      setIsFormOpening(false);
+    }
   };
 
-  const handleEdit = (id: number) => {
-    const existingMR = mrRequests.find(mr => mr.id === id);
-    if (existingMR) {
-      setEditingId(id);
-      setFormData({
-        mrNo: existingMR.mrNo,
-        date: existingMR.date,
-        requestedBy: existingMR.requestedBy,
-        requiredByDate: existingMR.requiredByDate,
-        operation: existingMR.operation,
-        workCenter: existingMR.workCenter,
-        warehouse: existingMR.warehouse,
-        shift: existingMR.shift,
-        productionPlanId: existingMR.productionPlanId,
-        items: existingMR.items
-      });
-      setQtyValidationErrors({});
-      setIsFormModalOpen(true);
+  const handleEdit = async (id: number) => {
+    if (openingMRId !== null || isSaving) return;
+
+    setOpeningMRId(id);
+    setIsDetailLoading(true);
+    setIsFormModalOpen(true);
+    try {
+      await Promise.all([
+        loadFormOperations(),
+        loadFormWorkCenters(),
+        loadFormWarehouses(),
+      ]);
+      const res = await productionApi.getMyRequestById(id);
+      if (res.isSuccessful && res.data) {
+        const mr = res.data;
+        setEditingId(id);
+        setFormData({
+          mrNo: mr.mr_code,
+          date: mr.request_date,
+          requestedBy: mr.requested_by_name?.trim() || mr.requested_by || "System",
+          requiredByDate: mr.required_by_date,
+          operation_id: String(mr.operation_id),
+          work_center_id: String(mr.work_center_id),
+          shift_id: String(mr.shift_id),
+          production_plan_id: String(mr.production_plan_id),
+          items: mr.items.map(item => ({
+            mr_item_id: item.id, // Keep track of backend record ID
+            item_id: item.item_id,
+            id: item.item_id, // Map item_id to id for form logic
+            itemCode: item.item_code,
+            itemName: item.item_name,
+            uom: item.uom,
+            warehouse_id:
+              item.warehouse_id != null
+                ? String(item.warehouse_id)
+                : String(mr.warehouse_id),
+            warehouse_name: item.warehouse_name || mr.warehouse_name || "—",
+            availableQty: item.available_qty || 0,
+            requiredQty: item.required_qty
+          }))
+        });
+        setQtyValidationErrors({});
+        // Also fetch plans for this operation to populate the dropdown
+        fetchProductionPlans(String(mr.operation_id));
+      } else {
+        setIsFormModalOpen(false);
+      }
+    } catch (error) {
+      console.error("Error fetching MR details for edit:", error);
+      toast({ variant: "destructive", title: "Error", description: "Failed to fetch request details" });
+      setIsFormModalOpen(false);
+    } finally {
+      setIsDetailLoading(false);
+      setOpeningMRId(null);
     }
   };
 
@@ -450,13 +1006,14 @@ export default function MyRequest() {
     setIsFormModalOpen(false);
     setEditingId(null);
     setFormData({
-      mrNo: `MR-${new Date().getFullYear()}-${String(mrRequests.length + 1).padStart(3, '0')}`,
+      mrNo: "",
       date: getCurrentDateForInput(),
       requestedBy: "Current User",
       requiredByDate: getCurrentDateForInput(),
-      operation: "",
-      workCenter: "",
-      warehouse: "Jinja WH",
+      operation_id: "",
+      work_center_id: "",
+      shift_id: "",
+      production_plan_id: "",
       items: []
     });
   };
@@ -466,60 +1023,81 @@ export default function MyRequest() {
       const updatedRequests = mrRequests.filter(mr => mr.id !== editingId);
       setMrRequests(updatedRequests);
       toast({
-        variant: "success",
+        ...crudSuccessToast,
         title: "Success",
         description: "MR Request deleted successfully",
+        duration: 15000,
       });
       setIsDeleteOpen(false);
       handleCloseForm();
     }
   };
 
+  // Apply assigned defaults when create modal opens and master data finishes loading
+  useEffect(() => {
+    if (!isFormModalOpen || editingId) return;
+
+    setFormData((prev: typeof formData) => {
+      let work_center_id = prev.work_center_id;
+      let operation_id = prev.operation_id;
+
+      if (!work_center_id && assignedWorkcenterIds.length && orderedWorkCenters.length) {
+        const firstWorkCenter = getFirstAssignedMatch(
+          assignedWorkcenterIds,
+          orderedWorkCenters.map((wc) => wc.id)
+        );
+        if (firstWorkCenter) work_center_id = String(firstWorkCenter);
+      }
+
+      if (!operation_id && assignedOperationIds.length && orderedFormOperations.length) {
+        const firstOperation = getFirstAssignedMatch(
+          assignedOperationIds,
+          orderedFormOperations.map((op) => op.id)
+        );
+        if (firstOperation) operation_id = String(firstOperation);
+      }
+
+      if (
+        work_center_id === prev.work_center_id &&
+        operation_id === prev.operation_id
+      ) {
+        return prev;
+      }
+
+      return { ...prev, work_center_id, operation_id };
+    });
+  }, [
+    isFormModalOpen,
+    editingId,
+    assignedWorkcenterIds,
+    assignedOperationIds,
+    orderedWorkCenters,
+    orderedFormOperations,
+  ]);
+
   // ============================================================================
   // FILTERING & PAGINATION
   // ============================================================================
 
-  const filteredRequests = mrRequests.filter(item => {
-    const matchesSearch = item.mrNo.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      item.operation.toLowerCase().includes(searchTerm.toLowerCase());
-    const matchesStatus = statusFilter === "All" || item.status === statusFilter;
-    const matchesOperation = operationFilter === "All" || item.operation === operationFilter;
-    const matchesShift = shiftFilter === "All" || item.shift === shiftFilter;
-    const matchesDate = !filterDate || formatDate(item.date) === filterDate;
-    return matchesSearch && matchesStatus && matchesOperation && matchesShift && matchesDate;
-  });
-
-  const totalPages = Math.ceil(filteredRequests.length / itemsPerPage);
-  const paginatedData = filteredRequests.slice(
-    (currentPage - 1) * itemsPerPage,
-    currentPage * itemsPerPage
-  );
-
-  // Auto-adjust page when data changes
-  useEffect(() => {
-    if (currentPage > totalPages && totalPages > 0) {
-      setCurrentPage(totalPages);
-    }
-  }, [filteredRequests.length, currentPage, totalPages]);
-
-  // Reset to page 1 when filters change
-  useEffect(() => {
-    setCurrentPage(1);
-  }, [searchTerm, statusFilter, operationFilter, shiftFilter, filterDate]);
+  const totalPages = Math.ceil(totalRecords / itemsPerPage);
+  const paginatedData = mrRequests;
 
   const canSaveRequest =
+    !isSaving &&
+    !isDetailLoading &&
     Boolean(formData.date) &&
     Boolean(formData.requiredByDate) &&
-    Boolean(formData.shift) &&
-    Boolean(formData.operation) &&
-    Boolean(formData.workCenter) &&
-    Boolean(formData.warehouse) &&
-    Boolean(formData.productionPlanId) &&
+    Boolean(formData.shift_id) &&
+    Boolean(formData.operation_id) &&
+    Boolean(formData.work_center_id) &&
+    Boolean(formData.production_plan_id) &&
     (formData.items?.length ?? 0) > 0 &&
-    formData.items!.every((item) => {
+    formData.items!.every((item: { requiredQty: number | string }) => {
       const q = parseFloat(String(item.requiredQty));
       return !Number.isNaN(q) && q > 0;
     });
+
+  const isRowActionBusy = openingMRId !== null || isSaving;
 
   // ============================================================================
   // RENDER - LISTING VIEW WITH MODAL FORM
@@ -538,7 +1116,7 @@ export default function MyRequest() {
         search={{
           value: searchTerm,
           onChange: setSearchTerm,
-          placeholder: "Search by MR Number or Operation..."
+          placeholder: "Search by MR Code or Operation..."
         }}
         filters={[
           {
@@ -547,7 +1125,7 @@ export default function MyRequest() {
             value: operationFilter,
             options: [
               { label: "All Operations", value: "All" },
-              ...OPERATIONS.map(op => ({ label: op, value: op }))
+              ...orderedListOperations.map(op => ({ label: op.name, value: String(op.id) }))
             ],
             onChange: setOperationFilter,
             searchable: true
@@ -558,8 +1136,10 @@ export default function MyRequest() {
             value: shiftFilter,
             options: [
               { label: "All Shifts", value: "All" },
-              { label: "Morning", value: "Morning" },
-              { label: "Night", value: "Night" }
+              ...shifts.map(s => ({ 
+                label: s.name, 
+                value: String(s.id) 
+              }))
             ],
             onChange: setShiftFilter,
             searchable: true
@@ -570,9 +1150,10 @@ export default function MyRequest() {
             value: statusFilter,
             options: [
               { label: "All Status", value: "All" },
-              { label: "Requested to Warehouse", value: "Requested to Warehouse" },
-              { label: "Issued by Warehouse", value: "Issued by Warehouse" },
-              { label: "Received by Production", value: "Received by Production" }
+              ...mrStatuses.map(s => ({ 
+                label: s.value_name || s.name, 
+                value: String(s.id) 
+              }))
             ],
             onChange: setStatusFilter,
             searchable: true
@@ -586,11 +1167,11 @@ export default function MyRequest() {
           }
         ]}
         actions={[
-          {
+          ...(canCreate(permissionModule) ? [{
             label: "My Request",
             icon: <Plus className="h-4 w-4" />,
-            onClick: handleOpenNewForm
-          }
+            onClick: handleOpenNewForm,
+          }] : [])
         ]}
       />
 
@@ -601,7 +1182,7 @@ export default function MyRequest() {
             <Table>
               <TableHeader>
                 <TableRow className="bg-muted/50 hover:bg-muted/50">
-                  <TableHead className="font-semibold text-xs uppercase tracking-wider">MR Number</TableHead>
+                  <TableHead className="font-semibold text-xs uppercase tracking-wider">MR Code</TableHead>
                   <TableHead className="font-semibold text-xs uppercase tracking-wider">Date</TableHead>
                   <TableHead className="font-semibold text-xs uppercase tracking-wider">Shift</TableHead>
                   <TableHead className="font-semibold text-xs uppercase tracking-wider">Operation</TableHead>
@@ -612,7 +1193,16 @@ export default function MyRequest() {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {paginatedData.length === 0 ? (
+                {!areListFiltersReady || isListLoading ? (
+                  <TableRow>
+                    <TableCell colSpan={8} className="h-32 text-center">
+                      <div className="flex flex-col items-center justify-center gap-3">
+                        <Loader2 className="h-8 w-8 animate-spin text-primary" />
+                        <p className="text-sm text-muted-foreground">Loading...</p>
+                      </div>
+                    </TableCell>
+                  </TableRow>
+                ) : paginatedData.length === 0 ? (
                   <TableRow>
                     <TableCell colSpan={8} className="h-32 text-center text-muted-foreground">
                       No My Requests found
@@ -641,10 +1231,12 @@ export default function MyRequest() {
                         </Badge>
                       </TableCell>
                       <TableCell className="text-center py-4">
-                        <TableActionButtons
-                          onView={() => handleView(request.id)}
-                          onEdit={request.status === "Requested to Warehouse" ? () => handleEdit(request.id) : undefined}
-                        />
+                        <div className={cn(isRowActionBusy && "pointer-events-none opacity-50")}>
+                          <TableActionButtons
+                            onView={canView(permissionModule) ? () => handleView(request.id) : undefined}
+                            onEdit={(request.status === "Requested to Warehouse" && canEdit(permissionModule)) ? () => handleEdit(request.id) : undefined}
+                          />
+                        </div>
                       </TableCell>
                     </TableRow>
                   ))
@@ -654,11 +1246,11 @@ export default function MyRequest() {
           </div>
 
           {/* Pagination - Same position as Materials reference */}
-          {filteredRequests.length > 0 && (
+          {areListFiltersReady && totalRecords > 0 && !isListLoading && (
             <DataTablePagination
               currentPage={currentPage}
               totalPages={totalPages}
-              totalItems={filteredRequests.length}
+              totalItems={totalRecords}
               itemsPerPage={itemsPerPage}
               onPageChange={setCurrentPage}
               onItemsPerPageChange={setItemsPerPage}
@@ -675,10 +1267,15 @@ export default function MyRequest() {
           onPointerDownOutside={(e) => e.preventDefault()}
         >
           <DialogHeader>
-            <DialogTitle>Material Request: {viewingMR?.mrNo}</DialogTitle>
+            <DialogTitle>Material Request: {viewingMR?.mrNo ?? "..."}</DialogTitle>
           </DialogHeader>
 
-          {viewingMR && (
+          {isViewLoading ? (
+            <div className="flex flex-col items-center justify-center py-20 gap-3">
+              <Loader2 className="h-8 w-8 animate-spin text-primary" />
+              <p className="text-sm text-muted-foreground">Loading...</p>
+            </div>
+          ) : viewingMR && (
             <div className="space-y-6">
               <Card>
                 <CardHeader>
@@ -687,7 +1284,7 @@ export default function MyRequest() {
                 <CardContent>
                   <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                     <div>
-                      <Label>MR Number</Label>
+                      <Label>MR Code</Label>
                       <Input value={viewingMR.mrNo} readOnly className="bg-muted" />
                     </div>
                     <div>
@@ -765,7 +1362,7 @@ export default function MyRequest() {
                           </TableRow>
                         </TableHeader>
                         <TableBody>
-                          {viewingMR.items.map((item) => (
+                          {viewingMR.items.map((item: any) => (
                             <TableRow key={item.id}>
                               <TableCell className="font-mono">{item.itemCode}</TableCell>
                               <TableCell>{item.itemName}</TableCell>
@@ -785,7 +1382,7 @@ export default function MyRequest() {
                                         onChange={(e) => {
                                           const val = e.target.value;
                                           if (val === "" || (/^\d*\.?\d*$/.test(val) && val.replace(".", "").length <= 6)) {
-                                            const updatedItems = viewingMR.items.map(i =>
+                                            const updatedItems = viewingMR.items.map((i: any) =>
                                               i.id === item.id ? { ...i, receivedQty: val } : i
                                             );
                                             setViewingMR({ ...viewingMR, items: updatedItems });
@@ -813,11 +1410,11 @@ export default function MyRequest() {
           )}
 
           <DialogFooter>
-            <Button variant="outline" onClick={() => setIsViewModalOpen(false)}>
+            <Button variant="outline" onClick={() => setIsViewModalOpen(false)} disabled={isSaving}>
               Close
             </Button>
             {viewingMR && viewingMR.status === "Issued by Warehouse" && (
-              <Button onClick={handleMarkAsReceived} variant="default">
+              <Button onClick={handleMarkAsReceived} variant="default" loading={isSaving} disabled={isSaving || isViewLoading}>
                 Received
               </Button>
             )}
@@ -836,7 +1433,7 @@ export default function MyRequest() {
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction onClick={submitMRRequest}>
+            <AlertDialogAction onClick={handleShortageRedirect}>
               Continue & Create PR
             </AlertDialogAction>
           </AlertDialogFooter>
@@ -864,158 +1461,242 @@ export default function MyRequest() {
       {/* New/Edit MR Request Form Modal */}
       <Dialog open={isFormModalOpen} onOpenChange={setIsFormModalOpen}>
         <DialogContent
-          className="sm:max-w-[900px] max-h-[90vh] flex flex-col p-0"
+          ref={setFormDialogEl}
+          className="flex! min-h-0 w-[95%] max-h-[82vh] flex-col gap-0 overflow-hidden bg-white p-0 sm:max-w-3xl md:max-w-4xl lg:max-w-5xl xl:max-w-6xl"
           onPointerDownOutside={(e) => e.preventDefault()}
+          onInteractOutside={(e) => e.preventDefault()}
         >
-          <DialogHeader className="p-6 pb-4">
-            <DialogTitle className="text-2xl font-bold">
+          <DialogHeader className="shrink-0 space-y-1 p-4 pb-2 sm:p-5 sm:pb-3">
+            <DialogTitle className="text-lg font-bold sm:text-xl">
               {editingId ? "Edit MR Request" : "New MR Request"}
             </DialogTitle>
+            <DialogDescription className="text-xs leading-snug text-muted-foreground sm:text-sm">
+              Configure MR details and material requirements for production.
+            </DialogDescription>
           </DialogHeader>
 
-          <div className="flex-1 overflow-y-auto px-6 pb-6 space-y-6">
-            <Card>
-              <CardHeader>
-                <CardTitle>MR Information</CardTitle>
-              </CardHeader>
-              <CardContent>
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+          <div className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto px-4 py-3 sm:px-5 sm:py-4">
+            {isDetailLoading || isFormOpening ? (
+              <div className="flex min-h-[240px] flex-col items-center justify-center gap-3 sm:min-h-[320px]">
+                <Loader2 className="h-8 w-8 animate-spin text-primary" />
+                <p className="text-sm text-muted-foreground">Loading...</p>
+              </div>
+            ) : (
+            <div className="space-y-5">
+              <div>
+                <h3 className="border-b border-primary/20 pb-1 text-xs font-bold uppercase tracking-wider text-primary">
+                  MR Information
+                </h3>
+                <div className="mt-3 grid grid-cols-1 gap-4 md:grid-cols-2 md:items-start">
                   {editingId && (
-                    <div className="space-y-2">
-                      <Label>MR Number</Label>
-                      <Input value={formData.mrNo} readOnly className="bg-muted" />
+                    <div className="min-w-0 space-y-1.5 md:col-span-2">
+                      <Label className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">MR Code</Label>
+                      <Input value={formData.mrNo} readOnly className="pointer-events-none h-9 bg-muted font-mono text-sm" />
                     </div>
                   )}
-                  <div className="space-y-2">
-                    <div className="space-y-1">
-                      <Label className="text-[10px] uppercase font-bold text-muted-foreground block tracking-wider">Request Date <span className="text-red-500">*</span></Label>
-                      <SharedDatePicker
-                        date={formData.date ? parseDateString(formData.date) : undefined}
-                        setDate={(date) => setFormData(prev => ({ ...prev, date: date ? format(date, "yyyy-MM-dd") : "" }))}
-                        showClear={false}
-                      />
-                    </div>
-                  </div>
-                  <div className="space-y-1">
-                    <Label className="text-[10px] uppercase font-bold text-muted-foreground block tracking-wider">Required By Date <span className="text-red-500">*</span></Label>
+                  <div className="min-w-0 space-y-1.5">
+                    <Label className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">
+                      Request Date <span className="text-red-500">*</span>
+                    </Label>
                     <SharedDatePicker
-                      date={formData.requiredByDate ? parseDateString(formData.requiredByDate) : undefined}
-                      setDate={(date) => setFormData(prev => ({ ...prev, requiredByDate: date ? format(date, "yyyy-MM-dd") : "" }))}
+                      date={formData.date ? parseDateString(formData.date) : undefined}
+                      setDate={(date) => setFormData((prev: any) => ({ ...prev, date: date ? format(date, "yyyy-MM-dd") : "" }))}
                       showClear={false}
                     />
                   </div>
-                  <SharedSearchableSelect
-                    label="Operation *"
-                    value={formData.operation}
-                    options={OPERATIONS.map(op => ({ value: op, label: op }))}
-                    onChange={handleOperationChange}
-                  />
-                  <SharedSearchableSelect
-                    label="Work Center *"
-                    value={formData.workCenter}
-                    options={WORK_CENTERS.map(wc => ({ value: wc, label: wc }))}
-                    onChange={(val) => setFormData({ ...formData, workCenter: val })}
-                  />
-                  <SharedSearchableSelect
-                    label="Warehouse *"
-                    value={formData.warehouse}
-                    options={WAREHOUSES.map(wh => ({ value: wh, label: wh }))}
-                    onChange={handleWarehouseChange}
-                  />
-                  <SharedSearchableSelect
-                    label="Shift *"
-                    value={formData.shift}
-                    options={[
-                      { value: "Morning", label: "Morning" },
-                      { value: "Night", label: "Night" }
-                    ]}
-                    onChange={(val) => setFormData({ ...formData, shift: val })}
-                  />
-                  <SharedSearchableSelect
-                    label="Production Plan *"
-                    placeholder="Select Production Plan"
-                    value={formData.productionPlanId?.toString() || ""}
-                    options={INITIAL_PLANS.map(p => ({
-                      value: p.id.toString(),
-                      label: `${p.planCode} - ${p.operationName}`
-                    }))}
-                    onChange={(val) => setFormData({ ...formData, productionPlanId: parseInt(val) })}
-                  />
+                  <div className="min-w-0 space-y-1.5">
+                    <Label className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">
+                      Required By Date <span className="text-red-500">*</span>
+                    </Label>
+                    <SharedDatePicker
+                      date={formData.requiredByDate ? parseDateString(formData.requiredByDate) : undefined}
+                      setDate={(date) => setFormData((prev: any) => ({ ...prev, requiredByDate: date ? format(date, "yyyy-MM-dd") : "" }))}
+                      showClear={false}
+                    />
+                  </div>
+                  <div className="min-w-0 md:col-span-2">
+                    <SharedSearchableSelect
+                      label="Operation *"
+                      value={formData.operation_id}
+                      options={operationSelectOptions}
+                      onChange={handleOperationChange}
+                      showSelectedTitle
+                      compactStackedSelected
+                      popoverCollisionBoundary={formDialogEl}
+                      popoverCollisionPadding={8}
+                      listClassName="max-h-[200px]"
+                    />
+                  </div>
+                  <div className="min-w-0">
+                    <SharedSearchableSelect
+                      label="Shift *"
+                      value={formData.shift_id}
+                      onChange={handleShiftChange}
+                      options={shifts.map((s) => ({
+                        label: s.name,
+                        value: String(s.id),
+                      }))}
+                      className="h-9"
+                      popoverCollisionBoundary={formDialogEl}
+                      popoverCollisionPadding={8}
+                    />
+                  </div>
+                  <div className="min-w-0">
+                    <SharedSearchableSelect
+                      label="Work Center *"
+                      value={formData.work_center_id}
+                      options={orderedWorkCenters.map(wc => ({ value: String(wc.id), label: wc.name }))}
+                      onChange={(val) => setFormData({ ...formData, work_center_id: val })}
+                      className="h-9"
+                      popoverCollisionBoundary={formDialogEl}
+                      popoverCollisionPadding={8}
+                    />
+                  </div>
+                  <div className="min-w-0 md:col-span-2">
+                    <SharedSearchableSelect
+                      label="Production Plan *"
+                      placeholder="Select Production Plan"
+                      value={formData.production_plan_id?.toString() || ""}
+                      options={activePlans.map(p => ({
+                        value: p.id.toString(),
+                        label: p.code,
+                      }))}
+                      onChange={(val) => setFormData({ ...formData, production_plan_id: val })}
+                      selectedTruncate="end"
+                      showSelectedTitle
+                      lightSelectedText
+                      className="h-9"
+                      popoverCollisionBoundary={formDialogEl}
+                      popoverCollisionPadding={8}
+                    />
+                  </div>
                 </div>
+              </div>
 
-              </CardContent>
-            </Card>
-
-            <Card>
-              <CardHeader className="flex flex-row items-center justify-between space-y-0">
-                <CardTitle>Material Requirements</CardTitle>
-              </CardHeader>
-              <CardContent>
-                <div className="rounded-md border">
-                  <Table>
-                    <TableHeader>
-                      <TableRow className="bg-muted/50">
-                        <TableHead>Item Code</TableHead>
-                        <TableHead>Item Name</TableHead>
-                        <TableHead>UOM</TableHead>
-                        <TableHead className="text-right">Available Qty</TableHead>
-                        <TableHead className="text-right w-32">Required Qty</TableHead>
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {formData.items?.length === 0 ? (
-                        <TableRow>
-                          <TableCell colSpan={5} className="h-24 text-center text-muted-foreground">
-                            Select an operation to load materials
-                          </TableCell>
+              <div>
+                <h3 className="border-b border-primary/20 pb-1 text-xs font-bold uppercase tracking-wider text-primary">
+                  Material Requirements
+                </h3>
+                <div
+                  className={cn(
+                    "mt-3 overflow-hidden rounded-md border bg-white",
+                    (formData.items?.length ?? 0) > 4 && "max-h-[min(42vh,380px)] overflow-y-auto custom-scrollbar"
+                  )}
+                >
+                  <div className="overflow-x-auto">
+                    <Table className="w-full min-w-[860px] table-fixed">
+                      <colgroup>
+                        <col className="w-[14%]" />
+                        <col className="w-[26%]" />
+                        <col className="w-[10%]" />
+                        <col className="w-[18%]" />
+                        <col className="w-[10%]" />
+                        <col className="w-[22%]" />
+                      </colgroup>
+                      <TableHeader>
+                        <TableRow className="bg-muted/50 hover:bg-muted/50">
+                          <TableHead className="py-3 pl-4 text-[10px] font-bold uppercase tracking-wider">
+                            Item Code
+                          </TableHead>
+                          <TableHead className="py-3 text-[10px] font-bold uppercase tracking-wider">
+                            Item Name
+                          </TableHead>
+                          <TableHead className="py-3 text-center text-[10px] font-bold uppercase tracking-wider">
+                            UOM
+                          </TableHead>
+                          <TableHead className="py-3 text-[10px] font-bold uppercase tracking-wider">
+                            Warehouse
+                          </TableHead>
+                          <TableHead className="py-3 text-right text-[10px] font-bold uppercase tracking-wider">
+                            Stock
+                          </TableHead>
+                          <TableHead className="py-3 pr-4 text-right text-[10px] font-bold uppercase tracking-wider">
+                            Required Qty
+                          </TableHead>
                         </TableRow>
-                      ) : (
-                        formData.items?.map((item) => (
-                          <TableRow key={item.id}>
-                            <TableCell className="font-mono text-xs">{item.itemCode}</TableCell>
-                            <TableCell>{item.itemName}</TableCell>
-                            <TableCell>{item.uom}</TableCell>
-                            <TableCell className="text-right">{item.availableQty}</TableCell>
-                            <TableCell className="text-right">
-                               <Input
-                                type="text"
-                                inputMode="decimal"
-                                className={cn(
-                                  "h-8 text-right",
-                                  qtyValidationErrors[item.id as any] && "border-destructive focus-visible:ring-destructive"
-                                )}
-                                value={item.requiredQty}
-                                onChange={(e) => {
-                                  const val = e.target.value;
-                                  if (val === "" || (/^\d*\.?\d*$/.test(val) && val.replace(".", "").length <= 6)) {
-                                    handleRequiredQtyChange(item.id as any, val);
-                                  }
-                                }}
-                              />
-                              {qtyValidationErrors[item.id as any] && (
-                                <p className="text-[10px] text-destructive mt-1">{qtyValidationErrors[item.id as any]}</p>
-                              )}
+                      </TableHeader>
+                      <TableBody>
+                        {formData.items?.length === 0 ? (
+                          <TableRow>
+                            <TableCell colSpan={6} className="h-24 text-center text-sm text-muted-foreground">
+                              Select an operation to load materials
                             </TableCell>
                           </TableRow>
-                        ))
-                      )}
-                    </TableBody>
-                  </Table>
+                        ) : (
+                          formData.items?.map((item: any) => (
+                            <TableRow key={item.id} className="hover:bg-muted/5">
+                              <TableCell className="max-w-0 overflow-hidden align-top py-3 pl-4">
+                                <p className="m-0 font-mono text-[10px] leading-snug break-all text-muted-foreground">
+                                  {item.itemCode}
+                                </p>
+                              </TableCell>
+                              <TableCell className="max-w-0 overflow-hidden align-top py-3">
+                                <p className="m-0 text-sm font-medium leading-snug wrap-break-word text-slate-900">
+                                  {item.itemName}
+                                </p>
+                              </TableCell>
+                              <TableCell className="align-top py-3 text-center text-xs whitespace-nowrap">
+                                {item.uom}
+                              </TableCell>
+                              <TableCell className="align-top py-3 text-sm text-foreground whitespace-nowrap">
+                                {item.warehouse_name || "—"}
+                              </TableCell>
+                              <TableCell className="align-top py-3 text-right text-sm font-medium whitespace-nowrap">
+                                {item.availableQty}
+                              </TableCell>
+                              <TableCell className="align-top py-3 pr-4">
+                                <div className="flex flex-col items-end gap-1">
+                                  <Input
+                                    type="text"
+                                    inputMode="decimal"
+                                    className={cn(
+                                      "ml-auto h-8 w-full min-w-20 max-w-32 text-right font-mono",
+                                      qtyValidationErrors[item.id as any] && "border-destructive focus-visible:ring-destructive"
+                                    )}
+                                    value={item.requiredQty}
+                                    onChange={(e) => {
+                                      const val = e.target.value;
+                                      if (val === "" || (/^\d*\.?\d*$/.test(val) && val.replace(".", "").length <= 12)) {
+                                        handleRequiredQtyChange(item.id as any, val);
+                                      }
+                                    }}
+                                  />
+                                  {qtyValidationErrors[item.id as any] && (
+                                    <p className="text-[10px] text-destructive">{qtyValidationErrors[item.id as any]}</p>
+                                  )}
+                                </div>
+                              </TableCell>
+                            </TableRow>
+                          ))
+                        )}
+                      </TableBody>
+                    </Table>
+                  </div>
                 </div>
-              </CardContent>
-            </Card>
+              </div>
+            </div>
+            )}
           </div>
 
-          <DialogFooter className="p-6 border-t">
-            <Button variant="outline" onClick={handleCloseForm}>Cancel</Button>
+          <DialogFooter className="shrink-0 gap-2 border-t bg-background px-4 pb-4 pt-3 sm:justify-end sm:px-5">
+            <Button
+              variant="outline"
+              onClick={handleCloseForm}
+              disabled={isSaving || isDetailLoading || isFormOpening}
+              className="w-full sm:w-auto"
+            >
+              Cancel
+            </Button>
             <Button
               onClick={handleSubmit}
+              loading={isSaving}
               disabled={!canSaveRequest}
-              className={
+              className={cn(
+                "w-full sm:w-auto",
                 canSaveRequest
                   ? "bg-blue-600 text-white hover:bg-blue-600/90 border-blue-600"
                   : "bg-muted text-muted-foreground border-muted hover:bg-muted disabled:!opacity-100"
-              }
+              )}
             >
               {editingId ? "Update Request" : "Save Request"}
             </Button>

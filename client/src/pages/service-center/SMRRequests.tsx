@@ -5,7 +5,9 @@
 // ============================================================================
 
 import React, { useState } from "react";
+import { useCommonStore } from "@/store/commonStore";
 import { format, parse } from "date-fns";
+import { serviceCenterApi, commonApi, inventoryApi } from "@/lib/api";
 import { Card, CardContent } from "@/components/ui/card";
 import {
     Search,
@@ -30,6 +32,7 @@ import { DataTablePagination } from "@/components/shared/DataTablePagination";
 import { TableActionButtons } from "@/components/shared/TableActionButtons";
 import { AppListToolbar } from "@/components/shared/AppListToolbar";
 import { DatePicker } from "@/components/shared/DatePicker";
+import { SearchableSelect } from "@/components/shared/SearchableSelect";
 import {
     Select,
     SelectContent,
@@ -77,8 +80,15 @@ import {
     CommandInputBorderless,
 } from "@/components/ui/command";
 import { useToast } from "@/hooks/use-toast";
+import { useHasPermission } from "@/hooks/usePermissions";
+import Unauthorized from "../Unauthorized";
 import { cn } from "@/lib/utils";
 import { mockLocations } from "@/lib/masterMockData";
+import {
+    getAssignedIds,
+    getFirstAssignedMatch,
+    prioritizeByAssigned,
+} from "@/utils/assignedDropdown";
 // Import shared SMR data and types
 import {
     type SMRStatus,
@@ -99,17 +109,111 @@ import {
 // HELPER FUNCTIONS
 // ============================================================================
 
+const TOAST_DURATION = 15000;
+
+/** Green styling for successful actions; keep errors as destructive. */
+const crudSuccessToast = {
+    className:
+        "border-green-600 bg-green-50 text-green-950 shadow-md dark:border-green-700 dark:bg-green-950 dark:text-green-50",
+    duration: TOAST_DURATION,
+};
+
+const getApiErrorMessage = (error: unknown, fallback: string): string => {
+    if (error instanceof Error && error.message?.trim()) return error.message.trim();
+    if (typeof error === "string" && error.trim()) return error.trim();
+    if (error && typeof error === "object") {
+        const record = error as Record<string, unknown>;
+        if (typeof record.message === "string" && record.message.trim()) return record.message.trim();
+    }
+    return fallback;
+};
+
+const getApiResponseMessage = (
+    response: { message?: string } | null | undefined,
+    fallback: string
+): string => {
+    const msg = response?.message?.trim();
+    return msg || fallback;
+};
+
+/** Normalize API / master item type to display code (FG, SFG, etc.). */
+const normalizeItemTypeCode = (raw: string): string => {
+    const u = raw.trim().toUpperCase();
+    if (!u) return "";
+    if (u === "FG" || u === "SFG" || u === "RM") return u;
+    if (u.includes("SEMI")) return "SFG";
+    if (u.includes("FINISHED")) return "FG";
+    if (u.length <= 12 && !u.includes(" ")) return u;
+    return raw.trim();
+};
+
+const resolveSmrItemType = (
+    it: Record<string, unknown>,
+    itemTypes: { id?: number; value_id?: number; code?: string; value_code?: string; name?: string; value_name?: string }[],
+    itemsById?: Map<number, Record<string, unknown>>
+): string => {
+    const fromApi = normalizeItemTypeCode(
+        String(it.item_type_code || it.item_type || it.item_type_name || it.type || "")
+    );
+    if (fromApi) return fromApi;
+
+    const typeId = Number(it.item_type_id);
+    if (Number.isFinite(typeId) && typeId > 0) {
+        const match = itemTypes.find(
+            (t) => Number(t.id) === typeId || Number(t.value_id) === typeId
+        );
+        if (match) {
+            return normalizeItemTypeCode(
+                String(match.value_code || match.code || match.name || match.value_name || "")
+            );
+        }
+    }
+
+    const itemId = Number(it.item_id);
+    if (itemsById && Number.isFinite(itemId)) {
+        const master = itemsById.get(itemId);
+        if (master) return resolveSmrItemType(master, itemTypes);
+    }
+    return "";
+};
+
+const asSmrItemType = (raw: string): "SFG" | "FG" => {
+    const code = normalizeItemTypeCode(raw);
+    return code === "FG" ? "FG" : "SFG";
+};
+
+const mapSmrDetailItem = (
+    it: Record<string, unknown>,
+    itemTypes: { id?: number; value_id?: number; code?: string; value_code?: string; name?: string; value_name?: string }[],
+    itemsById: Map<number, Record<string, unknown>>
+): SMRItem => ({
+    id: Number(it.item_id),
+    line_id: Number(it.id),
+    itemName: String(it.item_name || ""),
+    itemCode: String(it.item_code || ""),
+    uom: String(it.uom_name || ""),
+    type: asSmrItemType(resolveSmrItemType(it, itemTypes, itemsById)),
+    availableStock: Number(it.available_stock) || 0,
+    qtyNeeded: Number(it.qty_needed) || 0,
+    requestedQty: Number(it.qty_needed) || 0,
+    issueQty: Number(it.issued_qty) || 0,
+});
+
 // Get status badge with appropriate styling
 const getStatusBadge = (status: SMRStatus) => {
     switch (status) {
+        case "DRAFT_REQ":
         case "Draft Req.":
-            return <Badge className="bg-slate-500 hover:bg-slate-600">Draft Req.</Badge>;
+            return <Badge variant="outline" className="border-blue-200 text-blue-600 bg-blue-50/50">Draft Req.</Badge>;
+        case "REQUESTED_REQ":
         case "Requested Req.":
-            return <Badge className="bg-blue-500 hover:bg-blue-600">Requested Req.</Badge>;
+            return <Badge className="bg-blue-500 hover:bg-blue-600 shadow-sm border-0">Requested Req.</Badge>;
+        case "ISSUED_REQ_WH":
         case "Issued Req. by WH":
-            return <Badge className="bg-orange-500 hover:bg-orange-600">Issued Req.</Badge>;
+            return <Badge className="bg-orange-500 hover:bg-orange-600 shadow-sm border-0">Issued Req.</Badge>;
+        case "RECEIVED_REQ_SC":
         case "Received Req. by SC":
-            return <Badge className="bg-green-500 hover:bg-green-600">Received Req.</Badge>;
+            return <Badge className="bg-green-500 hover:bg-green-600 shadow-sm border-0">Received Req.</Badge>;
         default:
             return <Badge variant="outline">{status}</Badge>;
     }
@@ -133,17 +237,36 @@ const SectionHeader = ({ title }: { title: string }) => (
 // MAIN COMPONENT
 // ============================================================================
 
+const SMR_MODULE = "Service_Center:Material Requisition";
+
 export default function SMRRequests() {
+    const { 
+        smrStatuses, 
+        departments: storeDepartments, 
+        locations: storeLocations,
+        itemTypes,
+    } = useCommonStore(state => ({
+        smrStatuses: state.smrStatuses || [],
+        departments: state.departments || [],
+        locations: state.locations || [],
+        itemTypes: state.itemTypes || [],
+    }));
     const { toast } = useToast();
+    const { isMenuVisible, canCreate, canEdit, canDelete, canView } = useHasPermission();
+    const hasModuleAccess = isMenuVisible(SMR_MODULE);
 
     // State management for listing - sync with shared data on mount
     const [smrRequests, setSmrRequests] = useState<SMRRequest[]>([]);
     const [searchTerm, setSearchTerm] = useState("");
-    // Default filter status: "Draft Req." - shows draft requests that can be edited/submitted
-    const [filterStatus, setFilterStatus] = useState<SMRStatus | "all">("Draft Req.");
+    // Default filter status: "all"
+    const [filterStatus, setFilterStatus] = useState<string | number | "all">("all");
     const [dateFilter, setDateFilter] = useState<Date | undefined>(undefined);
     const [currentPage, setCurrentPage] = useState(1);
     const [itemsPerPage, setItemsPerPage] = useState(10);
+    const [isListLoading, setIsListLoading] = useState(false);
+    const [actionLoading, setActionLoading] = useState<string | null>(null);
+    const [totalRecords, setTotalRecords] = useState(0);
+    const [totalPages, setTotalPages] = useState(0);
 
     // Modal states
     const [isFormModalOpen, setIsFormModalOpen] = useState(false);
@@ -152,56 +275,216 @@ export default function SMRRequests() {
     const [viewingRequest, setViewingRequest] = useState<SMRRequest | null>(null);
     const [smrToDelete, setSmrToDelete] = useState<SMRRequest | null>(null);
 
-    // Form states for creating new SMR
     const [smrRequestDate, setSmrRequestDate] = useState<Date>(new Date());
+    // Keep SearchableSelect values as string IDs (consistent equality checks)
     const [formLocation, setFormLocation] = useState<string>("");
     const [formWorkCenter, setFormWorkCenter] = useState<string>("");
     const [formDepartment, setFormDepartment] = useState<string>("");
-    const [selectedItemId, setSelectedItemId] = useState<string>("");
+    const [selectedItemId, setSelectedItemId] = useState<string | number>("");
     const [addedItems, setAddedItems] = useState<SMRItem[]>([]);
-    const [isItemPopoverOpen, setIsItemPopoverOpen] = useState(false);
-    const [isLocationPopoverOpen, setIsLocationPopoverOpen] = useState(false);
-    const [isWorkCenterPopoverOpen, setIsWorkCenterPopoverOpen] = useState(false);
-    const [isDepartmentPopoverOpen, setIsDepartmentPopoverOpen] = useState(false);
+    const [originalItems, setOriginalItems] = useState<SMRItem[]>([]);
 
-    // Sync with shared data on component mount
+    // Live master data states (Work Center and Items remain separate API calls)
+    const [workCenters, setWorkCenters] = useState<any[]>([]);
+    const [itemsList, setItemsList] = useState<any[]>([]);
+
+    // Assigned defaults from login (location/workcenter)
+    const assignedLocationIds = getAssignedIds("location");
+    const assignedWorkcenterIds = getAssignedIds("workcenter");
+
+    const orderedLocations = React.useMemo(
+        () => prioritizeByAssigned(storeLocations, assignedLocationIds, (loc) => loc.id || loc.location_id),
+        [storeLocations, assignedLocationIds]
+    );
+
+    const orderedWorkCenters = React.useMemo(
+        () => prioritizeByAssigned(workCenters, assignedWorkcenterIds, (wc) => wc.id || wc.work_center_id),
+        [workCenters, assignedWorkcenterIds]
+    );
+
+    // Fetch Work Centers and Items from APIs
+    const fetchMasterData = async () => {
+        try {
+            const [wcRes, itemRes] = await Promise.all([
+                commonApi.getWorkCenters(),
+                inventoryApi.getItemConfig()
+            ]);
+            
+            if (wcRes.isSuccessful) setWorkCenters(wcRes.data.records || []);
+            if (itemRes.isSuccessful) setItemsList(itemRes.data.records || []);
+        } catch (error) {
+            console.error("Error fetching master data:", error);
+        }
+    };
+
+    // Fetch data from API
+    const fetchSMRRequests = async (page = 1) => {
+        try {
+            setIsListLoading(true);
+            const response = await serviceCenterApi.getSMRList({
+                page,
+                limit: itemsPerPage,
+                text_search: searchTerm || undefined,
+                date: dateFilter ? format(dateFilter, "yyyy-MM-dd") : undefined,
+                status: filterStatus === "all" ? undefined : String(filterStatus),
+            });
+
+            if (response.isSuccessful && response.data) {
+                const mappedRecords: SMRRequest[] = response.data.records.map(record => ({
+                    id: record.id,
+                    smrNo: record.requisition_code,
+                    smrRequestDate: record.request_date ? format(new Date(record.request_date), "dd-MM-yyyy") : "",
+                    location: record.location_name,
+                    workCenter: record.workcenter_name,
+                    department: "Service Center", // Default if not in list API
+                    status: record.status_name as SMRStatus,
+                    statusCode: record.status_code,
+                    items: [] // Detail API would be needed for items
+                }));
+
+                setSmrRequests(mappedRecords);
+                setTotalRecords(response.data.pagination.total_records || 0);
+                setTotalPages(response.data.pagination.total_pages || 0);
+            } else {
+                setSmrRequests([]);
+                setTotalRecords(0);
+                setTotalPages(0);
+                toast({
+                    variant: "destructive",
+                    title: "Error",
+                    description: getApiResponseMessage(response, "Failed to fetch material requisitions."),
+                    duration: TOAST_DURATION,
+                });
+            }
+        } catch (error) {
+            console.error("Error fetching SMR requests:", error);
+            toast({
+                variant: "destructive",
+                title: "Error",
+                description: getApiErrorMessage(error, "Failed to fetch material requisitions."),
+                duration: TOAST_DURATION,
+            });
+        } finally {
+            setIsListLoading(false);
+        }
+    };
+
+    // Consolidated fetch effect with debounce for search and filters
     React.useEffect(() => {
-        setSmrRequests([...mockSMRRequests]);
-    }, []);
+        const timer = setTimeout(() => {
+            fetchSMRRequests(currentPage);
+        }, 500);
+        return () => clearTimeout(timer);
+    }, [currentPage, itemsPerPage, filterStatus, dateFilter, searchTerm]);
+
+    const [hasSetDefault, setHasSetDefault] = useState(false);
+
+    // Set default filter status to "Draft" when statuses are loaded from store (only once)
+    React.useEffect(() => {
+        if (!hasSetDefault && smrStatuses.length > 0) {
+            const draftStatus = smrStatuses.find(s => 
+                (s.name || "").toLowerCase().includes("draft") || 
+                s.code === "DRAFT_REQ" || 
+                s.value_code === "DRAFT_REQ"
+            );
+            if (draftStatus) {
+                setFilterStatus(draftStatus.id);
+            }
+            setHasSetDefault(true);
+        }
+    }, [smrStatuses, hasSetDefault]);
+
+    // Fetch master data only when the form opens
+    React.useEffect(() => {
+        if (isFormModalOpen) {
+            fetchMasterData();
+        }
+    }, [isFormModalOpen]);
+
+    // When form opens and master data + assigned ids are available, auto-select assigned defaults
+    React.useEffect(() => {
+        if (!isFormModalOpen) return;
+        if (!orderedLocations.length && !orderedWorkCenters.length) return;
+
+        setFormLocation((prev) => {
+            if (prev) return prev;
+            const firstAssignedLocation = assignedLocationIds.length && orderedLocations.length
+                ? getFirstAssignedMatch(
+                    assignedLocationIds,
+                    orderedLocations.map((loc) => loc.id || loc.location_id)
+                )
+                : undefined;
+            const fallbackLocation = !firstAssignedLocation && orderedLocations.length
+                ? (orderedLocations[0].id || orderedLocations[0].location_id)
+                : undefined;
+            return String(firstAssignedLocation ?? fallbackLocation ?? prev);
+        });
+
+        setFormWorkCenter((prev) => {
+            if (prev) return prev;
+            const firstAssignedWc = assignedWorkcenterIds.length && orderedWorkCenters.length
+                ? getFirstAssignedMatch(
+                    assignedWorkcenterIds,
+                    orderedWorkCenters.map((wc) => wc.id || wc.work_center_id)
+                )
+                : undefined;
+            const fallbackWc = !firstAssignedWc && orderedWorkCenters.length
+                ? (orderedWorkCenters[0].id || orderedWorkCenters[0].work_center_id)
+                : undefined;
+            return String(firstAssignedWc ?? fallbackWc ?? prev);
+        });
+    }, [isFormModalOpen, orderedLocations, orderedWorkCenters, assignedLocationIds, assignedWorkcenterIds]);
 
     // Handler for adding item to the request
     const handleAddItem = () => {
         // Validate item selection
         if (!selectedItemId) {
-            toast({ variant: "destructive", title: "Validation Error", description: "Please select an item." });
+            toast({
+                variant: "destructive",
+                title: "Validation Error",
+                description: "Please select an item.",
+                duration: TOAST_DURATION,
+            });
             return;
         }
 
-        // Find the master item
-        const masterItem = MOCK_SMR_ITEMS.find(i => i.id === selectedItemId);
+        // Find the master item in live list
+        const masterItem = itemsList.find(i => (i.id || i.item_id) === selectedItemId);
         if (!masterItem) return;
 
         // Check if item already added (prevent duplicates)
-        const isDuplicate = addedItems.some(item => item.itemName === masterItem.name);
+        const isDuplicate = addedItems.some(item => item.id === (masterItem.id || masterItem.item_id));
         if (isDuplicate) {
-            toast({ variant: "destructive", title: "Duplicate Item", description: "This item has already been added." });
+            toast({
+                variant: "destructive",
+                title: "Duplicate Item",
+                description: "This item has already been added.",
+                duration: TOAST_DURATION,
+            });
             return;
         }
 
         // Create new SMR item with default quantity of 1
         const newItem: SMRItem = {
-            id: Date.now(),
-            itemName: masterItem.name,
-            itemCode: masterItem.itemCode,
-            uom: masterItem.uom,
-            type: masterItem.type,
-            availableStock: masterItem.availableStock,
+            id: masterItem.id || masterItem.item_id,
+            itemName: masterItem.name || masterItem.item_name,
+            itemCode: masterItem.item_code || "",
+            uom: masterItem.uom || masterItem.item_uom || "UNIT",
+            type: asSmrItemType(
+                resolveSmrItemType(masterItem, itemTypes) ||
+                    String(masterItem.type || masterItem.item_type_name || masterItem.item_type || "")
+            ),
+            availableStock: masterItem.current_QTY || masterItem.available_stock || 0,
             qtyNeeded: 1
         };
 
         setAddedItems(prev => [...prev, newItem]);
         setSelectedItemId("");
-        toast({ title: "Item Added", description: `${masterItem.name} added to the request.` });
+        toast({
+            ...crudSuccessToast,
+            title: "Item Added",
+            description: `${newItem.itemName} added to the request.`,
+        });
     };
 
     // Handler for removing item from the request
@@ -219,28 +502,14 @@ export default function SMRRequests() {
             toast({
                 variant: "destructive",
                 title: "Validation Error",
-                description: "Qty Needed cannot exceed 6 digits."
+                description: "Qty Needed cannot exceed 6 digits.",
+                duration: TOAST_DURATION,
             });
             return;
         }
 
         // Parse the value
         const qty = numericValue === '' ? 0 : parseInt(numericValue, 10);
-
-        // Find the item to check available stock
-        const item = addedItems.find(i => i.id === id);
-        if (item && qty > item.availableStock) {
-            toast({
-                variant: "destructive",
-                title: "Validation Error",
-                description: `Qty Needed (${qty}) cannot exceed Available Stock (${item.availableStock}).`
-            });
-            // Still update the value to show the error state
-            setAddedItems(prev => prev.map(item =>
-                item.id === id ? { ...item, qtyNeeded: qty } : item
-            ));
-            return;
-        }
 
         // Update the item
         setAddedItems(prev => prev.map(item =>
@@ -252,142 +521,244 @@ export default function SMRRequests() {
     const handleSaveDraft = () => {
         // Validate required fields (Workcenter is optional)
         if (!formLocation || !formDepartment) {
-            toast({ variant: "destructive", title: "Validation Error", description: "Please fill all required fields." });
+            toast({ variant: "destructive", title: "Validation Error", duration: TOAST_DURATION, description: "Please fill all required fields." });
             return;
         }
 
         if (addedItems.length === 0) {
-            toast({ variant: "destructive", title: "Validation Error", description: "Add at least one item." });
+            toast({ variant: "destructive", title: "Validation Error", duration: TOAST_DURATION, description: "Add at least one item." });
             return;
         }
 
         // Validate all items have valid quantities (must be greater than 0)
         const hasInvalidQty = addedItems.some(item => !item.qtyNeeded || item.qtyNeeded <= 0);
         if (hasInvalidQty) {
-            toast({ variant: "destructive", title: "Validation Error", description: "All items must have Qty Needed greater than 0." });
+            toast({ variant: "destructive", title: "Validation Error", duration: TOAST_DURATION, description: "All items must have Qty Needed greater than 0." });
             return;
         }
 
-        // Validate that Qty Needed doesn't exceed Available Stock
-        const itemsExceedingStock = addedItems.filter(item => item.qtyNeeded > item.availableStock);
-        if (itemsExceedingStock.length > 0) {
-            const itemNames = itemsExceedingStock.map(item => item.itemName).join(', ');
-            toast({
-                variant: "destructive",
-                title: "Validation Error",
-                description: `Qty Needed cannot exceed Available Stock for: ${itemNames}`
-            });
-            return;
-        }
 
-        // Check if we're editing an existing request
-        if (viewingRequest && viewingRequest.status === "Draft Req.") {
-            // Update existing request
-            const updatedData = updateSMRRequest(viewingRequest.id, {
-                smrRequestDate: format(smrRequestDate, "dd-MM-yyyy"),
-                location: formLocation,
-                workCenter: formWorkCenter,
-                department: formDepartment,
-                items: addedItems
-            });
-            setSmrRequests(updatedData);
-            resetForm();
-            setIsFormModalOpen(false);
-            toast({ title: "Success", description: "Material Requisition updated successfully." });
-        } else {
-            // Create new SMR request with Draft Req. status (default for save action)
-            // Status flow: Draft Req. → Requested Req. (on submit) → Issued Req. → Received Req.
-            const newRequest: SMRRequest = {
-                id: Date.now(),
-                smrNo: getNextSMRNumber(smrRequests),
-                smrRequestDate: format(smrRequestDate, "dd-MM-yyyy"),
-                location: formLocation,
-                workCenter: formWorkCenter,
-                department: formDepartment,
-                requestedBy: "Current User", // In real app, get from auth context
-                status: "Draft Req.", // Default status for saved (not submitted) requests
-                items: addedItems
-            };
+        // Find IDs and Codes dynamically for the API payload
+        const selectedLoc = storeLocations.find(l =>
+            String(l.id ?? l.location_id ?? "") === String(formLocation) ||
+            (l.name || l.value_name) === formLocation
+        );
+        const selectedWc = workCenters.find(w =>
+            String(w.id ?? w.work_center_id ?? "") === String(formWorkCenter) ||
+            (w.work_center_name || w.name) === formWorkCenter
+        );
+        const selectedDept = storeDepartments.find(d =>
+            String(d.id ?? d.department_id ?? "") === String(formDepartment) ||
+            (d.name || d.value_name) === formDepartment
+        );
 
-            // Add to shared data store so it appears in Inventory module
-            const updatedData = addSMRRequest(newRequest);
-            setSmrRequests(updatedData);
-            resetForm();
-            setIsFormModalOpen(false);
-            toast({ title: "Success", description: "Material Requisition saved as draft." });
-        }
+        const locationId = selectedLoc?.id || selectedLoc?.location_id || 1;
+        const workcenterId = selectedWc?.id || selectedWc?.work_center_id || 1;
+        const departmentId = selectedDept?.id || selectedDept?.department_id || 1;
+
+        // Find status code for Draft from store
+        const draftStatus = smrStatuses.find(s => 
+            s.name.toLowerCase().includes("draft") || s.code.includes("DRAFT")
+        );
+
+        // Prepare items diff for update
+        const buildItemsPayload = () => {
+            const add = addedItems
+                .filter(item => !originalItems.some(orig => (orig.line_id && orig.line_id === (item as any).line_id) || orig.id === item.id))
+                .map(item => ({ item_id: item.id, qty_needed: item.qtyNeeded }));
+
+            const update = addedItems
+                .filter(item => originalItems.some(orig => (orig.line_id && orig.line_id === (item as any).line_id) || orig.id === item.id))
+                .map(item => {
+                    const orig = originalItems.find(o => (o.line_id && o.line_id === (item as any).line_id) || o.id === item.id);
+                    return { 
+                        service_material_requisition_items_id: orig?.line_id || orig?.id, 
+                        qty_needed: item.qtyNeeded 
+                    };
+                });
+
+            const deleteItems = originalItems
+                .filter(orig => !addedItems.some(item => (orig.line_id && orig.line_id === (item as any).line_id) || orig.id === item.id))
+                .map(orig => ({ service_material_requisition_items_id: orig.line_id || orig.id }));
+
+            return { add, update, delete: deleteItems };
+        };
+
+        const payload = {
+            request_date: format(smrRequestDate, "yyyy-MM-dd"),
+            location_id: locationId,
+            workcenter_id: workcenterId,
+            department_id: departmentId,
+            status_code: draftStatus ? draftStatus.code : "DRAFT_REQ",
+            items: viewingRequest ? buildItemsPayload() : addedItems.map(item => ({
+                item_id: item.id,
+                qty_needed: item.qtyNeeded
+            }))
+        };
+
+        // Call API
+        (async () => {
+            try {
+                setActionLoading("save-draft");
+                const response = viewingRequest 
+                    ? await serviceCenterApi.updateSMR(viewingRequest.id, payload)
+                    : await serviceCenterApi.createSMR(payload);
+                if (response.isSuccessful) {
+                    toast({
+                        ...crudSuccessToast,
+                        title: "Success",
+                        description: getApiResponseMessage(
+                            response,
+                            viewingRequest
+                                ? "Material Requisition updated."
+                                : "Material Requisition saved as draft."
+                        ),
+                    });
+                    resetForm();
+                    setIsFormModalOpen(false);
+                    fetchSMRRequests(1);
+                } else {
+                    toast({
+                        variant: "destructive",
+                        title: "Error",
+                        description: getApiResponseMessage(response, "Failed to save requisition."),
+                        duration: TOAST_DURATION,
+                    });
+                }
+            } catch (error) {
+                console.error("Error saving requisition:", error);
+                toast({
+                    variant: "destructive",
+                    title: "Error",
+                    description: getApiErrorMessage(error, "Failed to save requisition."),
+                    duration: TOAST_DURATION,
+                });
+            } finally {
+                setActionLoading(null);
+            }
+        })();
     };
 
     // Handler for submitting SMR request
     const handleSubmit = () => {
         // Validate required fields (Workcenter is optional)
         if (!formLocation || !formDepartment) {
-            toast({ variant: "destructive", title: "Validation Error", description: "Please fill all required fields." });
+            toast({ variant: "destructive", title: "Validation Error", duration: TOAST_DURATION, description: "Please fill all required fields." });
             return;
         }
 
         if (addedItems.length === 0) {
-            toast({ variant: "destructive", title: "Validation Error", description: "Add at least one item." });
+            toast({ variant: "destructive", title: "Validation Error", duration: TOAST_DURATION, description: "Add at least one item." });
             return;
         }
 
         // Validate all items have valid quantities (must be greater than 0)
         const hasInvalidQty = addedItems.some(item => !item.qtyNeeded || item.qtyNeeded <= 0);
         if (hasInvalidQty) {
-            toast({ variant: "destructive", title: "Validation Error", description: "All items must have Qty Needed greater than 0." });
+            toast({ variant: "destructive", title: "Validation Error", duration: TOAST_DURATION, description: "All items must have Qty Needed greater than 0." });
             return;
         }
 
-        // Validate that Qty Needed doesn't exceed Available Stock
-        const itemsExceedingStock = addedItems.filter(item => item.qtyNeeded > item.availableStock);
-        if (itemsExceedingStock.length > 0) {
-            const itemNames = itemsExceedingStock.map(item => item.itemName).join(', ');
-            toast({
-                variant: "destructive",
-                title: "Validation Error",
-                description: `Qty Needed cannot exceed Available Stock for: ${itemNames}`
-            });
-            return;
-        }
 
-        // Check if we're editing an existing request
-        if (viewingRequest && viewingRequest.status === "Draft Req.") {
-            // Update existing request and change status to Requested
-            const updatedData = updateSMRRequest(viewingRequest.id, {
-                smrRequestDate: format(smrRequestDate, "dd-MM-yyyy"),
-                location: formLocation,
-                workCenter: formWorkCenter,
-                department: formDepartment,
-                status: "Requested Req.",
-                items: addedItems
-            });
-            setSmrRequests(updatedData);
-            resetForm();
-            setIsFormModalOpen(false);
-            toast({ title: "Success", description: "Material Requisition updated and submitted successfully." });
-        } else {
-            // Create new SMR request with Requested Req. status (default for submit action)
-            // This status makes the request visible in Inventory module for issuing
-            // Status flow: Draft Req. → Requested Req. (on submit) → Issued Req. → Received Req.
-            const newRequest: SMRRequest = {
-                id: Date.now(),
-                smrNo: getNextSMRNumber(smrRequests),
-                smrRequestDate: format(smrRequestDate, "dd-MM-yyyy"),
-                location: formLocation,
-                workCenter: formWorkCenter,
-                department: formDepartment,
-                requestedBy: "Current User", // In real app, get from auth context
-                status: "Requested Req.", // Default status for submitted requests - appears in Inventory
-                items: addedItems
-            };
+        // Find IDs and Codes dynamically for the API payload
+        const selectedLoc = storeLocations.find(l =>
+            String(l.id ?? l.location_id ?? "") === String(formLocation) ||
+            (l.name || l.value_name) === formLocation
+        );
+        const selectedWc = workCenters.find(w =>
+            String(w.id ?? w.work_center_id ?? "") === String(formWorkCenter) ||
+            (w.work_center_name || w.name) === formWorkCenter
+        );
+        const selectedDept = storeDepartments.find(d =>
+            String(d.id ?? d.department_id ?? "") === String(formDepartment) ||
+            (d.name || d.value_name) === formDepartment
+        );
 
-            // Add to shared data store so it appears in Inventory module
-            const updatedData = addSMRRequest(newRequest);
-            setSmrRequests(updatedData);
-            resetForm();
-            setIsFormModalOpen(false);
-            toast({ title: "Success", description: "Material Requisition submitted successfully." });
-        }
+        const locationId = selectedLoc?.id || selectedLoc?.location_id || 1;
+        const workcenterId = selectedWc?.id || selectedWc?.work_center_id || 1;
+        const departmentId = selectedDept?.id || selectedDept?.department_id || 1;
+
+        // Find status code for Requested from store
+        const requestedStatus = smrStatuses.find(s => 
+            s.name.toLowerCase().includes("requested") || s.code.includes("REQUESTED")
+        );
+
+        // Prepare items diff for update
+        const buildItemsPayload = () => {
+            const add = addedItems
+                .filter(item => !originalItems.some(orig => (orig.line_id && orig.line_id === (item as any).line_id) || orig.id === item.id))
+                .map(item => ({ item_id: item.id, qty_needed: item.qtyNeeded }));
+
+            const update = addedItems
+                .filter(item => originalItems.some(orig => (orig.line_id && orig.line_id === (item as any).line_id) || orig.id === item.id))
+                .map(item => {
+                    const orig = originalItems.find(o => (o.line_id && o.line_id === (item as any).line_id) || o.id === item.id);
+                    return { 
+                        service_material_requisition_items_id: orig?.line_id || orig?.id, 
+                        qty_needed: item.qtyNeeded 
+                    };
+                });
+
+            const deleteItems = originalItems
+                .filter(orig => !addedItems.some(item => (orig.line_id && orig.line_id === (item as any).line_id) || orig.id === item.id))
+                .map(orig => ({ service_material_requisition_items_id: orig.line_id || orig.id }));
+
+            return { add, update, delete: deleteItems };
+        };
+
+        const payload = {
+            request_date: format(smrRequestDate, "yyyy-MM-dd"),
+            location_id: locationId,
+            workcenter_id: workcenterId,
+            department_id: departmentId,
+            status_code: requestedStatus ? requestedStatus.code : "REQUESTED_REQ",
+            items: viewingRequest ? buildItemsPayload() : addedItems.map(item => ({
+                item_id: item.id,
+                qty_needed: item.qtyNeeded
+            }))
+        };
+
+        // Call API
+        (async () => {
+            try {
+                setActionLoading("submit");
+                const response = viewingRequest 
+                    ? await serviceCenterApi.updateSMR(viewingRequest.id, payload)
+                    : await serviceCenterApi.createSMR(payload);
+                if (response.isSuccessful) {
+                    toast({
+                        ...crudSuccessToast,
+                        title: "Success",
+                        description: getApiResponseMessage(
+                            response,
+                            viewingRequest
+                                ? "Material Requisition updated."
+                                : "Material Requisition submitted successfully."
+                        ),
+                    });
+                    resetForm();
+                    setIsFormModalOpen(false);
+                    fetchSMRRequests(1);
+                } else {
+                    toast({
+                        variant: "destructive",
+                        title: "Error",
+                        description: getApiResponseMessage(response, "Failed to submit requisition."),
+                        duration: TOAST_DURATION,
+                    });
+                }
+            } catch (error) {
+                console.error("Error submitting requisition:", error);
+                toast({
+                    variant: "destructive",
+                    title: "Error",
+                    description: getApiErrorMessage(error, "Failed to submit requisition."),
+                    duration: TOAST_DURATION,
+                });
+            } finally {
+                setActionLoading(null);
+            }
+        })();
     };
 
     // Reset form to initial state
@@ -397,124 +768,257 @@ export default function SMRRequests() {
         setFormWorkCenter("");
         setFormDepartment("");
         setAddedItems([]);
+        setOriginalItems([]);
         setSelectedItemId("");
         setViewingRequest(null); // Clear editing state
     };
 
     // Handler for deleting SMR request
-    const handleDeleteSMR = (id: number) => {
-        const updatedData = deleteSMRRequest(id);
-        setSmrRequests(updatedData);
-        setIsDeleteAlertOpen(false);
-        setIsFormModalOpen(false);
-        resetForm();
-        toast({
-            title: "Success",
-            description: "Material Requisition deleted successfully.",
-        });
+    const handleDeleteSMR = async (id: number) => {
+        try {
+            setActionLoading("delete");
+            const response = await serviceCenterApi.deleteSMR(id);
+            if (response.isSuccessful) {
+                toast({
+                    ...crudSuccessToast,
+                    title: "Success",
+                    description: getApiResponseMessage(
+                        response,
+                        "Material Requisition deleted successfully."
+                    ),
+                });
+                setIsDeleteAlertOpen(false);
+                setIsFormModalOpen(false);
+                resetForm();
+                fetchSMRRequests(1);
+            } else {
+                toast({
+                    variant: "destructive",
+                    title: "Error",
+                    description: getApiResponseMessage(response, "Failed to delete requisition."),
+                    duration: TOAST_DURATION,
+                });
+            }
+        } catch (error) {
+            console.error("Error deleting requisition:", error);
+            toast({
+                variant: "destructive",
+                title: "Error",
+                description: getApiErrorMessage(error, "Failed to delete requisition."),
+                duration: TOAST_DURATION,
+            });
+        } finally {
+            setActionLoading(null);
+        }
     };
 
     // Handler for opening create modal
     const handleAddSMR = () => {
         resetForm();
+        // Apply assigned defaults for new request (location + workcenter)
+        const defaultLocationId = assignedLocationIds.length && orderedLocations.length
+            ? getFirstAssignedMatch(
+                assignedLocationIds,
+                orderedLocations.map((loc) => loc.id || loc.location_id)
+            )
+            : undefined;
+        const defaultWorkCenterId = assignedWorkcenterIds.length && orderedWorkCenters.length
+            ? getFirstAssignedMatch(
+                assignedWorkcenterIds,
+                orderedWorkCenters.map((wc) => wc.id || wc.work_center_id)
+            )
+            : undefined;
+
+        if (defaultLocationId) setFormLocation(String(defaultLocationId));
+        if (defaultWorkCenterId) setFormWorkCenter(String(defaultWorkCenterId));
+
         setIsFormModalOpen(true);
     };
 
     // Handler for viewing SMR request
-    const handleView = (request: SMRRequest) => {
-        setViewingRequest(request);
-        setIsViewModalOpen(true);
+    const handleView = async (request: any) => {
+        try {
+            setActionLoading("view-load");
+            const [response, itemConfigRes] = await Promise.all([
+                serviceCenterApi.getSMRById(request.id),
+                inventoryApi.getItemConfig(),
+            ]);
+            if (response.isSuccessful && response.data) {
+                const data = response.data;
+                const itemsById = new Map<number, Record<string, unknown>>();
+                if (itemConfigRes.isSuccessful && itemConfigRes.data?.records) {
+                    itemConfigRes.data.records.forEach((r: Record<string, unknown>) => {
+                        const id = Number(r.id ?? r.item_id);
+                        if (Number.isFinite(id)) itemsById.set(id, r);
+                    });
+                }
+                const detailedItems: SMRItem[] = (data.items || []).map((it: Record<string, unknown>) =>
+                    mapSmrDetailItem(it, itemTypes, itemsById)
+                );
+
+                const detailedRequest: SMRRequest = {
+                    id: data.id,
+                    smrNo: data.requisition_code,
+                    smrRequestDate: data.request_date ? format(parse(data.request_date, 'yyyy-MM-dd', new Date()), 'dd-MM-yyyy') : "",
+                    location: data.location_name,
+                    workCenter: data.workcenter_name,
+                    department: data.department_name,
+                    status: request.status,
+                    statusCode: data.status_code || request.statusCode,
+                    issuedDate: data.issued_date ? format(parse(data.issued_date, 'yyyy-MM-dd', new Date()), 'dd-MM-yyyy') : (data.issued_date || ""),
+                    issuedBy: data.issued_by || "",
+                    receivedDate: data.received_date ? format(parse(data.received_date, 'yyyy-MM-dd', new Date()), 'dd-MM-yyyy') : (data.received_date || ""),
+                    receivedBy: data.received_by || "",
+                    items: detailedItems
+                };
+                setViewingRequest(detailedRequest);
+                setIsViewModalOpen(true);
+            } else {
+                toast({
+                    variant: "destructive",
+                    title: "Error",
+                    description: getApiResponseMessage(response, "Failed to fetch requisition details."),
+                    duration: TOAST_DURATION,
+                });
+            }
+        } catch (error) {
+            console.error("Error fetching SMR details:", error);
+            toast({
+                variant: "destructive",
+                title: "Error",
+                description: getApiErrorMessage(error, "Failed to fetch requisition details."),
+                duration: TOAST_DURATION,
+            });
+        } finally {
+            setActionLoading(null);
+        }
     };
 
     // Handler for editing SMR request (only for Draft status)
-    const handleEdit = (request: SMRRequest) => {
-        // Populate form with existing request data
-        setSmrRequestDate(parse(request.smrRequestDate, 'dd-MM-yyyy', new Date()));
-        setFormLocation(request.location);
-        setFormWorkCenter(request.workCenter);
-        setFormDepartment(request.department);
-        setAddedItems([...request.items]);
-
-        // Open the form modal for editing
-        setIsFormModalOpen(true);
-
-        // Store the request being edited (we'll need to update instead of create)
-        setViewingRequest(request);
+    const handleEditSMR = async (request: any) => {
+        try {
+            setActionLoading("edit-load");
+            const [response, itemConfigRes] = await Promise.all([
+                serviceCenterApi.getSMRById(request.id),
+                inventoryApi.getItemConfig(),
+            ]);
+            if (response.isSuccessful && response.data) {
+                const data = response.data;
+                const itemsById = new Map<number, Record<string, unknown>>();
+                if (itemConfigRes.isSuccessful && itemConfigRes.data?.records) {
+                    itemConfigRes.data.records.forEach((r: Record<string, unknown>) => {
+                        const id = Number(r.id ?? r.item_id);
+                        if (Number.isFinite(id)) itemsById.set(id, r);
+                    });
+                }
+                // Populate form with detailed data
+                setSmrRequestDate(parse(data.request_date, 'yyyy-MM-dd', new Date()));
+                setFormLocation(data.location_id || data.location_name);
+                setFormWorkCenter(data.workcenter_id || data.workcenter_name);
+                setFormDepartment(data.department_id || data.department_name);
+                
+                const mappedItems: SMRItem[] = (data.items || []).map((it: Record<string, unknown>) =>
+                    mapSmrDetailItem(it, itemTypes, itemsById)
+                );
+                
+                setAddedItems(mappedItems);
+                setOriginalItems(mappedItems);
+                setIsFormModalOpen(true);
+                
+                // Store a compatible request object for the view modal parts
+                setViewingRequest({
+                    id: data.id,
+                    smrNo: data.requisition_code,
+                    smrRequestDate: format(parse(data.request_date, 'yyyy-MM-dd', new Date()), 'dd-MM-yyyy'),
+                    location: data.location_name,
+                    workCenter: data.workcenter_name,
+                    department: data.department_name,
+                    status: request.status,
+                    items: mappedItems
+                });
+            } else {
+                toast({
+                    variant: "destructive",
+                    title: "Error",
+                    description: getApiResponseMessage(response, "Failed to fetch requisition details."),
+                    duration: TOAST_DURATION,
+                });
+            }
+        } catch (error) {
+            console.error("Error fetching SMR details for editing:", error);
+            toast({
+                variant: "destructive",
+                title: "Error",
+                description: getApiErrorMessage(error, "Failed to fetch requisition details."),
+                duration: TOAST_DURATION,
+            });
+        } finally {
+            setActionLoading(null);
+        }
     };
 
     /**
      * Handler for receiving SMR items
-     * Changes status from "Issued SMR by WH" to "Received SMR by SC"
-     * Only available in Warranty Service module for issued SMRs
+     * Changes status from "ISSUED_REQ_WH" to "RECEIVED_REQ_SC"
      */
-    const handleReceive = () => {
+    const handleReceive = async () => {
         if (!viewingRequest) return;
 
-        // Validate that status is "Issued Req. by WH"
-        if (viewingRequest.status !== "Issued Req. by WH") {
-            toast({
-                title: "Invalid Action",
-                description: "Only issued SMRs can be received.",
-                variant: "destructive"
+        try {
+            setActionLoading("receive");
+            const response = await serviceCenterApi.receiveItemBySC({
+                service_material_requisition_id: viewingRequest.id
             });
-            return;
+            
+            if (response.isSuccessful) {
+                toast({
+                    ...crudSuccessToast,
+                    title: "Success",
+                    description: getApiResponseMessage(
+                        response,
+                        `SMR ${viewingRequest.smrNo} has been received successfully.`
+                    ),
+                });
+                setIsViewModalOpen(false);
+                setViewingRequest(null);
+                fetchSMRRequests(1);
+            } else {
+                toast({
+                    variant: "destructive",
+                    title: "Error",
+                    description: getApiResponseMessage(response, "Failed to receive materials."),
+                    duration: TOAST_DURATION,
+                });
+            }
+        } catch (error) {
+            console.error("Error receiving materials:", error);
+            toast({
+                variant: "destructive",
+                title: "Error",
+                description: getApiErrorMessage(error, "Failed to receive materials."),
+                duration: TOAST_DURATION,
+            });
+        } finally {
+            setActionLoading(null);
         }
-
-        // Update the request status to "Received Req. by SC" using shared update function
-        const updatedData = updateSMRRequest(viewingRequest.id, {
-            status: "Received Req. by SC",
-            receivedDate: format(new Date(), "yyyy-MM-dd"),
-            receivedBy: "Service Center Manager", // In real app, get from auth context
-        });
-
-        setSmrRequests(updatedData);
-        toast({
-            title: "Success",
-            description: `SMR ${viewingRequest.smrNo} has been received successfully.`,
-        });
-        setIsViewModalOpen(false);
-        setViewingRequest(null);
     };
 
-    // Filter SMR requests based on search and status filter
-    const filteredRequests = smrRequests.filter(request => {
-        const matchesSearch =
-            request.smrNo.toLowerCase().includes(searchTerm.toLowerCase()) ||
-            request.location.toLowerCase().includes(searchTerm.toLowerCase()) ||
-            request.workCenter.toLowerCase().includes(searchTerm.toLowerCase());
+    const isFormActionBusy =
+        actionLoading === "save-draft" ||
+        actionLoading === "submit" ||
+        actionLoading === "delete";
+    const canSaveRequest = viewingRequest ? canEdit(SMR_MODULE) : canCreate(SMR_MODULE);
 
-        const matchesStatus = filterStatus === "all" ? true : request.status === filterStatus;
+    const isDraftSmr = (item: SMRRequest) =>
+        item.status === "DRAFT_REQ" ||
+        item.status === "Draft Req." ||
+        item.statusCode === "DRAFT_REQ";
 
-        let matchesDate = true;
-        if (dateFilter) {
-            const requestDateObj = parse(request.smrRequestDate, 'dd-MM-yyyy', new Date());
-            requestDateObj.setHours(0, 0, 0, 0);
-            const filterDate = new Date(dateFilter);
-            filterDate.setHours(0, 0, 0, 0);
-            matchesDate = requestDateObj.getTime() === filterDate.getTime();
-        }
+    // Pagination calculations are now handled by API
 
-        return matchesSearch && matchesStatus && matchesDate;
-    });
-
-    // Pagination calculations
-    const totalPages = Math.ceil(filteredRequests.length / itemsPerPage);
-    const paginatedData = filteredRequests.slice(
-        (currentPage - 1) * itemsPerPage,
-        currentPage * itemsPerPage
-    );
-
-    // Auto-adjust page when data changes
-    React.useEffect(() => {
-        if (currentPage > totalPages && totalPages > 0) {
-            setCurrentPage(totalPages);
-        }
-    }, [filteredRequests.length, currentPage, totalPages]);
-
-    // Reset to page 1 when filters change
-    React.useEffect(() => {
-        setCurrentPage(1);
-    }, [searchTerm, filterStatus, dateFilter]);
+    if (!hasModuleAccess) {
+        return <Unauthorized />;
+    }
 
     return (
         <div className="h-full flex flex-col gap-6 animate-in fade-in duration-500">
@@ -549,25 +1053,22 @@ export default function SMRRequests() {
                         value: filterStatus,
                         options: [
                             { value: "all", label: "All Status" },
-                            { value: "Draft Req.", label: "Draft Req." },
-                            { value: "Requested Req.", label: "Requested Req." },
-                            { value: "Issued Req. by WH", label: "Issued Req." },
-                            { value: "Received Req. by SC", label: "Received Req." }
+                            ...(smrStatuses || []).map(s => ({ value: s.id, label: s.name }))
                         ],
                         onChange: (val) => {
-                            setFilterStatus(val as SMRStatus | "all");
+                            setFilterStatus(val as any);
                             setCurrentPage(1);
                         },
                         searchable: true
                     }
                 ]}
-                actions={[
+                actions={canCreate(SMR_MODULE) ? [
                     {
                         label: "Add Requisition",
                         icon: <Plus className="h-4 w-4 mr-2" />,
                         onClick: handleAddSMR
                     }
-                ]}
+                ] : []}
             />
 
             {/* SMR Requests Table */}
@@ -586,37 +1087,50 @@ export default function SMRRequests() {
                                 </TableRow>
                             </TableHeader>
                             <TableBody>
-                                {paginatedData.length === 0 ? (
+                                {isListLoading ? (
                                     <TableRow>
-                                        <TableCell colSpan={6} className="h-32 text-center text-muted-foreground italic">
-                                            No SMR Requests found
+                                        <TableCell colSpan={6} className="h-40 text-center">
+                                            <div className="flex items-center justify-center gap-2 text-muted-foreground">
+                                                <div className="h-4 w-4 animate-spin rounded-full border-2 border-primary border-t-transparent" />
+                                                Loading requisitions...
+                                            </div>
+                                        </TableCell>
+                                    </TableRow>
+                                ) : smrRequests.length === 0 ? (
+                                    <TableRow>
+                                        <TableCell colSpan={6} className="h-40 text-center text-muted-foreground">
+                                            No requisitions found matching your criteria.
                                         </TableCell>
                                     </TableRow>
                                 ) : (
-                                    paginatedData.map((request) => (
+                                    smrRequests.map((item) => (
                                         <TableRow
-                                            key={request.id}
+                                            key={item.id}
                                             className="hover:bg-muted/20 group transition-colors border-b last:border-none"
                                         >
                                             <TableCell className="py-4 font-medium font-mono">
-                                                {request.smrNo}
+                                                {item.smrNo}
                                             </TableCell>
                                             <TableCell className="py-4 text-sm font-medium text-slate-600">
-                                                {request.smrRequestDate}
+                                                {item.smrRequestDate}
                                             </TableCell>
                                             <TableCell className="py-4 text-sm font-medium">
-                                                {request.location}
+                                                {item.location}
                                             </TableCell>
                                             <TableCell className="py-4 text-sm font-medium">
-                                                {request.workCenter}
+                                                {item.workCenter}
                                             </TableCell>
                                             <TableCell className="py-4 text-center">
-                                                {getStatusBadge(request.status)}
+                                                {getStatusBadge(item.status)}
                                             </TableCell>
                                             <TableCell className="text-center py-4">
                                                 <TableActionButtons
-                                                    onView={() => handleView(request)}
-                                                    onEdit={request.status === "Draft Req." ? () => handleEdit(request) : undefined}
+                                                    onView={canView(SMR_MODULE) ? () => handleView(item) : undefined}
+                                                    onEdit={
+                                                        canEdit(SMR_MODULE) && isDraftSmr(item)
+                                                            ? () => handleEditSMR(item)
+                                                            : undefined
+                                                    }
                                                 />
                                             </TableCell>
                                         </TableRow>
@@ -630,205 +1144,110 @@ export default function SMRRequests() {
                     <DataTablePagination
                         currentPage={currentPage}
                         totalPages={totalPages}
-                        totalItems={filteredRequests.length}
-                        itemsPerPage={itemsPerPage}
+                        totalItems={totalRecords}
                         onPageChange={setCurrentPage}
+                        itemsPerPage={itemsPerPage}
                         onItemsPerPageChange={setItemsPerPage}
-                        options={[10, 15, 30, 50]}
                     />
                 </CardContent>
             </Card>
 
             {/* CREATE SMR REQUEST DIALOG */}
-            <Dialog open={isFormModalOpen} onOpenChange={setIsFormModalOpen}>
-                <DialogContent className="sm:max-w-[800px] max-h-[90vh] flex flex-col p-0 bg-white">
-                    <DialogHeader className="p-6 pb-2">
+            <Dialog open={isFormModalOpen} onOpenChange={(open) => {
+                setIsFormModalOpen(open);
+                if (!open) fetchSMRRequests(currentPage);
+            }}>
+                <DialogContent 
+                    className="w-[95%] sm:max-w-3xl md:max-w-5xl xl:max-w-6xl max-h-[82vh] overflow-hidden p-0 flex flex-col gap-0 bg-white"
+                    onInteractOutside={(e) => e.preventDefault()}
+                    onPointerDownOutside={(e) => e.preventDefault()}
+                >
+                    <div className="shrink-0 border-b bg-white px-6 py-5">
+                    <DialogHeader className="p-0">
                         <DialogTitle className="text-xl font-bold">
-                            {viewingRequest ? "Edit SMR Request" : "Add New SMR Request"}
+                            {viewingRequest ? "Edit MR Request" : "Add New MR Request"}
                         </DialogTitle>
                         <DialogDescription>
                             Configure the details and items for this service material request.
                         </DialogDescription>
                     </DialogHeader>
+                    </div>
 
-                    <div className="flex-1 overflow-y-auto px-6 py-4 space-y-6">
-                        {/* General Information Section */}
-                        <div>
-                            <SectionHeader title="General Information" />
-                            <div className="grid grid-cols-2 gap-4">
-                                {/* SMR Request Date */}
-                                <div className="space-y-2">
-                                    <Label>SMR Request Date *</Label>
-                                    <DatePicker
-                                        date={smrRequestDate}
-                                        setDate={(d) => d && setSmrRequestDate(d)}
-                                        disabled={true}
-                                    />
-                                </div>
-
-                                {/* Location */}
-                                <div className="space-y-2">
-                                    <Label>Location *</Label>
-                                    <Popover open={isLocationPopoverOpen} onOpenChange={setIsLocationPopoverOpen}>
-                                        <PopoverTrigger asChild>
-                                            <Button variant="outline" role="combobox" className="w-full h-10 justify-between font-normal">
-                                                {formLocation || "Select Location"}
-                                                <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
-                                            </Button>
-                                        </PopoverTrigger>
-                                        <PopoverContent className="p-0" style={{ width: "var(--radix-popover-trigger-width)" }}>
-                                            <Command>
-                                                <CommandInputBorderless placeholder="Search location..." />
-                                                <CommandList className="max-h-[200px] overflow-y-auto">
-                                                    <CommandEmpty>No location found.</CommandEmpty>
-                                                    <CommandGroup>
-                                                        {mockLocations.map((loc) => (
-                                                            <CommandItem
-                                                                key={loc.id}
-                                                                value={loc.name}
-                                                                onSelect={() => {
-                                                                    setFormLocation(loc.name);
-                                                                    setIsLocationPopoverOpen(false);
-                                                                }}
-                                                            >
-                                                                <Check className={cn("mr-2 h-4 w-4", formLocation === loc.name ? "opacity-100" : "opacity-0")} />
-                                                                {loc.name}
-                                                            </CommandItem>
-                                                        ))}
-                                                    </CommandGroup>
-                                                </CommandList>
-                                            </Command>
-                                        </PopoverContent>
-                                    </Popover>
-                                </div>
-
-                                {/* Workcenter */}
-                                <div className="space-y-2">
-                                    <Label>Workcenter</Label>
-                                    <Popover open={isWorkCenterPopoverOpen} onOpenChange={setIsWorkCenterPopoverOpen}>
-                                        <PopoverTrigger asChild>
-                                            <Button variant="outline" role="combobox" className="w-full h-10 justify-between font-normal">
-                                                {formWorkCenter || "Select Workcenter"}
-                                                <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
-                                            </Button>
-                                        </PopoverTrigger>
-                                        <PopoverContent className="p-0" style={{ width: "var(--radix-popover-trigger-width)" }}>
-                                            <Command>
-                                                <CommandInputBorderless placeholder="Search workcenter..." />
-                                                <CommandList className="max-h-[200px] overflow-y-auto">
-                                                    <CommandEmpty>No workcenter found.</CommandEmpty>
-                                                    <CommandGroup>
-                                                        {mockWorkCenters.map((wc) => (
-                                                            <CommandItem
-                                                                key={wc}
-                                                                value={wc}
-                                                                onSelect={() => {
-                                                                    setFormWorkCenter(wc);
-                                                                    setIsWorkCenterPopoverOpen(false);
-                                                                }}
-                                                            >
-                                                                <Check className={cn("mr-2 h-4 w-4", formWorkCenter === wc ? "opacity-100" : "opacity-0")} />
-                                                                {wc}
-                                                            </CommandItem>
-                                                        ))}
-                                                    </CommandGroup>
-                                                </CommandList>
-                                            </Command>
-                                        </PopoverContent>
-                                    </Popover>
-                                </div>
-
-                                {/* Department */}
-                                <div className="space-y-2">
-                                    <Label>Department *</Label>
-                                    <Popover open={isDepartmentPopoverOpen} onOpenChange={setIsDepartmentPopoverOpen}>
-                                        <PopoverTrigger asChild>
-                                            <Button variant="outline" role="combobox" className="w-full h-10 justify-between font-normal">
-                                                {formDepartment || "Select Department"}
-                                                <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
-                                            </Button>
-                                        </PopoverTrigger>
-                                        <PopoverContent className="p-0" style={{ width: "var(--radix-popover-trigger-width)" }}>
-                                            <Command>
-                                                <CommandInputBorderless placeholder="Search department..." />
-                                                <CommandList className="max-h-[200px] overflow-y-auto">
-                                                    <CommandEmpty>No department found.</CommandEmpty>
-                                                    <CommandGroup>
-                                                        {mockDepartments.map((dept) => (
-                                                            <CommandItem
-                                                                key={dept}
-                                                                value={dept}
-                                                                onSelect={() => {
-                                                                    setFormDepartment(dept);
-                                                                    setIsDepartmentPopoverOpen(false);
-                                                                }}
-                                                            >
-                                                                <Check className={cn("mr-2 h-4 w-4", formDepartment === dept ? "opacity-100" : "opacity-0")} />
-                                                                {dept}
-                                                            </CommandItem>
-                                                        ))}
-                                                    </CommandGroup>
-                                                </CommandList>
-                                            </Command>
-                                        </PopoverContent>
-                                    </Popover>
-                                </div>
+                    <div className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden px-6 py-5 space-y-6">
+                        <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                            {/* SMR Request Date */}
+                            <div className="space-y-2">
+                                <Label>SMR Request Date *</Label>
+                                <DatePicker
+                                    date={smrRequestDate}
+                                    setDate={(d) => d && setSmrRequestDate(d)}
+                                    disabled={true}
+                                />
                             </div>
+
+                            <SearchableSelect
+                                label="Location"
+                                placeholder="Select Location"
+                                value={formLocation}
+                                options={orderedLocations.length > 0
+                                    ? orderedLocations.map(l => ({ label: l.name || l.value_name, value: String(l.id || l.location_id) }))
+                                    : mockLocations.map(l => ({ label: l.name, value: String(l.id) }))}
+                                onChange={(v) => setFormLocation(String(v))}
+                                required={true}
+                            />
+
+                            <SearchableSelect
+                                label="Workcenter"
+                                placeholder="Select Workcenter"
+                                value={formWorkCenter}
+                                options={orderedWorkCenters.length > 0
+                                    ? orderedWorkCenters.map(w => ({ label: w.work_center_name || w.name, value: String(w.id || w.work_center_id) }))
+                                    : mockWorkCenters.map(name => ({ label: name, value: name }))}
+                                onChange={(v) => setFormWorkCenter(String(v))}
+                            />
+
+                            <SearchableSelect
+                                label="Department"
+                                placeholder="Select Department"
+                                value={formDepartment}
+                                options={storeDepartments.length > 0 ? storeDepartments.map(d => ({ label: d.name || d.value_name, value: String(d.id || d.department_id) })) : mockDepartments.map(name => ({ label: name, value: name }))}
+                                onChange={(v) => setFormDepartment(String(v))}
+                                required={true}
+                            />
                         </div>
 
-                        {/* Material Requirements Section */}
                         <div>
-                            <SectionHeader title="Material Requirements" />
-
-                            {/* Item selector with searchable dropdown */}
-                            <div className="flex gap-2 items-end mb-4">
-                                <div className="flex-1 space-y-2">
-                                    <Label>Select Item (SFG / FG)</Label>
-                                    <Popover open={isItemPopoverOpen} onOpenChange={setIsItemPopoverOpen}>
-                                        <PopoverTrigger asChild>
-                                            <Button variant="outline" role="combobox" className="w-full h-10 justify-between font-normal">
-                                                {selectedItemId ? MOCK_SMR_ITEMS.find(i => i.id === selectedItemId)?.name : "Choose Item..."}
-                                                <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
-                                            </Button>
-                                        </PopoverTrigger>
-                                        <PopoverContent className="p-0" style={{ width: "var(--radix-popover-trigger-width)" }}>
-                                            <Command>
-                                                <CommandInputBorderless placeholder="Search item..." />
-                                                <CommandList className="max-h-[200px] overflow-y-auto">
-                                                    <CommandEmpty>No item found.</CommandEmpty>
-                                                    <CommandGroup>
-                                                        {MOCK_SMR_ITEMS.map((item) => {
-                                                            // Check if item already added
-                                                            const isAdded = addedItems.some(ai => ai.itemName === item.name);
-                                                            return (
-                                                                <CommandItem
-                                                                    key={item.id}
-                                                                    value={item.name}
-                                                                    disabled={isAdded}
-                                                                    onSelect={() => {
-                                                                        if (!isAdded) {
-                                                                            setSelectedItemId(item.id);
-                                                                            setIsItemPopoverOpen(false);
-                                                                        }
-                                                                    }}
-                                                                    className={cn(isAdded && "opacity-50 cursor-not-allowed")}
-                                                                >
-                                                                    <Check className={cn("mr-2 h-4 w-4", selectedItemId === item.id ? "opacity-100" : "opacity-0")} />
-                                                                    <span className={cn(isAdded && "text-muted-foreground")}>
-                                                                        {item.name} ({item.type}) {isAdded && "(Added)"}
-                                                                    </span>
-                                                                </CommandItem>
-                                                            );
-                                                        })}
-                                                    </CommandGroup>
-                                                </CommandList>
-                                            </Command>
-                                        </PopoverContent>
-                                    </Popover>
-                                </div>
+                            <div className="flex gap-4 items-end mb-6">
+                                <SearchableSelect
+                                    label="Select Item (SFG / FG)"
+                                    placeholder="Choose Item..."
+                                    value={selectedItemId}
+                                    options={itemsList.length > 0 
+                                        ? itemsList.map(item => ({
+                                            label: `${String(item.name || item.item_name || "").trim()} ${String(item.item_code || item.code || "").trim()}`.trim(),
+                                            value: item.id || item.item_id,
+                                            primaryText: String(item.name || item.item_name || "").trim(),
+                                            secondaryText: String(item.item_code || item.code || "").trim(),
+                                            disabled: addedItems.some(ai => ai.id === (item.id || item.item_id))
+                                          }))
+                                        : MOCK_SMR_ITEMS.map(item => ({
+                                            label: `${String(item.name || "").trim()} ${String((item as any).itemCode || (item as any).item_code || "").trim()}`.trim(),
+                                            value: item.id,
+                                            primaryText: String(item.name || "").trim(),
+                                            secondaryText: String((item as any).itemCode || (item as any).item_code || "").trim(),
+                                            disabled: addedItems.some(ai => ai.id === item.id)
+                                          }))
+                                    }
+                                    onChange={setSelectedItemId}
+                                    className="flex-1 h-auto min-h-10 items-start! py-1"
+                                    selectedPrimaryLineClamp={2}
+                                    compactStackedSelected
+                                    showSelectedTitle
+                                    selectedTruncate="end"
+                                />
                                 <Button
                                     onClick={handleAddItem}
-                                    className="h-10"
+                                    className="h-10 px-6"
                                     disabled={!selectedItemId}
                                 >
                                     <Plus className="h-4 w-4 mr-2" />
@@ -844,7 +1263,7 @@ export default function SMRRequests() {
                                             <TableHead>Item Name</TableHead>
                                             <TableHead className="text-center">UOM</TableHead>
                                             <TableHead className="text-center">Type (SFG / FG)</TableHead>
-                                            <TableHead className="text-center">Available Stock</TableHead>
+                                            <TableHead className="w-[100px] text-center">Stock(Service center)</TableHead>
                                             <TableHead className="w-[120px] text-right">Qty Needed</TableHead>
                                             <TableHead className="w-[50px]">Remove</TableHead>
                                         </TableRow>
@@ -853,7 +1272,18 @@ export default function SMRRequests() {
                                         {addedItems.length > 0 ? addedItems.map((item) => (
                                             <TableRow key={item.id}>
                                                 {/* Item Name */}
-                                                <TableCell className="font-medium text-sm">{item.itemName}</TableCell>
+                                                <TableCell className="py-3 align-top">
+                                                    <div className="flex min-w-0 flex-col gap-0.5">
+                                                        <div className="font-medium text-sm whitespace-normal wrap-break-word [word-break:break-word]">
+                                                            {item.itemName}
+                                                        </div>
+                                                        {item.itemCode ? (
+                                                            <div className="font-mono text-[10px] text-muted-foreground whitespace-normal wrap-break-word [word-break:break-word]">
+                                                                {item.itemCode}
+                                                            </div>
+                                                        ) : null}
+                                                    </div>
+                                                </TableCell>
 
                                                 {/* UOM */}
                                                 <TableCell className="text-center text-xs">{item.uom}</TableCell>
@@ -873,7 +1303,7 @@ export default function SMRRequests() {
                                                         inputMode="numeric"
                                                         className={cn(
                                                             "h-8 w-20 ml-auto text-right",
-                                                            (!item.qtyNeeded || item.qtyNeeded <= 0 || item.qtyNeeded > item.availableStock) && "border-destructive"
+                                                            (!item.qtyNeeded || item.qtyNeeded <= 0) && "border-destructive"
                                                         )}
                                                         value={item.qtyNeeded || ""}
                                                         onChange={(e) => handleUpdateItemQuantity(item.id, e.target.value)}
@@ -913,15 +1343,16 @@ export default function SMRRequests() {
                     </div>
 
                     {/* Form Footer with action buttons */}
-                    <DialogFooter className="p-6 pt-2 border-t mt-auto flex sm:flex-row flex-col-reverse sm:justify-between justify-between items-center w-full sm:space-x-0">
+                    <div className="shrink-0 border-t bg-white px-6 py-4 mt-auto flex flex-col-reverse gap-3 sm:flex-row sm:items-center sm:justify-between">
                         <div className="flex justify-start">
-                            {viewingRequest && viewingRequest.status === "Draft Req." && (
+                            {viewingRequest && isDraftSmr(viewingRequest) && canDelete(SMR_MODULE) && (
                                 <Button
                                     variant="destructive"
                                     onClick={() => {
                                         setSmrToDelete(viewingRequest);
                                         setIsDeleteAlertOpen(true);
                                     }}
+                                    disabled={isFormActionBusy}
                                 >
                                     <Trash2 className="h-4 w-4 mr-2" />
                                     Delete
@@ -930,40 +1361,59 @@ export default function SMRRequests() {
                         </div>
 
                         <div className="flex gap-2">
-                            <Button variant="outline" onClick={() => setIsFormModalOpen(false)}>
+                            <Button
+                                variant="outline"
+                                onClick={() => setIsFormModalOpen(false)}
+                                disabled={isFormActionBusy}
+                            >
                                 Cancel
                             </Button>
-                            <Button
-                                variant="secondary"
-                                onClick={handleSaveDraft}
-                                disabled={
-                                    !formLocation ||
-                                    !formDepartment ||
-                                    addedItems.length === 0 ||
-                                    addedItems.some(item => !item.qtyNeeded || item.qtyNeeded <= 0 || item.qtyNeeded > item.availableStock)
-                                }
-                            >
-                                Save
-                            </Button>
-                            <Button
-                                onClick={handleSubmit}
-                                disabled={
-                                    !formLocation ||
-                                    !formDepartment ||
-                                    addedItems.length === 0 ||
-                                    addedItems.some(item => !item.qtyNeeded || item.qtyNeeded <= 0 || item.qtyNeeded > item.availableStock)
-                                }
-                            >
-                                Submit
-                            </Button>
+                            {canSaveRequest && (
+                                <>
+                                    <Button
+                                        variant="secondary"
+                                        onClick={handleSaveDraft}
+                                        loading={actionLoading === "save-draft"}
+                                        disabled={
+                                            !!actionLoading ||
+                                            !formLocation ||
+                                            !formDepartment ||
+                                            addedItems.length === 0 ||
+                                            addedItems.some(item => !item.qtyNeeded || item.qtyNeeded <= 0)
+                                        }
+                                    >
+                                        Save
+                                    </Button>
+                                    <Button
+                                        onClick={handleSubmit}
+                                        loading={actionLoading === "submit"}
+                                        disabled={
+                                            !!actionLoading ||
+                                            !formLocation ||
+                                            !formDepartment ||
+                                            addedItems.length === 0 ||
+                                            addedItems.some(item => !item.qtyNeeded || item.qtyNeeded <= 0)
+                                        }
+                                    >
+                                        Submit
+                                    </Button>
+                                </>
+                            )}
                         </div>
-                    </DialogFooter>
+                    </div>
                 </DialogContent>
             </Dialog>
 
             {/* VIEW SMR REQUEST DIALOG */}
-            <Dialog open={isViewModalOpen} onOpenChange={setIsViewModalOpen}>
-                <DialogContent className="sm:max-w-[800px] max-h-[90vh] flex flex-col p-0 bg-white">
+            <Dialog open={isViewModalOpen} onOpenChange={(open) => {
+                setIsViewModalOpen(open);
+                if (!open) fetchSMRRequests(currentPage);
+            }}>
+                <DialogContent 
+                    className="sm:max-w-[800px] max-h-[90vh] flex flex-col p-0 bg-white"
+                    onInteractOutside={(e) => e.preventDefault()}
+                    onPointerDownOutside={(e) => e.preventDefault()}
+                >
                     {viewingRequest && (
                         <>
                             {/* Form header without status badge - clean UI with only title and close button */}
@@ -972,7 +1422,7 @@ export default function SMRRequests() {
                                     SMR Request Details
                                 </DialogTitle>
                                 <DialogDescription>
-                                    {viewingRequest.status === "Issued Req. by WH"
+                                    {(viewingRequest.statusCode === "ISSUED_REQ_WH" || (viewingRequest.status || "").toLowerCase().includes("issued"))
                                         ? "Review and receive issued materials"
                                         : "View service material request details"}
                                 </DialogDescription>
@@ -1004,7 +1454,8 @@ export default function SMRRequests() {
                                     {/* Status badge removed from form - status only shown in listing table */}
 
                                     {/* Show issued/received info for Issued and Received statuses */}
-                                    {(viewingRequest.status === "Issued Req. by WH" || viewingRequest.status === "Received Req. by SC") && (
+                                    {(viewingRequest.statusCode === "ISSUED_REQ_WH" || viewingRequest.statusCode === "RECEIVED_REQ_SC" || 
+                                      (viewingRequest.status || "").toLowerCase().includes("issued") || (viewingRequest.status || "").toLowerCase().includes("received")) && (
                                         <>
                                             {viewingRequest.issuedDate && (
                                                 <div className="space-y-1">
@@ -1022,7 +1473,7 @@ export default function SMRRequests() {
                                     )}
 
                                     {/* Show received info only for Received status */}
-                                    {viewingRequest.status === "Received Req. by SC" && (
+                                    {(viewingRequest.status === "Received Req. by SC" || viewingRequest.status === "RECEIVED_REQ_SC" || viewingRequest.statusCode === "RECEIVED_REQ_SC") && (
                                         <>
                                             {viewingRequest.receivedDate && (
                                                 <div className="space-y-1">
@@ -1043,7 +1494,8 @@ export default function SMRRequests() {
                                 {/* Items Section */}
                                 <div className="pt-4 border-t">
                                     <Label className="text-sm font-semibold mb-3 block">
-                                        {viewingRequest.status === "Issued Req. by WH" || viewingRequest.status === "Received Req. by SC"
+                                        {(viewingRequest.statusCode === "ISSUED_REQ_WH" || viewingRequest.statusCode === "RECEIVED_REQ_SC" ||
+                                          (viewingRequest.status || "").toLowerCase().includes("issued") || (viewingRequest.status || "").toLowerCase().includes("received"))
                                             ? "Issued Items"
                                             : "Requested Items"}
                                     </Label>
@@ -1054,15 +1506,16 @@ export default function SMRRequests() {
                                                     <TableHead className="py-2.5">Item Name</TableHead>
                                                     <TableHead className="py-2.5 text-center">UOM</TableHead>
                                                     <TableHead className="py-2.5 text-center">Type</TableHead>
-                                                    {viewingRequest.status === "Draft Req." || viewingRequest.status === "Requested Req." ? (
+                                                    {(viewingRequest.statusCode === "DRAFT_REQ" || viewingRequest.statusCode === "REQUESTED_REQ" ||
+                                                      (viewingRequest.status || "").toLowerCase().includes("draft") || (viewingRequest.status || "").toLowerCase().includes("requested")) ? (
                                                         <>
-                                                            <TableHead className="py-2.5 text-center">Available Stock</TableHead>
+                                                            <TableHead className="w-[100px] text-center">Stock(Service center)</TableHead>
                                                             <TableHead className="py-2.5 text-right pr-6">Qty Needed</TableHead>
                                                         </>
                                                     ) : (
                                                         <>
                                                             <TableHead className="py-2.5 text-right">Requested Qty</TableHead>
-                                                            <TableHead className="py-2.5 text-right pr-6">Issued Qty</TableHead>
+                                                            <TableHead className="py-2.5 text-right pr-6 text-blue-600">Issued Qty</TableHead>
                                                         </>
                                                     )}
                                                 </TableRow>
@@ -1071,12 +1524,24 @@ export default function SMRRequests() {
                                                 {viewingRequest.items && viewingRequest.items.length > 0 ? (
                                                     viewingRequest.items.map((item) => (
                                                         <TableRow key={item.id} className="border-b last:border-none">
-                                                            <TableCell className="py-3 font-medium text-sm">{item.itemName}</TableCell>
+                                                            <TableCell className="py-3 align-top">
+                                                                <div className="flex min-w-0 flex-col gap-0.5">
+                                                                    <div className="font-medium text-sm whitespace-normal wrap-break-word [word-break:break-word]">
+                                                                        {item.itemName}
+                                                                    </div>
+                                                                    {item.itemCode ? (
+                                                                        <div className="font-mono text-[10px] text-muted-foreground whitespace-normal wrap-break-word [word-break:break-word]">
+                                                                            {item.itemCode}
+                                                                        </div>
+                                                                    ) : null}
+                                                                </div>
+                                                            </TableCell>
                                                             <TableCell className="text-center text-xs">{item.uom}</TableCell>
                                                             <TableCell className="text-center">
                                                                 <Badge variant="outline" className="text-[9px] uppercase px-1.5">{item.type}</Badge>
                                                             </TableCell>
-                                                            {viewingRequest.status === "Draft Req." || viewingRequest.status === "Requested Req." ? (
+                                                            {(viewingRequest.statusCode === "DRAFT_REQ" || viewingRequest.statusCode === "REQUESTED_REQ" ||
+                                                              (viewingRequest.status || "").toLowerCase().includes("draft") || (viewingRequest.status || "").toLowerCase().includes("requested")) ? (
                                                                 <>
                                                                     <TableCell className="text-center font-medium">{item.availableStock}</TableCell>
                                                                     <TableCell className="text-right font-bold text-primary pr-6">
@@ -1086,7 +1551,7 @@ export default function SMRRequests() {
                                                             ) : (
                                                                 <>
                                                                     <TableCell className="text-right font-medium">{item.requestedQty || item.qtyNeeded}</TableCell>
-                                                                    <TableCell className="text-right font-bold text-primary pr-6">
+                                                                    <TableCell className="text-right font-bold text-blue-600 pr-6">
                                                                         {item.issueQty || item.qtyNeeded}
                                                                     </TableCell>
                                                                 </>
@@ -1107,16 +1572,26 @@ export default function SMRRequests() {
                             </div>
 
                             <DialogFooter className="p-6 border-t mt-auto flex gap-2">
-                                {/* Show Mark as Received button only for "Issued Req. by WH" status */}
-                                {viewingRequest.status === "Issued Req. by WH" && (
+                                {/* Show Mark as Received button for any Issued status */}
+                                {(viewingRequest.statusCode === "ISSUED_REQ_WH" || 
+                                  (viewingRequest.status || "").toLowerCase().includes("issued") || 
+                                  (viewingRequest.status || "").toLowerCase().includes("issue")) &&
+                                  canEdit(SMR_MODULE) && (
                                     <Button
                                         onClick={handleReceive}
+                                        loading={actionLoading === "receive"}
+                                        disabled={!!actionLoading}
                                         className="bg-primary text-primary-foreground font-semibold"
                                     >
                                         Mark as Received
                                     </Button>
                                 )}
-                                <Button variant="outline" onClick={() => setIsViewModalOpen(false)} className="w-full sm:w-auto">
+                                <Button
+                                    variant="outline"
+                                    onClick={() => setIsViewModalOpen(false)}
+                                    className="w-full sm:w-auto"
+                                    disabled={actionLoading === "receive"}
+                                >
                                     Close
                                 </Button>
                             </DialogFooter>
@@ -1138,6 +1613,8 @@ export default function SMRRequests() {
                         <AlertDialogCancel>Cancel</AlertDialogCancel>
                         <AlertDialogAction
                             className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                            loading={actionLoading === "delete"}
+                            disabled={!!actionLoading}
                             onClick={() => smrToDelete && handleDeleteSMR(smrToDelete.id)}
                         >
                             Delete
