@@ -13,8 +13,7 @@ import RegistrationSuccess from "@/pages/RegistrationSuccess";
 import ProtectedRoute from "@/routes/ProtectedRoute";
 import Unauthorized from "@/pages/Unauthorized";
 import { useAuth } from "@/lib/store";
-import { usePermissionStore } from "@/stores/permissionStore";
-import { loadCommonData } from "@/services/loadCommonData";
+import { loadMockCommonData } from "@/services/loadMockCommonData";
 import { CommonStoreProvider, useCommonActions, useCommonStore } from "@/store/commonStore";
 import Dashboard from "@/pages/Dashboard";
 import HRMS from "@/pages/HRMS";
@@ -114,8 +113,6 @@ function Router() {
   const commonActions = useCommonActions();
   const isLoaded = useCommonStore(state => state.isLoaded);
   const isLoading = useCommonStore(state => state.isLoading);
-  const permissions = usePermissionStore(state => state.permissions);
-  const hasPermissionsLoaded = Object.keys(permissions).length > 0;
 
   // Synchronize common data with auth state
   // Critical Fix: Reset common store when user logs out. 
@@ -128,17 +125,11 @@ function Router() {
   }, [user, isLoaded, commonActions]);
 
   useEffect(() => {
-    // Orchestrate global master data fetch on login
-    // features: 
-    // 1. Skips if already loaded (e.g. from localStorage persistence)
-    // 2. Skips if currently loading
-    // 3. Only triggers for authenticated users
     if (user && !isLoaded && !isLoading) {
-      loadCommonData({
+      loadMockCommonData({
         ...commonActions,
         isLoaded,
         isLoading,
-        companyId: user.companyId
       });
     }
   }, [user, isLoaded, isLoading, commonActions]);
@@ -147,28 +138,6 @@ function Router() {
     return (
       <div className="flex h-screen items-center justify-center">
         <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary"></div>
-      </div>
-    );
-  }
-
-  // If logged in but no permissions loaded, block UI
-  if (user && !hasPermissionsLoaded) {
-    return (
-      <div className="flex flex-col h-screen items-center justify-center text-center p-4">
-        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary mb-4"></div>
-        <p className="text-muted-foreground font-medium">Setting up your workspace...</p>
-        <p className="text-xs text-muted-foreground/60 mt-2 mb-6">Loading permissions and modules</p>
-        <button 
-          onClick={() => {
-            localStorage.removeItem('currentUser');
-            localStorage.removeItem('auth_token');
-            localStorage.removeItem('auth_user');
-            window.location.href = '/login';
-          }}
-          className="text-sm text-primary hover:underline cursor-pointer"
-        >
-          Taking too long? Sign out and try again
-        </button>
       </div>
     );
   }

@@ -5,6 +5,7 @@ import {
   signInWithEmail,
   signOut,
   signUpWithEmail,
+  formatAuthError,
 } from './supabase';
 import { rolesPermissionsApi, RoleRecord, PermissionItem } from './api';
 import { usePermissionStore } from '../stores/permissionStore';
@@ -480,34 +481,20 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const login = async (email: string, password: string): Promise<boolean> => {
     const { data, error } = await signInWithEmail(email, password);
-    if (error || !data?.user?.email) {
-      console.error("Supabase login error:", error?.message || "No user returned", error);
-      return false;
+    if (error) {
+      throw new Error(formatAuthError(error.message));
+    }
+    if (!data?.user?.email) {
+      throw new Error("Authentication succeeded but no user profile was returned.");
     }
 
-    const authUser = mapSupabaseAuthUser(data.user);
-    const localUser = upsertLocalUserFromEmail(authUser);
+    const localUser = upsertLocalUserFromEmail(mapSupabaseAuthUser(data.user));
     if (localUser.status === "Inactive") {
-      console.error("Local user is inactive");
-      return false;
+      throw new Error("Your account is inactive. Contact an administrator.");
     }
+
     setUser(localUser);
-
     return true;
-  };
-
-  const refreshUserPermissions = async (roles: Role[]) => {
-    try {
-      // 1. Ensure roles are fetched (we need them for ID mapping)
-      const freshRoles = await fetchRoles();
-      
-      // 2. Fetch permissions for each role
-      for (const roleName of roles) {
-        await fetchPermissionsForRole(roleName, freshRoles);
-      }
-    } catch (err) {
-      console.error("Failed to refresh user permissions:", err);
-    }
   };
 
   const register = async (email: string, password: string, username?: string) => {
@@ -518,11 +505,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const logout = async () => {
     await signOut();
     setUser(null);
-    usePermissionStore.getState().clearPermissions(); // Clear permissions on logout
-    // Explicitly clear all keys
     localStorage.removeItem('currentUser');
-    localStorage.removeItem('auth_token');
-    localStorage.removeItem('auth_user');
     localStorage.removeItem('erp_common_data');
   };
 
@@ -541,7 +524,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         } else {
           setUser(null);
           localStorage.removeItem('currentUser');
-          usePermissionStore.getState().clearPermissions();
         }
 
         unsub = onAuthStateChange((nextUser) => {

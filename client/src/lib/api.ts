@@ -1,13 +1,17 @@
 // API client for ERP system
 import { getAccessToken } from './supabase';
 
-import { API_BASE } from './config';
+import { API_BASE, HAS_BACKEND_API } from './config';
 
 // Generic fetch wrapper
 export async function apiRequest<T>(
   endpoint: string,
   options?: RequestInit
 ): Promise<T> {
+  if (!HAS_BACKEND_API) {
+    throw new Error("Backend API is not configured. This UI preview uses local mock data.");
+  }
+
   const token = await getAccessToken();
   const headers: Record<string, string> = {
     ...(token && { 'Authorization': `Bearer ${token}` }),
@@ -25,13 +29,9 @@ export async function apiRequest<T>(
   });
 
   if (!response.ok) {
-    if (response.status === 401) {
+    if (response.status === 401 && HAS_BACKEND_API) {
       console.warn('Unauthorized request detected (401). Clearing session...');
-      // Clear all local storage auth keys
-      localStorage.removeItem('auth_token');
-      localStorage.removeItem('auth_user');
       localStorage.removeItem('currentUser');
-      // Force redirect to login if not already there
       if (window.location.pathname !== '/login') {
         window.location.href = '/login';
       }
@@ -50,6 +50,10 @@ export async function apiRequest<T>(
 
 // Multipart/form-data request wrapper (for file uploads — no Content-Type header so browser sets boundary)
 async function apiFormDataRequest<T>(endpoint: string, formData: FormData): Promise<T> {
+  if (!HAS_BACKEND_API) {
+    throw new Error("Backend API is not configured. This UI preview uses local mock data.");
+  }
+
   const token = await getAccessToken();
   const response = await fetch(`${API_BASE}${endpoint}`, {
     method: 'POST',

@@ -26,38 +26,25 @@ export default function Login() {
     setIsLoading(true);
 
     try {
-      // console.log("🔐 Attempting login with:", email);
-      const success = await login(email, password);
-
-      if (success) {
-        setIsLoading(false);
-        // console.log("✅ Login successful for:", email);
-        toast({
-          variant: "success",
-          title: "Login Successful",
-          description: `Welcome to ERP!`,
-          duration: 15000,
-        });
-        setTimeout(() => {
-          setLocation("/");
-        }, 500);
-      } else {
-        setIsLoading(false);
-        console.error("❌ Login failed - invalid credentials or inactive account");
-        toast({
-          variant: "destructive",
-          title: "Login Failed",
-          description: "Invalid credentials or inactive account",
-        });
-      }
+      await login(email, password);
+      toast({
+        variant: "success",
+        title: "Login Successful",
+        description: `Welcome to ERP!`,
+        duration: 15000,
+      });
+      setTimeout(() => {
+        setLocation("/");
+      }, 500);
     } catch (err: any) {
-      setIsLoading(false);
-      console.error("💥 Exception:", err);
+      console.error("Login error:", err);
       toast({
         variant: "destructive",
-        title: "Login Error",
-        description: err?.message || "An unexpected error occurred.",
+        title: "Login Failed",
+        description: err?.message || "Invalid credentials or inactive account",
       });
+    } finally {
+      setIsLoading(false);
     }
   };
 
