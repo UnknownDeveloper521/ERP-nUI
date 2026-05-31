@@ -14,6 +14,16 @@ import {
   type SkuOperationDetailRecord,
   type SkuOperationDetailOperation,
 } from './skuApi';
+import {
+  mockBomApi,
+  mockGetBOMComponents,
+  mockGetItemTypes,
+  mockGetItemsDropdown,
+  mockGetOperationsDropdown,
+  mockGetUoms,
+  mockItemsApi,
+  mockOperationsApi,
+} from './localMasterMockApi';
 
 export {
   fetchSkuDropdown,
@@ -1070,14 +1080,17 @@ export const commonApi = {
   // Get sales order items for dispatch dropdown
   getSalesOrderItems: (id: number) => apiRequest<any>(`/common/getsalesorderitems?id=${id}`),
   // Get item types for dropdowns
-  getItemTypes: () => apiRequest<any>('/common/getitemtypes?status=1'),
+  getItemTypes: () =>
+    HAS_BACKEND_API ? apiRequest<any>('/common/getitemtypes?status=1') : mockGetItemTypes(),
   // Get UOMs for dropdowns
   getUOMs: (status?: number) => {
+    if (!HAS_BACKEND_API) return mockGetUoms();
     const qs = status !== undefined ? `?status=${status}` : '';
     return apiRequest<any>(`/common/getuoms${qs}`);
   },
   // Get items for dropdowns (supports filters from common route)
   getItemsDropdown: (params?: { item_type_id?: number; status?: number; search?: string }) => {
+    if (!HAS_BACKEND_API) return mockGetItemsDropdown(params);
     const query = new URLSearchParams();
     if (params?.item_type_id !== undefined) query.append('item_type_id', String(params.item_type_id));
     if (params?.status !== undefined) query.append('status', String(params.status));
@@ -1111,7 +1124,8 @@ export const commonApi = {
   // Get active work centers for dropdowns
   getWorkCenters: () => apiRequest<any>('/common/getworkcenters?status=1'),
   // Get operations for dropdowns
-  getOperations: () => apiRequest<any>('/common/getoperations'),
+  getOperations: () =>
+    HAS_BACKEND_API ? apiRequest<any>('/common/getoperations') : mockGetOperationsDropdown(),
   // Get MR for batch creation
   getMRForBatch: (params?: { shift_id?: number | string }) => {
     const query = new URLSearchParams();
@@ -1247,7 +1261,8 @@ export const commonApi = {
   },
   getItemsWithMR: (purchaseorderid: number) => apiRequest<POItemWithMRResponse>(`/common/getitemswithmr?purchaseorderid=${purchaseorderid}`),
   // Get BOM components for dropdown and auto-population
-  getBOMComponents: () => apiRequest<any>('/common/getbomcomponents'),
+  getBOMComponents: () =>
+    HAS_BACKEND_API ? apiRequest<any>('/common/getbomcomponents') : mockGetBOMComponents(),
   getOperationsWithOutput: () => apiRequest<any>('/common/getoperationwithoutput'),
   getAssignedWorkCenters: () => apiRequest<any>('/common/getassignedworkcenter'),
   /** Operations allowed for a work center (create flow, material release, etc.) */
@@ -1470,7 +1485,7 @@ export const employeeSalaryApi = {
 };
 
 // ==================== ITEMS MASTER API ====================
-export const itemsApi = {
+const itemsApiReal = {
   // Get paginated list of items
   getAll: (page: number = 1, limit: number = 10, search?: string, item_type_id?: number) => {
     const query = new URLSearchParams();
@@ -1497,6 +1512,8 @@ export const itemsApi = {
     method: 'DELETE',
   }),
 };
+
+export const itemsApi = HAS_BACKEND_API ? itemsApiReal : mockItemsApi;
 
 // ==================== MATERIAL THRESHOLD MASTER API ====================
 export const materialThresholdApi = {
@@ -2060,7 +2077,8 @@ export const hrCommonApi = {
   getWarehouses: (status?: number) =>
     apiRequest<any>(`/common/getwarehouses${status !== undefined ? `?status=${status}` : ''}`),
   getWorkCenters: () => apiRequest<any>('/common/getworkcenters'),
-  getOperations: () => apiRequest<any>('/common/getoperations'),
+  getOperations: () =>
+    HAS_BACKEND_API ? apiRequest<any>('/common/getoperations') : mockGetOperationsDropdown(),
   getOperationsByWorkCenter: (workCenterId: string | number) => 
     apiRequest<any>(`/common/getoperationwithworkcenter?workcenter_id=${workCenterId}`),
   getDocumentTypes: (status?: boolean) => apiRequest<any>(`/common/getdocumenttype${status !== undefined ? `?status=${status ? 1 : 0}` : ''}`),
@@ -2219,7 +2237,7 @@ export interface OperationTypesApiResponse {
   isSuccessful: boolean;
 }
 
-export const operationsApi = {
+const operationsApiReal = {
   getAll: (params?: any) => {
     const query = new URLSearchParams();
     if (params?.page) query.append('page', params.page);
@@ -2246,6 +2264,8 @@ export const operationsApi = {
     method: 'DELETE',
   }),
 };
+
+export const operationsApi = HAS_BACKEND_API ? operationsApiReal : mockOperationsApi;
 
 
 
@@ -3579,6 +3599,7 @@ export const productionApi = {
     page: number;
     limit: number;
   }) => {
+    if (!HAS_BACKEND_API) return mockBomApi.getBOMList(params);
     const query = new URLSearchParams();
     if (params.search) query.set('search', params.search);
     if (params.item_type_id && params.item_type_id !== 'all' && params.item_type_id !== 'All') {
@@ -3590,18 +3611,30 @@ export const productionApi = {
 
     return apiRequest<BOMListResponse>(`/production/bom/getbomlist?${query.toString()}`);
   },
-  createBOM: (data: BOMCreateRequest) => apiRequest<BOMCreateResponse>('/production/bom/createbom', {
-    method: 'POST',
-    body: JSON.stringify(data),
-  }),
-  getBOMDetail: (id: number) => apiRequest<any>(`/production/bom/getbombyid/${id}`),
-  updateBOM: (id: number, data: any) => apiRequest<any>(`/production/bom/updatebom/${id}`, {
-    method: 'PATCH',
-    body: JSON.stringify(data),
-  }),
-  deleteBOM: (id: number) => apiRequest<any>(`/production/bom/deletebom/${id}`, {
-    method: 'DELETE',
-  }),
+  createBOM: (data: BOMCreateRequest) => {
+    if (!HAS_BACKEND_API) return mockBomApi.createBOM(data);
+    return apiRequest<BOMCreateResponse>('/production/bom/createbom', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
+  },
+  getBOMDetail: (id: number) => {
+    if (!HAS_BACKEND_API) return mockBomApi.getBOMDetail(id);
+    return apiRequest<any>(`/production/bom/getbombyid/${id}`);
+  },
+  updateBOM: (id: number, data: any) => {
+    if (!HAS_BACKEND_API) return mockBomApi.updateBOM(id, data);
+    return apiRequest<any>(`/production/bom/updatebom/${id}`, {
+      method: 'PATCH',
+      body: JSON.stringify(data),
+    });
+  },
+  deleteBOM: (id: number) => {
+    if (!HAS_BACKEND_API) return mockBomApi.deleteBOM(id);
+    return apiRequest<any>(`/production/bom/deletebom/${id}`, {
+      method: 'DELETE',
+    });
+  },
   getShiftForProduction: () => apiRequest<any>('/common/getshiftforproduction'),
 };
 

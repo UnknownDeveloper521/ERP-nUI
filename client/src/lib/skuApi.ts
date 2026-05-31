@@ -1,5 +1,7 @@
-const SKU_STORAGE_KEY = "master-erp-procurement-skus";
-const SKU_OPERATION_API_KEY = "master-erp-sku-operation-api-records";
+import {
+  SKU_OPERATION_STORAGE_KEY,
+  SKU_STORAGE_KEY,
+} from "@/lib/localMasterSeed";
 
 export interface SkuDropdownRecord {
   id: number;
@@ -100,7 +102,7 @@ function saveStoredSkus(records: StoredSku[]) {
 
 function loadStoredSkuOperations(): SkuOperationDetailRecord[] {
   try {
-    const raw = localStorage.getItem(SKU_OPERATION_API_KEY);
+    const raw = localStorage.getItem(SKU_OPERATION_STORAGE_KEY);
     if (!raw) return [];
     const parsed = JSON.parse(raw);
     return Array.isArray(parsed) ? parsed : [];
@@ -110,7 +112,7 @@ function loadStoredSkuOperations(): SkuOperationDetailRecord[] {
 }
 
 function saveStoredSkuOperations(records: SkuOperationDetailRecord[]) {
-  localStorage.setItem(SKU_OPERATION_API_KEY, JSON.stringify(records));
+  localStorage.setItem(SKU_OPERATION_STORAGE_KEY, JSON.stringify(records));
 }
 
 function nextId(records: { id: number }[]): number {
