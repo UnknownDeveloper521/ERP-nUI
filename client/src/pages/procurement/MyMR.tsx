@@ -51,6 +51,7 @@ import {
     getFirstAssignedMatch,
     prioritizeByAssigned,
 } from "@/utils/assignedDropdown";
+import { loadProcurementSkuRecords, type SkuRecord } from "@/pages/masters/ProcurementSkuTab";
 
 
 // INITIAL MOCK DATA IS NOW IN lib/procurementSharedData.ts
@@ -90,6 +91,14 @@ const SectionHeader = ({ title }: { title: string }) => (
         <h3 className="text-sm font-semibold text-primary">{title}</h3>
     </div>
 );
+
+/** Form-only line row: MRItem plus item/SKU ids for create dialog (not stored in shared MRItem type). */
+type MRLineItem = MRItem & {
+    itemId: number;
+    skuId: number;
+    skuCode: string;
+    skuName: string;
+};
 
 // ============================================================================
 // MAIN COMPONENT
@@ -347,8 +356,27 @@ export default function MRRequest() {
     // Form states
     const [mrDate, setMrDate] = useState<Date>(new Date());
     const [selectedItemId, setSelectedItemId] = useState<string>("");
+    const [selectedSkuId, setSelectedSkuId] = useState<string>("");
+    const [skuRecords, setSkuRecords] = useState<SkuRecord[]>([]);
     const [itemQuantity, setItemQuantity] = useState<string>("");
-    const [addedItems, setAddedItems] = useState<MRItem[]>([]);
+    const [addedItems, setAddedItems] = useState<MRLineItem[]>([]);
+
+    const skuDropdownOptions = useMemo(() => {
+        if (!selectedItemId) return [];
+        const itemId = Number(selectedItemId);
+        let list = skuRecords;
+        const forItem = skuRecords.filter((s) => Number(s.item_id) === itemId);
+        if (forItem.length > 0) list = forItem;
+        return list.map((s) => ({
+            value: String(s.id),
+            label: `${s.code} — ${s.name}`,
+            primaryText: s.name,
+            secondaryText: s.code,
+            disabled: addedItems.some(
+                (row) => row.itemId === itemId && row.skuId === Number(s.id),
+            ),
+        }));
+    }, [skuRecords, selectedItemId, addedItems]);
 
     // Update available quantity when item is selected
     useEffect(() => {
@@ -414,24 +442,51 @@ export default function MRRequest() {
             toast({ variant: "destructive", title: "Validation Error", description: "Please select an item.", duration: 15000 });
             return;
         }
+        if (!selectedSkuId) {
+            toast({ variant: "destructive", title: "Validation Error", description: "Please select a SKU.", duration: 15000 });
+            return;
+        }
 
         const masterItem = inventoryItems.find(i => i.item_id.toString() === selectedItemId);
         if (!masterItem) return;
 
-        const newItem: MRItem = {
-            id: Number(masterItem.item_id),
+        const selectedSku = skuRecords.find((s) => String(s.id) === selectedSkuId);
+        if (!selectedSku) return;
+
+        const itemIdNum = Number(masterItem.item_id);
+        const skuIdNum = Number(selectedSkuId);
+        const exists = addedItems.some(
+            (row) => row.itemId === itemIdNum && row.skuId === skuIdNum,
+        );
+        if (exists) {
+            toast({
+                variant: "destructive",
+                title: "Validation Error",
+                description: "This item and SKU combination is already added.",
+                duration: 15000,
+            });
+            return;
+        }
+
+        const newItem: MRLineItem = {
+            id: Date.now() + Math.floor(Math.random() * 1000),
+            itemId: itemIdNum,
+            skuId: skuIdNum,
+            skuCode: selectedSku.code,
+            skuName: selectedSku.name,
             itemCode: masterItem.item_code,
             itemName: masterItem.item_name,
             uom: masterItem.uom,
             type: masterItem.item_type as "RM" | "Consumable",
             availableQty: masterItem.stock_qty,
-            requiredQty: 1, // Default quantity to 1 when added
+            requiredQty: 1,
             quotations: [],
             qtyReceived: 0
         };
 
         setAddedItems(prev => [...prev, newItem]);
         setSelectedItemId("");
+        setSelectedSkuId("");
         setItemQuantity("");
     };
 
@@ -492,7 +547,7 @@ export default function MRRequest() {
                 work_center_id: Number(headerInfo.work_center_id),
                 department_id: Number(headerInfo.department_id),
                 items: addedItems.map(item => ({
-                    item_id: Number(item.id), // Item ID from internal state populated by API
+                    item_id: Number(item.itemId),
                     requested_qty: Number(item.requiredQty)
                 }))
             });
@@ -559,6 +614,12 @@ export default function MRRequest() {
         setAddedItems([]);
         setMrDate(new Date());
         setSelectedItemId("");
+        setSelectedSkuId("");
+        try {
+            setSkuRecords(loadProcurementSkuRecords());
+        } catch {
+            setSkuRecords([]);
+        }
         setItemQuantity("");
         setHeaderInfo({
             location_id: defaultLocationId ? Number(defaultLocationId) : 0,
@@ -773,39 +834,54 @@ export default function MRRequest() {
 
                             <div>
                                 <SectionHeader title="Material Requirements" />
-                                <div className="mb-3 flex flex-col gap-3 sm:flex-row sm:items-end">
-                                    <div className="min-w-0 flex-1 space-y-1.5">
+                                <div className="mb-3 overflow-x-auto">
+                                    <div className="grid min-w-[640px] grid-cols-[minmax(200px,1fr)_minmax(180px,1fr)_auto] gap-3 items-end">
+                                    <div className="min-w-0 space-y-1.5">
                                         <Label className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">
-                                            Select Item (RM / Consumables)
+                                            Select Item (RM / Consumables) *
                                         </Label>
                                         <SearchableSelect
                                             value={selectedItemId}
-                                            options={inventoryItems.map((item) => {
-                                                const isAdded = addedItems.some((ai) => ai.id === item.item_id);
-                                                return {
-                                                    label: isAdded
-                                                        ? `${item.item_code} - ${item.item_name} (Added)`
-                                                        : `${item.item_code} - ${item.item_name}`,
-                                                    primaryText: isAdded
-                                                        ? `${item.item_name} (Added)`
-                                                        : item.item_name,
-                                                    secondaryText: item.item_code,
-                                                    value: item.item_id.toString(),
-                                                    disabled: isAdded,
-                                                };
-                                            })}
-                                            onChange={(val) => setSelectedItemId(String(val))}
+                                            options={inventoryItems.map((item) => ({
+                                                label: `${item.item_code} - ${item.item_name}`,
+                                                primaryText: item.item_name,
+                                                secondaryText: item.item_code,
+                                                value: item.item_id.toString(),
+                                            }))}
+                                            onChange={(val) => {
+                                                setSelectedItemId(String(val));
+                                                setSelectedSkuId("");
+                                            }}
                                             placeholder={isInventoryLoading ? "Loading items..." : "Search item code or name..."}
                                             disabled={isInventoryLoading}
                                             className="h-9 sm:h-10"
                                         />
                                     </div>
+                                    <div className="min-w-0 space-y-1.5">
+                                        <Label className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">
+                                            SKU *
+                                        </Label>
+                                        <SearchableSelect
+                                            value={selectedSkuId}
+                                            options={skuDropdownOptions}
+                                            onChange={(val) => setSelectedSkuId(String(val))}
+                                            placeholder={
+                                                !selectedItemId
+                                                    ? "Select item first"
+                                                    : skuDropdownOptions.length === 0
+                                                      ? "No SKUs for this item"
+                                                      : "Select SKU"
+                                            }
+                                            disabled={!selectedItemId || skuDropdownOptions.length === 0}
+                                            className="h-9 sm:h-10"
+                                        />
+                                    </div>
                                     <Button
                                         onClick={handleAddItem}
-                                        disabled={!selectedItemId}
+                                        disabled={!selectedItemId || !selectedSkuId}
                                         className={cn(
                                             "h-9 w-full shrink-0 px-6 sm:h-10 sm:w-auto",
-                                            selectedItemId
+                                            selectedItemId && selectedSkuId
                                                 ? "bg-blue-600 hover:bg-blue-600/90 text-white border-blue-600"
                                                 : "bg-muted text-muted-foreground border-muted hover:bg-muted disabled:opacity-100!"
                                         )}
@@ -813,6 +889,7 @@ export default function MRRequest() {
                                         <Plus className="h-4 w-4 mr-2" />
                                         Add
                                     </Button>
+                                    </div>
                                 </div>
 
                                 <div
@@ -822,10 +899,11 @@ export default function MRRequest() {
                                     )}
                                 >
                                     <div className="overflow-x-auto">
-                                        <Table className="w-full min-w-[640px]">
+                                        <Table className="w-full min-w-[720px]">
                                             <TableHeader>
                                                 <TableRow className="bg-muted/50">
-                                                    <TableHead className="min-w-[180px]">Item Details</TableHead>
+                                                    <TableHead className="min-w-[160px]">Item Details</TableHead>
+                                                    <TableHead className="min-w-[120px]">SKU</TableHead>
                                                     <TableHead className="text-center whitespace-nowrap">UOM</TableHead>
                                                     <TableHead className="text-center whitespace-nowrap">Type</TableHead>
                                                     <TableHead className="text-center whitespace-nowrap">Stock</TableHead>
@@ -842,6 +920,14 @@ export default function MRRequest() {
                                                             </div>
                                                             <div className="mt-0.5 font-mono text-[10px] uppercase text-muted-foreground break-all">
                                                                 {item.itemCode}
+                                                            </div>
+                                                        </TableCell>
+                                                        <TableCell className="align-top py-2.5">
+                                                            <div className="text-sm font-medium leading-snug wrap-break-word">
+                                                                {item.skuName || "-"}
+                                                            </div>
+                                                            <div className="mt-0.5 font-mono text-[10px] uppercase text-muted-foreground break-all">
+                                                                {item.skuCode || "-"}
                                                             </div>
                                                         </TableCell>
                                                         <TableCell className="text-center text-xs whitespace-nowrap">{item.uom}</TableCell>
@@ -877,7 +963,7 @@ export default function MRRequest() {
                                                     </TableRow>
                                                 )) : (
                                                     <TableRow>
-                                                        <TableCell colSpan={6} className="h-20 text-center text-sm italic text-muted-foreground">
+                                                        <TableCell colSpan={7} className="h-20 text-center text-sm italic text-muted-foreground">
                                                             No items added.
                                                         </TableCell>
                                                     </TableRow>

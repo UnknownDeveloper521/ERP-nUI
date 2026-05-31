@@ -74,6 +74,7 @@ import {
     type Gsv7BomStructureLine,
     type Gsv7BomStructureOperation,
 } from "@/lib/gsv7BomTreeBuilder";
+import { getBomMockSkusForItem } from "@/lib/bomSkuMockData";
 import { loadProcurementSkuRecords, type SkuRecord } from "@/pages/masters/ProcurementSkuTab";
 
 import { 
@@ -92,6 +93,20 @@ import {
     AlertDialogHeader,
     AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
+
+const formatPlanOutputSkuLabel = (out: {
+    itemCode?: string;
+    skuCode?: string;
+    skuName?: string;
+}): string => {
+    if (out.skuCode) {
+        return out.skuName ? `${out.skuCode} — ${out.skuName}` : out.skuCode;
+    }
+    if (out.skuName) return out.skuName;
+    const mock = getBomMockSkusForItem(out.itemCode)[0];
+    if (mock) return mock.name ? `${mock.code} — ${mock.name}` : mock.code;
+    return "—";
+};
 
 // ============================================================================
 // PRODUCTION PLAN MANAGEMENT MODULE
@@ -952,6 +967,9 @@ export default function ProductionPlan() {
                             plannedQty: String(out.target_qty ?? "0"),
                             fulfilledQty: String(out.fulfilled_qty ?? "0"),
                             uom: out.uom || "nos",
+                            skuId: String(out.sku_id ?? ""),
+                            skuCode: out.sku_code || "",
+                            skuName: out.sku_name || "",
                         }))
                         : [];
                     const firstOutput = outputs[0] ?? {
@@ -1699,6 +1717,7 @@ export default function ProductionPlan() {
                                         <TableHead>End Date</TableHead>
                                         <TableHead>Operation</TableHead>
                                         <TableHead>Output (Fulfilled / Targeted)</TableHead>
+                                        <TableHead>SKU</TableHead>
                                         <TableHead>Shift</TableHead>
                                         <TableHead>Status</TableHead>
                                         <TableHead className="text-center font-bold text-[11px] tracking-wider py-4">Actions</TableHead>
@@ -1707,7 +1726,7 @@ export default function ProductionPlan() {
                                 <TableBody>
                                     {!areListFiltersReady || isListLoading ? (
                                         <TableRow>
-                                            <TableCell colSpan={8} className="h-32 text-center">
+                                            <TableCell colSpan={9} className="h-32 text-center">
                                                 <div className="flex flex-col items-center justify-center gap-3">
                                                     <Loader2 className="h-8 w-8 animate-spin text-primary" />
                                                     <p className="text-sm text-muted-foreground">Loading...</p>
@@ -1716,7 +1735,7 @@ export default function ProductionPlan() {
                                         </TableRow>
                                     ) : listError ? (
                                         <TableRow>
-                                            <TableCell colSpan={8} className="h-32 text-center">
+                                            <TableCell colSpan={9} className="h-32 text-center">
                                                 <div className="flex flex-col items-center justify-center gap-2 text-red-500">
                                                     <AlertCircle className="h-8 w-8" />
                                                     <p className="text-sm font-medium">{listError}</p>
@@ -1753,6 +1772,25 @@ export default function ProductionPlan() {
                                                         ))}
                                                     </div>
                                                 </TableCell>
+                                                <TableCell className="align-top py-3">
+                                                    <div className="flex flex-col gap-1">
+                                                        {(plan.outputs && plan.outputs.length > 0
+                                                            ? plan.outputs
+                                                            : [{
+                                                                itemCode: plan.itemCode,
+                                                                skuCode: "",
+                                                                skuName: "",
+                                                            }]
+                                                        ).map((out, idx) => (
+                                                            <span
+                                                                key={`${plan.id}-sku-${out.itemCode || "output"}-${idx}`}
+                                                                className="text-xs font-semibold leading-snug text-muted-foreground"
+                                                            >
+                                                                {formatPlanOutputSkuLabel(out)}
+                                                            </span>
+                                                        ))}
+                                                    </div>
+                                                </TableCell>
                                                 <TableCell>
                                                     <Badge variant="outline" className={cn(
                                                         "font-semibold text-[10px] uppercase",
@@ -1785,7 +1823,7 @@ export default function ProductionPlan() {
                                         ))
                                     ) : (
                                         <TableRow>
-                                            <TableCell colSpan={8} className="h-32 text-center text-muted-foreground">
+                                            <TableCell colSpan={9} className="h-32 text-center text-muted-foreground">
                                                 No Production Plans Found
                                             </TableCell>
                                         </TableRow>

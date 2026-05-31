@@ -107,6 +107,27 @@ import {
     savePOs
 } from "@/lib/procurementSharedData";
 
+/** MR execution line with optional SKU display (not on shared MRItem type). */
+type ExecutionMRItem = MRItem & {
+    skuCode?: string;
+    skuName?: string;
+};
+
+const mapExecutionItem = (item: MRExecutionItem & Record<string, unknown>): ExecutionMRItem => ({
+    id: item.mr_item_id,
+    itemCode: item.item_code,
+    itemName: item.item_name,
+    uom: item.uom,
+    type: "RM",
+    requiredQty: Number(item.requested_qty) || 0,
+    availableQty: item.stock_qty,
+    quotations: [],
+    poNumber: item.po_code || undefined,
+    qtyReceived: 0,
+    skuCode: String(item.sku_code ?? item.skuCode ?? "").trim() || undefined,
+    skuName: String(item.sku_name ?? item.skuName ?? "").trim() || undefined,
+});
+
 // ============================================================================
 // HELPERS
 // ============================================================================
@@ -450,18 +471,7 @@ const MRExecution = () => {
                     department: detail.department_name,
                     status: detail.status_name as MRStatus,
                     requestedBy: detail.requested_by,
-                    items: detail.items.map((item: MRExecutionItem) => ({
-                        id: item.mr_item_id, // Use mr_item_id for integration
-                        itemCode: item.item_code,
-                        itemName: item.item_name,
-                        uom: item.uom,
-                        type: "RM", // Default or map if available
-                        requiredQty: item.requested_qty,
-                        availableQty: item.stock_qty,
-                        quotations: [], // Quotations are at the request level in API
-                        poNumber: item.po_code || undefined,
-                        qtyReceived: 0
-                    })),
+                    items: detail.items.map((item) => mapExecutionItem(item)),
                     quotations: detail.quotations.map(q => ({
                         id: q.quotation_id,
                         vendorName: q.vendor_name,
@@ -592,18 +602,7 @@ const MRExecution = () => {
                     department: detail.department_name,
                     status: detail.status_name as MRStatus,
                     requestedBy: detail.requested_by,
-                    items: detail.items.map((item: any) => ({
-                        id: item.mr_item_id,
-                        itemCode: item.item_code,
-                        itemName: item.item_name,
-                        uom: item.uom,
-                        type: "RM",
-                        requiredQty: Number(item.requested_qty) || 0,
-                        availableQty: item.stock_qty,
-                        quotations: [],
-                        poNumber: item.po_code || undefined,
-                        qtyReceived: 0
-                    })),
+                    items: detail.items.map((item: MRExecutionItem) => mapExecutionItem(item)),
                     quotations: detail.quotations.map((q: any) => ({
                         id: q.quotation_id,
                         vendorName: q.vendor_name,
@@ -902,7 +901,7 @@ const MRExecution = () => {
                                                         "max-h-[min(42vh,380px)] overflow-y-auto custom-scrollbar"
                                                 )}
                                             >
-                                                <Table className="w-full min-w-[640px]">
+                                                <Table className="w-full min-w-[720px]">
                                                     <TableHeader>
                                                         <TableRow className="bg-muted/50">
                                                             <TableHead className="w-12 text-center py-3">
@@ -918,13 +917,16 @@ const MRExecution = () => {
                                                                 />
                                                             </TableHead>
                                                             <TableHead className="text-[10px] font-bold uppercase py-3">Items</TableHead>
+                                                            <TableHead className="text-[10px] font-bold uppercase py-3">SKU</TableHead>
                                                             <TableHead className="text-[10px] font-bold uppercase py-3 text-center">Requested Qty</TableHead>
                                                             <TableHead className="text-[10px] font-bold uppercase py-3 text-center">Stock</TableHead>
                                                             <TableHead className="text-[10px] font-bold uppercase py-3 text-right pr-6">Po No.</TableHead>
                                                         </TableRow>
                                                     </TableHeader>
                                                     <TableBody>
-                                                        {activeRequest?.items.map((item) => (
+                                                        {activeRequest?.items.map((item) => {
+                                                            const line = item as ExecutionMRItem;
+                                                            return (
                                                             <TableRow key={item.id} className={cn("hover:bg-muted/20 transition-colors", item.poNumber && "opacity-60")}>
                                                                 <TableCell className="text-center">
                                                                     <Checkbox
@@ -941,6 +943,10 @@ const MRExecution = () => {
                                                                     <div className="text-xs text-slate-600 font-medium">{item.itemName}</div>
                                                                     <div className="text-[9px] text-muted-foreground uppercase">{item.uom}</div>
                                                                 </TableCell>
+                                                                <TableCell className="py-4">
+                                                                    <div className="font-bold text-xs text-primary">{line.skuCode || "-"}</div>
+                                                                    <div className="text-xs text-slate-600 font-medium">{line.skuName || "-"}</div>
+                                                                </TableCell>
                                                                 <TableCell className="text-center font-bold text-primary">{item.requiredQty}</TableCell>
                                                                 <TableCell className="text-center font-medium text-slate-600">{item.availableQty}</TableCell>
                                                                 <TableCell className="text-right pr-6">
@@ -953,10 +959,11 @@ const MRExecution = () => {
                                                                     )}
                                                                 </TableCell>
                                                             </TableRow>
-                                                        ))}
+                                                            );
+                                                        })}
                                                         {activeRequest?.items.length === 0 && (
                                                             <TableRow>
-                                                                <TableCell colSpan={5} className="text-center py-8 text-muted-foreground italic">
+                                                                <TableCell colSpan={6} className="text-center py-8 text-muted-foreground italic">
                                                                     No items found in this request.
                                                                 </TableCell>
                                                             </TableRow>

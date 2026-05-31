@@ -38,11 +38,14 @@ import { DataTablePagination } from "@/components/shared/DataTablePagination";
 import { TableActionButtons } from "@/components/shared/TableActionButtons";
 import { AppListToolbar } from "@/components/shared/AppListToolbar";
 import { SearchableSelect } from "@/components/shared/SearchableSelect";
-import { commonApi } from "@/lib/api";
+import { commonApi, skuApi, type CreateSkuRequest, type SkuDetailRecord } from "@/lib/api";
 import { useCommonStore } from "@/store/commonStore";
-import { GSV7_ITEMS, getGsv7ItemIdByCode } from "@/lib/gsv7OperationsMockData";
 
 const SKU_STORAGE_KEY = "master-erp-procurement-skus";
+
+const SKU_CODE_MAX_LENGTH = 150;
+const SKU_NAME_MAX_LENGTH = 150;
+const SKU_TOAST_DURATION_MS = 15000;
 
 export interface SkuRecord {
     id: number;
@@ -87,13 +90,6 @@ const emptySkuForm: SkuFormData = {
     type: "",
     description: "",
 };
-
-function normalizeItemCode(code: string) {
-    return String(code ?? "")
-        .trim()
-        .toUpperCase()
-        .replace(/\s+/g, "");
-}
 
 const emptySkuFormErrors: SkuFormErrors = {
     code: "",
@@ -169,18 +165,59 @@ function nextSkuId(records: SkuRecord[]): number {
     return Math.max(...records.map((r) => r.id)) + 1;
 }
 
+function mapSkuDetailToForm(detail: SkuDetailRecord): SkuFormData {
+    return {
+        code: String(detail.code ?? "").slice(0, SKU_CODE_MAX_LENGTH),
+        itemId: detail.items_id != null ? String(detail.items_id) : "",
+        name: String(detail.name ?? "").slice(0, SKU_NAME_MAX_LENGTH),
+        dimensions: String(detail.dimension ?? ""),
+        weight: String(detail.weight ?? ""),
+        type: String(detail.type ?? ""),
+        description: String(detail.description ?? ""),
+    };
+}
+
+function itemOptionFromSkuDetail(detail: SkuDetailRecord): ItemOption | null {
+    const id = Number(detail.items_id);
+    const code = String(detail.item_code ?? "").trim();
+    const name = String(detail.item_name ?? "").trim();
+    if (!Number.isFinite(id) || id <= 0 || !code || !name) return null;
+    return { id, code, name };
+}
+
+function buildSkuWritePayload(form: SkuFormData, itemsId: number): CreateSkuRequest {
+    const payload: CreateSkuRequest = {
+        code: form.code.trim(),
+        name: form.name.trim(),
+        items_id: itemsId,
+    };
+    const type = form.type.trim();
+    const dimension = form.dimensions.trim();
+    const weight = form.weight.trim();
+    const description = form.description.trim();
+    if (type) payload.type = type;
+    if (dimension) payload.dimension = dimension;
+    if (weight) payload.weight = weight;
+    if (description) payload.description = description;
+    return payload;
+}
+
 interface ProcurementSkuTabProps {
     permissionKey: string;
 }
 
 export function ProcurementSkuTab({ permissionKey }: ProcurementSkuTabProps) {
     const { toast } = useToast();
+    const showSkuToast = (options: Parameters<typeof toast>[0]): void => {
+        toast({ ...options, duration: SKU_TOAST_DURATION_MS });
+    };
     const { canCreate, canEdit, canDelete } = useHasPermission();
     const itemTypes = useCommonStore((state) => state.itemTypes);
 
     const [allSkus, setAllSkus] = useState<SkuRecord[]>([]);
     const [listError, setListError] = useState<string | null>(null);
     const [isListLoading, setIsListLoading] = useState(true);
+    const [totalSkuCount, setTotalSkuCount] = useState(0);
 
     const [searchTerm, setSearchTerm] = useState("");
     const debouncedSearchTerm = useDebounce(searchTerm, 500);
@@ -194,6 +231,7 @@ export function ProcurementSkuTab({ permissionKey }: ProcurementSkuTabProps) {
     const [skuFormData, setSkuFormData] = useState<SkuFormData>(emptySkuForm);
     const [skuFormErrors, setSkuFormErrors] = useState<SkuFormErrors>(emptySkuFormErrors);
     const [isSubmitting, setIsSubmitting] = useState(false);
+    const [isFormDetailLoading, setIsFormDetailLoading] = useState(false);
     const [isDeleting, setIsDeleting] = useState(false);
     const [itemOptions, setItemOptions] = useState<ItemOption[]>([]);
     const [isLoadingItems, setIsLoadingItems] = useState(false);
@@ -214,25 +252,46 @@ export function ProcurementSkuTab({ permissionKey }: ProcurementSkuTabProps) {
         return match?.id != null ? Number(match.id) : undefined;
     }, [itemTypes]);
 
-    const loadSkus = useCallback(() => {
+    const fetchSkus = useCallback(async () => {
         setIsListLoading(true);
         setListError(null);
         try {
-            const records = loadProcurementSkuRecords();
-            setAllSkus(records);
+            const res = await skuApi.getList({
+                page: currentPage,
+                limit: itemsPerPage,
+                search: debouncedSearchTerm.trim() || undefined,
+            });
+            if (res.isSuccessful && res.data) {
+                const records = (res.data.records ?? []).map((row) => ({
+                    id: row.id,
+                    code: row.code,
+                    name: row.name,
+                    description: row.description ?? undefined,
+                }));
+                setAllSkus(records);
+                const pagination = res.data.pagination;
+                setTotalSkuCount(
+                    pagination?.totalCount != null ? pagination.totalCount : records.length,
+                );
+            } else {
+                setListError(res.message || "Failed to load SKU list.");
+                setAllSkus([]);
+                setTotalSkuCount(0);
+            }
         } catch {
             setListError("Unable to load SKU records. Please try again.");
             setAllSkus([]);
+            setTotalSkuCount(0);
         } finally {
             setIsListLoading(false);
         }
-    }, []);
+    }, [currentPage, itemsPerPage, debouncedSearchTerm]);
 
     useEffect(() => {
-        loadSkus();
-    }, [loadSkus]);
+        void fetchSkus();
+    }, [fetchSkus]);
 
-    const loadItemOptions = useCallback(async () => {
+    const loadItemOptions = useCallback(async (): Promise<ItemOption[]> => {
         setIsLoadingItems(true);
         try {
             const mapDropdownResponse = (res: Awaited<ReturnType<typeof commonApi.getItemsDropdown>>) => {
@@ -241,17 +300,15 @@ export function ProcurementSkuTab({ permissionKey }: ProcurementSkuTabProps) {
                     : Array.isArray(res?.data)
                       ? res.data
                       : [];
-                return records
-                    .map((row: { item?: unknown } | Record<string, unknown>) => {
-                        const item = (row as { item?: Record<string, unknown> }).item ?? row;
-                        const r = item as Record<string, unknown>;
-                        return {
-                            id: Number(r.id ?? r.item_id),
-                            code: String(r.code ?? r.item_code ?? "").trim(),
-                            name: String(r.name ?? r.item_name ?? "").trim(),
-                        };
-                    })
-                    .filter((o) => Number.isFinite(o.id) && o.id > 0 && o.code && o.name);
+                return records.flatMap((row: { item?: unknown } | Record<string, unknown>): ItemOption[] => {
+                    const item = (row as { item?: Record<string, unknown> }).item ?? row;
+                    const r = item as Record<string, unknown>;
+                    const id = Number(r.id ?? r.item_id);
+                    const code = String(r.code ?? r.item_code ?? "").trim();
+                    const name = String(r.name ?? r.item_name ?? "").trim();
+                    if (!Number.isFinite(id) || id <= 0 || !code || !name) return [];
+                    return [{ id, code, name }];
+                });
             };
 
             const typeIds = [fgTypeId, sfgTypeId].filter(
@@ -268,49 +325,30 @@ export function ProcurementSkuTab({ permissionKey }: ProcurementSkuTabProps) {
 
             const byId = new Map<number, ItemOption>();
             for (const res of fetchLists) {
+                if (!res.isSuccessful) continue;
                 for (const row of mapDropdownResponse(res)) {
                     byId.set(row.id, row);
                 }
             }
 
-            for (const catalogItem of Object.values(GSV7_ITEMS)) {
-                if (catalogItem.type !== "FG" && catalogItem.type !== "SFG") continue;
-                const demo: ItemOption = {
-                    id: getGsv7ItemIdByCode(catalogItem.code),
-                    code: catalogItem.code,
-                    name: catalogItem.name,
-                };
-                const exists = [...byId.values()].some(
-                    (m) => normalizeItemCode(m.code) === normalizeItemCode(demo.code),
-                );
-                if (!exists) byId.set(demo.id, demo);
-            }
-
-            setItemOptions(
-                [...byId.values()].sort((a, b) =>
-                    a.code.localeCompare(b.code, undefined, { sensitivity: "base" }),
-                ),
+            const options = Array.from(byId.values()).sort((a, b) =>
+                a.code.localeCompare(b.code, undefined, { sensitivity: "base" }),
             );
+            setItemOptions(options);
+            return options;
         } catch (e) {
             console.error("Failed to load FG/SFG items for SKU:", e);
-            setItemOptions(
-                Object.values(GSV7_ITEMS)
-                    .filter((item) => item.type === "FG" || item.type === "SFG")
-                    .map((item) => ({
-                        id: getGsv7ItemIdByCode(item.code),
-                        code: item.code,
-                        name: item.name,
-                    })),
-            );
+            setItemOptions([]);
+            return [];
         } finally {
             setIsLoadingItems(false);
         }
     }, [fgTypeId, sfgTypeId]);
 
     useEffect(() => {
-        if (!isDialogOpen) return;
+        if (!isDialogOpen || editingId !== null) return;
         void loadItemOptions();
-    }, [isDialogOpen, loadItemOptions]);
+    }, [isDialogOpen, editingId, loadItemOptions]);
 
     const itemDropdownOptions = useMemo(
         () =>
@@ -328,29 +366,11 @@ export function ProcurementSkuTab({ permissionKey }: ProcurementSkuTabProps) {
         [itemOptions, skuFormData.itemId],
     );
 
-    const filteredSkus = useMemo(() => {
-        const q = debouncedSearchTerm.trim().toLowerCase();
-        if (!q) return allSkus;
-        return allSkus.filter(
-            (sku) =>
-                sku.code.toLowerCase().includes(q) ||
-                sku.name.toLowerCase().includes(q) ||
-                (sku.item_code?.toLowerCase().includes(q) ?? false) ||
-                (sku.item_name?.toLowerCase().includes(q) ?? false),
-        );
-    }, [allSkus, debouncedSearchTerm]);
-
-    const totalSkuCount = filteredSkus.length;
     const totalPages = Math.max(1, Math.ceil(totalSkuCount / itemsPerPage));
-
-    const paginatedSkus = useMemo(() => {
-        const start = (currentPage - 1) * itemsPerPage;
-        return filteredSkus.slice(start, start + itemsPerPage);
-    }, [filteredSkus, currentPage, itemsPerPage]);
 
     useEffect(() => {
         setCurrentPage(1);
-    }, [debouncedSearchTerm]);
+    }, [debouncedSearchTerm, itemsPerPage]);
 
     useEffect(() => {
         if (currentPage > totalPages) {
@@ -367,12 +387,16 @@ export function ProcurementSkuTab({ permissionKey }: ProcurementSkuTabProps) {
             errors.code = "SKU Code is required";
         } else if (!hasMinTwoChars(codeTrimmed)) {
             errors.code = CODE_NAME_INLINE_ERROR;
+        } else if (codeTrimmed.length > SKU_CODE_MAX_LENGTH) {
+            errors.code = `SKU Code cannot exceed ${SKU_CODE_MAX_LENGTH} characters`;
         }
 
         if (!nameTrimmed) {
             errors.name = "SKU Name is required";
         } else if (!hasMinTwoChars(nameTrimmed)) {
             errors.name = CODE_NAME_INLINE_ERROR;
+        } else if (nameTrimmed.length > SKU_NAME_MAX_LENGTH) {
+            errors.name = `SKU Name cannot exceed ${SKU_NAME_MAX_LENGTH} characters`;
         }
 
         setSkuFormErrors(errors);
@@ -390,86 +414,153 @@ export function ProcurementSkuTab({ permissionKey }: ProcurementSkuTabProps) {
         setIsDialogOpen(true);
     };
 
-    const handleEditClick = (sku: SkuRecord) => {
+    const handleEditClick = async (sku: SkuRecord) => {
         setEditingId(sku.id);
-        setSkuFormData({
-            code: sku.code,
-            itemId: sku.item_id != null ? String(sku.item_id) : "",
-            name: sku.name,
-            dimensions: sku.dimensions ?? "",
-            weight: sku.weight ?? "",
-            type: sku.type ?? "",
-            description: sku.description ?? "",
-        });
         setSkuFormErrors(emptySkuFormErrors);
+        resetSkuForm();
         setIsDialogOpen(true);
+        setIsFormDetailLoading(true);
+        try {
+            const detailRes = await skuApi.getById(sku.id);
+
+            if (!detailRes.isSuccessful || !detailRes.data) {
+                showSkuToast({
+                    variant: "destructive",
+                    title: "Error",
+                    description: detailRes.message || "Failed to load SKU details.",
+                });
+                setIsDialogOpen(false);
+                setEditingId(null);
+                return;
+            }
+
+            const detail = detailRes.data;
+            const linkedItem = itemOptionFromSkuDetail(detail);
+            setItemOptions(linkedItem ? [linkedItem] : []);
+            setSkuFormData(mapSkuDetailToForm(detail));
+        } catch (error: unknown) {
+            const message =
+                error instanceof Error ? error.message : "Failed to load SKU details.";
+            showSkuToast({
+                variant: "destructive",
+                title: "Error",
+                description: message,
+            });
+            setIsDialogOpen(false);
+            setEditingId(null);
+        } finally {
+            setIsFormDetailLoading(false);
+        }
     };
 
     const handleDialogOpenChange = (open: boolean) => {
         setIsDialogOpen(open);
         if (!open) {
             setEditingId(null);
+            setIsFormDetailLoading(false);
+            setItemOptions([]);
             resetSkuForm();
         }
     };
 
-    const handleSaveSku = () => {
+    const handleSaveSku = async () => {
         if (!validateSkuForm()) return;
 
         const code = skuFormData.code.trim();
         const name = skuFormData.name.trim();
-        const duplicate = allSkus.some(
-            (s) => s.code.toLowerCase() === code.toLowerCase() && s.id !== editingId,
-        );
-        if (duplicate) {
-            setSkuFormErrors((prev) => ({
-                ...prev,
-                code: "SKU Code already exists",
-            }));
+
+        if (editingId !== null) {
+            const itemsId = Number(skuFormData.itemId);
+            if (!Number.isFinite(itemsId) || itemsId <= 0) {
+                showSkuToast({
+                    variant: "destructive",
+                    title: "Validation Error",
+                    description: "Linked item is missing for this SKU.",
+                });
+                return;
+            }
+
+            setIsSubmitting(true);
+            try {
+                const res = await skuApi.update(editingId, buildSkuWritePayload(skuFormData, itemsId));
+                if (res.isSuccessful) {
+                    showSkuToast({
+                        title: "SKU Updated",
+                        description: res.message || "SKU record updated successfully.",
+                        variant: "success",
+                    });
+                    handleDialogOpenChange(false);
+                    void fetchSkus();
+                } else {
+                    const message = res.message || "Failed to update SKU record.";
+                    if (/code|duplicate|exists/i.test(message)) {
+                        setSkuFormErrors((prev) => ({ ...prev, code: message }));
+                    } else {
+                        showSkuToast({
+                            variant: "destructive",
+                            title: "Error",
+                            description: message,
+                        });
+                    }
+                }
+            } catch (error: unknown) {
+                const message =
+                    error instanceof Error ? error.message : "Failed to update SKU record.";
+                showSkuToast({
+                    variant: "destructive",
+                    title: "Error",
+                    description: message,
+                });
+            } finally {
+                setIsSubmitting(false);
+            }
+            return;
+        }
+
+        const itemsId = Number(skuFormData.itemId);
+        if (!Number.isFinite(itemsId) || itemsId <= 0) {
+            showSkuToast({
+                variant: "destructive",
+                title: "Validation Error",
+                description: "Please select an item.",
+            });
             return;
         }
 
         setIsSubmitting(true);
         try {
-            let updated: SkuRecord[];
-            const payload: Omit<SkuRecord, "id"> = {
-                code,
-                name,
-                item_id: selectedItem?.id,
-                item_code: selectedItem?.code,
-                item_name: selectedItem?.name,
-                dimensions: skuFormData.dimensions.trim() || undefined,
-                weight: skuFormData.weight.trim() || undefined,
-                type: skuFormData.type.trim() || undefined,
-                description: skuFormData.description.trim() || undefined,
-            };
-
-            if (editingId !== null) {
-                updated = allSkus.map((s) =>
-                    s.id === editingId ? { ...s, ...payload } : s,
-                );
+            const res = await skuApi.create(buildSkuWritePayload(skuFormData, itemsId));
+            if (res.isSuccessful) {
+                showSkuToast({
+                    title: "SKU Created",
+                    description: res.message || "SKU record created successfully.",
+                    variant: "success",
+                });
+                handleDialogOpenChange(false);
+                if (currentPage !== 1) {
+                    setCurrentPage(1);
+                } else {
+                    void fetchSkus();
+                }
             } else {
-                updated = [
-                    ...allSkus,
-                    { id: nextSkuId(allSkus), ...payload },
-                ];
+                const message = res.message || "Failed to create SKU record.";
+                if (/code|duplicate|exists/i.test(message)) {
+                    setSkuFormErrors((prev) => ({ ...prev, code: message }));
+                } else {
+                    showSkuToast({
+                        variant: "destructive",
+                        title: "Error",
+                        description: message,
+                    });
+                }
             }
-
-            saveSkusToStorage(updated);
-            setAllSkus(updated);
-            toast({
-                title: editingId ? "SKU Updated" : "SKU Created",
-                description: editingId
-                    ? "SKU record updated successfully."
-                    : "SKU record created successfully.",
-                variant: "success",
-            });
-            handleDialogOpenChange(false);
-        } catch {
-            toast({
+        } catch (error: unknown) {
+            const message =
+                error instanceof Error ? error.message : "Failed to create SKU record.";
+            showSkuToast({
                 variant: "destructive",
                 title: "Error",
-                description: "Failed to save SKU record.",
+                description: message,
             });
         } finally {
             setIsSubmitting(false);
@@ -481,23 +572,36 @@ export function ProcurementSkuTab({ permissionKey }: ProcurementSkuTabProps) {
         setIsDeleteAlertOpen(true);
     };
 
-    const confirmDelete = () => {
+    const confirmDelete = async () => {
         if (skuToDeleteId === null) return;
         setIsDeleting(true);
         try {
-            const updated = allSkus.filter((s) => s.id !== skuToDeleteId);
-            saveSkusToStorage(updated);
-            setAllSkus(updated);
-            toast({
-                title: "Deleted",
-                description: "SKU record deleted successfully.",
-                variant: "success",
-            });
-        } catch {
-            toast({
+            const res = await skuApi.delete(skuToDeleteId);
+            if (res.isSuccessful) {
+                showSkuToast({
+                    title: "Deleted",
+                    description: res.message || "SKU record deleted successfully.",
+                    variant: "success",
+                });
+                if (allSkus.length === 1 && currentPage > 1) {
+                    setCurrentPage(currentPage - 1);
+                } else {
+                    void fetchSkus();
+                }
+            } else {
+                showSkuToast({
+                    variant: "destructive",
+                    title: "Error",
+                    description: res.message || "Failed to delete SKU record.",
+                });
+            }
+        } catch (error: unknown) {
+            const message =
+                error instanceof Error ? error.message : "Failed to delete SKU record.";
+            showSkuToast({
                 variant: "destructive",
                 title: "Error",
-                description: "Failed to delete SKU record.",
+                description: message,
             });
         } finally {
             setIsDeleting(false);
@@ -527,7 +631,9 @@ export function ProcurementSkuTab({ permissionKey }: ProcurementSkuTabProps) {
         !hasMinTwoChars(skuFormData.name) ||
         !!codeFieldError ||
         !!nameFieldError ||
-        isSubmitting;
+        isSubmitting ||
+        isFormDetailLoading ||
+        (editingId === null && !skuFormData.itemId);
 
     return (
         <>
@@ -588,7 +694,7 @@ export function ProcurementSkuTab({ permissionKey }: ProcurementSkuTabProps) {
                                             {listError}
                                         </TableCell>
                                     </TableRow>
-                                ) : paginatedSkus.length === 0 ? (
+                                ) : allSkus.length === 0 ? (
                                     <TableRow>
                                         <TableCell
                                             colSpan={4}
@@ -598,7 +704,7 @@ export function ProcurementSkuTab({ permissionKey }: ProcurementSkuTabProps) {
                                         </TableCell>
                                     </TableRow>
                                 ) : (
-                                    paginatedSkus.map((sku) => (
+                                    allSkus.map((sku) => (
                                         <TableRow key={sku.id} className="group">
                                             <TableCell className="align-top font-medium wrap-break-word whitespace-normal [word-break:break-word]">
                                                 {sku.code}
@@ -667,7 +773,13 @@ export function ProcurementSkuTab({ permissionKey }: ProcurementSkuTabProps) {
                         </DialogHeader>
                     </div>
 
-                    <div className="flex-1 overflow-y-auto px-6 py-5">
+                    <div className="relative flex-1 overflow-y-auto px-6 py-5">
+                        {isFormDetailLoading && (
+                            <div className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-3 bg-background/60">
+                                <Loader2 className="h-8 w-8 animate-spin text-primary" />
+                                <p className="text-sm text-muted-foreground">Loading...</p>
+                            </div>
+                        )}
                         <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
                             <div className="space-y-2">
                                 <Label htmlFor="sku_code" className="text-xs font-semibold">
@@ -676,6 +788,7 @@ export function ProcurementSkuTab({ permissionKey }: ProcurementSkuTabProps) {
                                 <Input
                                     id="sku_code"
                                     value={skuFormData.code}
+                                    maxLength={SKU_CODE_MAX_LENGTH}
                                     onChange={(e) => {
                                         const val = e.target.value;
                                         setSkuFormData((prev) => ({ ...prev, code: val }));
@@ -694,13 +807,14 @@ export function ProcurementSkuTab({ permissionKey }: ProcurementSkuTabProps) {
                                             "border-destructive focus-visible:ring-destructive",
                                     )}
                                     aria-invalid={!!codeFieldError}
+                                    disabled={isFormDetailLoading}
                                 />
                                 {codeFieldError ? (
                                     <p className="text-sm text-destructive">{codeFieldError}</p>
                                 ) : null}
                             </div>
                             <SearchableSelect
-                                label="Item"
+                                label="Item *"
                                 placeholder={isLoadingItems ? "Loading items..." : "Select Item"}
                                 value={skuFormData.itemId || undefined}
                                 options={itemDropdownOptions}
@@ -711,7 +825,9 @@ export function ProcurementSkuTab({ permissionKey }: ProcurementSkuTabProps) {
                                         : s;
                                     setSkuFormData((prev) => ({ ...prev, itemId }));
                                 }}
-                                disabled={isLoadingItems}
+                                disabled={isLoadingItems || isFormDetailLoading || editingId !== null}
+                                showSelectedTitle
+                                compactStackedSelected
                             />
                             <div className="space-y-2">
                                 <Label htmlFor="sku_name" className="text-xs font-semibold">
@@ -720,6 +836,7 @@ export function ProcurementSkuTab({ permissionKey }: ProcurementSkuTabProps) {
                                 <Input
                                     id="sku_name"
                                     value={skuFormData.name}
+                                    maxLength={SKU_NAME_MAX_LENGTH}
                                     onChange={(e) => {
                                         const val = e.target.value;
                                         setSkuFormData((prev) => ({ ...prev, name: val }));
@@ -732,6 +849,7 @@ export function ProcurementSkuTab({ permissionKey }: ProcurementSkuTabProps) {
                                             "border-destructive focus-visible:ring-destructive",
                                     )}
                                     aria-invalid={!!nameFieldError}
+                                    disabled={isFormDetailLoading}
                                 />
                                 {nameFieldError ? (
                                     <p className="text-sm text-destructive">{nameFieldError}</p>

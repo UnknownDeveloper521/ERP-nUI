@@ -71,6 +71,7 @@ import {
     getFirstAssignedMatch,
     prioritizeByAssigned,
 } from "@/utils/assignedDropdown";
+import { loadProcurementSkuRecords, type SkuRecord } from "@/pages/masters/ProcurementSkuTab";
 
 /**
  * Entity master data (GET /api/common/getentityvalues)
@@ -143,6 +144,9 @@ interface WarehouseItemMappingRow {
     item_id: number;
     item_name: string;
     item_code: string;
+    sku_id: number;
+    sku_code: string;
+    sku_name: string;
     uom: string;
     capacity: string;
     status: WarehouseItemMappingStatus;
@@ -281,7 +285,27 @@ export default function InventoryMasters() {
     const [warehouseItemMappings, setWarehouseItemMappings] = useState<Record<number, WarehouseItemMappingRow[]>>({});
     const [warehouseItemDraft, setWarehouseItemDraft] = useState<WarehouseItemMappingRow[]>([]);
     const [selectedWarehouseItemId, setSelectedWarehouseItemId] = useState<number | null>(null);
+    const [selectedWarehouseSkuId, setSelectedWarehouseSkuId] = useState<number | null>(null);
+    const [warehouseSkuRecords, setWarehouseSkuRecords] = useState<SkuRecord[]>([]);
     const [warehouseItemInlineError, setWarehouseItemInlineError] = useState<string>("");
+
+    const warehouseSkuOptions = useMemo(() => {
+        if (!selectedWarehouseItemId) return [];
+        let list = warehouseSkuRecords;
+        const forItem = warehouseSkuRecords.filter(
+            (s) => Number(s.item_id) === Number(selectedWarehouseItemId),
+        );
+        if (forItem.length > 0) list = forItem;
+        return list.map((s) => ({
+            value: s.id,
+            label: `${s.code} — ${s.name}`,
+            primaryText: s.name,
+            secondaryText: s.code,
+            disabled: warehouseItemDraft.some(
+                (r) => r.item_id === selectedWarehouseItemId && r.sku_id === s.id,
+            ),
+        }));
+    }, [warehouseSkuRecords, selectedWarehouseItemId, warehouseItemDraft]);
 
     const assignedLocationKey = getAssignedIds("location").join(",");
     const assignedWarehouseKey = getAssignedIds("warehouse").join(",");
@@ -626,6 +650,8 @@ export default function InventoryMasters() {
         const existing = Number.isFinite(wid) ? (warehouseItemMappings[wid] || []) : [];
         setWarehouseItemDraft(existing);
         setSelectedWarehouseItemId(null);
+        setSelectedWarehouseSkuId(null);
+        setWarehouseSkuRecords(loadProcurementSkuRecords());
         setWarehouseItemInlineError("");
         setIsWarehouseItemDialogOpen(true);
     };
@@ -1274,6 +1300,8 @@ export default function InventoryMasters() {
                     if (!open) {
                         setActiveWarehouseForMapping(null);
                         setSelectedWarehouseItemId(null);
+                        setSelectedWarehouseSkuId(null);
+                        setWarehouseSkuRecords([]);
                         setWarehouseItemInlineError("");
                         setWarehouseItemDraft([]);
                     }
@@ -1291,38 +1319,68 @@ export default function InventoryMasters() {
                         <div className="flex flex-col gap-3 md:flex-row md:items-end md:gap-4">
                             <div className="min-w-0 flex-1">
                                 <SearchableSelect
-                                    label="Search & select item..."
+                                    label="Item *"
                                     value={selectedWarehouseItemId ?? undefined}
                                     options={MOCK_WAREHOUSE_ITEMS.map((it) => ({
                                         value: it.id,
                                         label: `${it.item_code} - ${it.item_name}`,
                                         primaryText: it.item_name,
                                         secondaryText: it.item_code,
-                                        disabled: warehouseItemDraft.some((r) => r.item_id === it.id),
                                     }))}
                                     onChange={(val) => {
                                         setSelectedWarehouseItemId(val ? Number(val) : null);
+                                        setSelectedWarehouseSkuId(null);
                                         setWarehouseItemInlineError("");
                                     }}
                                     placeholder="Search & select item..."
                                     selectedTruncate="end"
                                     listClassName="max-h-[min(50vh,320px)]"
                                 />
-                                {warehouseItemInlineError && (
-                                    <div className="mt-2 text-xs text-destructive">
-                                        {warehouseItemInlineError}
-                                    </div>
-                                )}
+                            </div>
+                            <div className="min-w-0 flex-1">
+                                <SearchableSelect
+                                    label="SKU *"
+                                    value={selectedWarehouseSkuId ?? undefined}
+                                    options={warehouseSkuOptions}
+                                    onChange={(val) => {
+                                        setSelectedWarehouseSkuId(val ? Number(val) : null);
+                                        setWarehouseItemInlineError("");
+                                    }}
+                                    placeholder={
+                                        !selectedWarehouseItemId
+                                            ? "Select item first"
+                                            : warehouseSkuOptions.length === 0
+                                              ? "No SKUs for this item"
+                                              : "Select SKU"
+                                    }
+                                    disabled={
+                                        !selectedWarehouseItemId || warehouseSkuOptions.length === 0
+                                    }
+                                    selectedTruncate="end"
+                                    listClassName="max-h-[min(50vh,320px)]"
+                                />
                             </div>
                             <Button
                                 type="button"
                                 onClick={() => {
-                                    if (!selectedWarehouseItemId) return;
+                                    if (!selectedWarehouseItemId) {
+                                        setWarehouseItemInlineError("Please select an item.");
+                                        return;
+                                    }
+                                    if (!selectedWarehouseSkuId) {
+                                        setWarehouseItemInlineError("Please select a SKU.");
+                                        return;
+                                    }
                                     const selected = MOCK_WAREHOUSE_ITEMS.find((x) => x.id === selectedWarehouseItemId);
-                                    if (!selected) return;
-                                    const exists = warehouseItemDraft.some((r) => r.item_id === selectedWarehouseItemId);
+                                    const selectedSku = warehouseSkuRecords.find((x) => x.id === selectedWarehouseSkuId);
+                                    if (!selected || !selectedSku) return;
+                                    const exists = warehouseItemDraft.some(
+                                        (r) =>
+                                            r.item_id === selectedWarehouseItemId &&
+                                            r.sku_id === selectedWarehouseSkuId,
+                                    );
                                     if (exists) {
-                                        setWarehouseItemInlineError("Item already added");
+                                        setWarehouseItemInlineError("This item and SKU combination is already added.");
                                         return;
                                     }
                                     setWarehouseItemDraft((prev) => ([
@@ -1331,18 +1389,22 @@ export default function InventoryMasters() {
                                             item_id: selected.id,
                                             item_name: selected.item_name,
                                             item_code: selected.item_code,
+                                            sku_id: selectedSku.id,
+                                            sku_code: selectedSku.code,
+                                            sku_name: selectedSku.name,
                                             uom: selected.uom,
                                             capacity: "",
                                             status: "Active",
                                         }
                                     ]));
                                     setSelectedWarehouseItemId(null);
+                                    setSelectedWarehouseSkuId(null);
                                     setWarehouseItemInlineError("");
                                 }}
-                                disabled={!selectedWarehouseItemId}
+                                disabled={!selectedWarehouseItemId || !selectedWarehouseSkuId}
                                 className={cn(
-                                    "h-10 px-6 font-semibold",
-                                    selectedWarehouseItemId
+                                    "h-10 px-6 font-semibold shrink-0",
+                                    selectedWarehouseItemId && selectedWarehouseSkuId
                                         ? "bg-blue-600 hover:bg-blue-700 text-white"
                                         : "bg-muted text-muted-foreground border-muted hover:bg-muted disabled:opacity-100!"
                                 )}
@@ -1351,6 +1413,11 @@ export default function InventoryMasters() {
                                 Add
                             </Button>
                         </div>
+                        {warehouseItemInlineError && (
+                            <div className="text-xs text-destructive -mt-2">
+                                {warehouseItemInlineError}
+                            </div>
+                        )}
 
                         <div className="rounded-md border overflow-hidden">
                             <Table>
@@ -1358,21 +1425,26 @@ export default function InventoryMasters() {
                                     <TableRow className="bg-muted/50">
                                         <TableHead>Item Name</TableHead>
                                         <TableHead>Item Code</TableHead>
+                                        <TableHead>SKU</TableHead>
                                         <TableHead className="w-[120px]">UOM</TableHead>
                                     </TableRow>
                                 </TableHeader>
                                 <TableBody>
                                     {warehouseItemDraft.length === 0 ? (
                                         <TableRow>
-                                            <TableCell colSpan={3} className="h-24 text-center text-muted-foreground">
+                                            <TableCell colSpan={4} className="h-24 text-center text-muted-foreground">
                                                 No items mapped for this warehouse.
                                             </TableCell>
                                         </TableRow>
                                     ) : (
                                         warehouseItemDraft.map((row, idx) => (
-                                            <TableRow key={`${row.item_id}-${idx}`} className="hover:bg-muted/30 transition-colors">
+                                            <TableRow key={`${row.item_id}-${row.sku_id}-${idx}`} className="hover:bg-muted/30 transition-colors">
                                                 <TableCell className="font-medium">{row.item_name}</TableCell>
                                                 <TableCell className="font-mono text-xs text-muted-foreground">{row.item_code}</TableCell>
+                                                <TableCell className="text-sm">
+                                                    <span className="font-medium">{row.sku_name}</span>
+                                                    <span className="block font-mono text-xs text-muted-foreground">{row.sku_code}</span>
+                                                </TableCell>
                                                 <TableCell className="text-sm">{row.uom || "-"}</TableCell>
                                             </TableRow>
                                         ))

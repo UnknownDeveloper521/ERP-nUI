@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useCallback } from "react";
+import { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import { useDebounce } from "@/hooks/useDebounce";
 import { Plus, Trash2, Loader2, GripVertical } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -23,6 +23,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { AppListToolbar } from "@/components/shared/AppListToolbar";
+import { DataTablePagination } from "@/components/shared/DataTablePagination";
 import {
     Table,
     TableBody,
@@ -33,20 +34,12 @@ import {
 } from "@/components/ui/table";
 import { SearchableSelect } from "@/components/shared/SearchableSelect";
 import { TableActionButtons } from "@/components/shared/TableActionButtons";
-import { commonApi, operationsApi } from "@/lib/api";
+import { commonApi, parseSkuDropdownRecords, skuOperationApi, type SkuOperationDetailOperation, type SkuOperationDetailRecord, type SkuOperationListRecord } from "@/lib/api";
 import { useCommonStore } from "@/store/commonStore";
-import { GSV7_ITEMS, getGsv7DemoOperationOptions, getGsv7ItemIdByCode } from "@/lib/gsv7OperationsMockData";
 import {
-    deleteSkuOperationMapping,
-    getSkuOperationMapping,
-    listSkuOperationMappings,
-    saveSkuOperationMapping,
     skuOperationMappingKey,
-    withSkuOperationSequences,
     type SkuMappedOperation,
-    type SkuOperationMappingRecord,
 } from "@/lib/skuOperationMappingStorage";
-import { loadProcurementSkuRecords, type SkuRecord } from "@/pages/masters/ProcurementSkuTab";
 import { cn } from "@/lib/utils";
 import { useToast } from "@/hooks/use-toast";
 
@@ -67,20 +60,18 @@ interface FgOption {
     name: string;
 }
 
-function normalizeOpCode(code: string) {
-    return String(code ?? "")
-        .trim()
-        .toUpperCase()
-        .replace(/\s+/g, "");
+interface SkuOption {
+    id: number;
+    code: string;
+    name: string;
 }
 
-function mergeOperationOptions(
-    apiOptions: OperationOption[],
-    demoOptions: { id: number; code: string; name: string }[],
-): OperationOption[] {
-    const apiCodes = new Set(apiOptions.map((o) => normalizeOpCode(o.code)));
-    const extra = demoOptions.filter((d) => !apiCodes.has(normalizeOpCode(d.code)));
-    return [...apiOptions, ...extra];
+interface SkuOperationSequenceRow extends SkuMappedOperation {
+    lineId?: number;
+}
+
+function withSequenceRows(rows: SkuOperationSequenceRow[]): SkuOperationSequenceRow[] {
+    return rows.map((row, index) => ({ ...row, sequence: index + 1 }));
 }
 
 /** Command may pass composite value; keep only the operation id segment. */
@@ -92,6 +83,22 @@ function coerceSelectValue(val: string | number): string {
         return String(parts[parts.length - 1] ?? "").trim();
     }
     return s;
+}
+
+function mapDetailOperationsToSequenceRows(
+    operations: SkuOperationDetailOperation[],
+): SkuOperationSequenceRow[] {
+    return withSequenceRows(
+        [...operations]
+            .sort((a, b) => a.sequence - b.sequence)
+            .map((op) => ({
+                lineId: op.id,
+                operation_id: op.operation_id,
+                operation_code: op.operation_code,
+                operation_name: op.operation_name,
+                sequence: op.sequence,
+            })),
+    );
 }
 
 interface ProductionSkuOperationTabProps {
@@ -120,32 +127,67 @@ export function ProductionSkuOperationTab({ canEdit, canDelete = canEdit }: Prod
     }, [itemTypes]);
 
     const [fgOptions, setFgOptions] = useState<FgOption[]>([]);
-    const [skuRecords, setSkuRecords] = useState<SkuRecord[]>([]);
+    const [skuRecords, setSkuRecords] = useState<SkuOption[]>([]);
     const [operationOptions, setOperationOptions] = useState<OperationOption[]>([]);
-    const [mappingList, setMappingList] = useState<SkuOperationMappingRecord[]>([]);
+    const [mappingList, setMappingList] = useState<SkuOperationListRecord[]>([]);
     const [searchTerm, setSearchTerm] = useState("");
     const debouncedSearchTerm = useDebounce(searchTerm, 500);
+    const [currentPage, setCurrentPage] = useState(1);
+    const [itemsPerPage, setItemsPerPage] = useState(10);
+    const [totalMappingCount, setTotalMappingCount] = useState(0);
+    const [isListLoading, setIsListLoading] = useState(false);
+    const [listError, setListError] = useState<string | null>(null);
 
     const [selectedFgId, setSelectedFgId] = useState<string>("");
     const [selectedSkuId, setSelectedSkuId] = useState<string>("");
     const [selectedOperationId, setSelectedOperationId] = useState<string>("");
-    const [sequenceRows, setSequenceRows] = useState<SkuMappedOperation[]>([]);
+    const [sequenceRows, setSequenceRows] = useState<SkuOperationSequenceRow[]>([]);
     const [activeMappingKey, setActiveMappingKey] = useState<string | null>(null);
     const [showConfigureForm, setShowConfigureForm] = useState(false);
     const [formMode, setFormMode] = useState<"create" | "edit">("create");
+    const [editingMappingId, setEditingMappingId] = useState<number | null>(null);
+    const [deletedOperationLineIds, setDeletedOperationLineIds] = useState<number[]>([]);
 
     const [isLoadingFg, setIsLoadingFg] = useState(false);
+    const [isLoadingSku, setIsLoadingSku] = useState(false);
     const [isLoadingOps, setIsLoadingOps] = useState(false);
+    const [isFormDetailLoading, setIsFormDetailLoading] = useState(false);
     const [isSaving, setIsSaving] = useState(false);
     const [isDeleting, setIsDeleting] = useState(false);
     const [isDeleteAlertOpen, setIsDeleteAlertOpen] = useState(false);
-    const [mappingToDelete, setMappingToDelete] = useState<SkuOperationMappingRecord | null>(null);
+    const [mappingToDelete, setMappingToDelete] = useState<SkuOperationListRecord | null>(null);
     const [draggedRowIndex, setDraggedRowIndex] = useState<number | null>(null);
     const [dragOverRowIndex, setDragOverRowIndex] = useState<number | null>(null);
+    const editSkuPreserveRef = useRef<SkuOption | null>(null);
 
-    const refreshMappingList = useCallback(() => {
-        setMappingList(listSkuOperationMappings());
-    }, []);
+    const fetchSkuOperationList = useCallback(async () => {
+        setIsListLoading(true);
+        setListError(null);
+        try {
+            const res = await skuOperationApi.getList({
+                page: currentPage,
+                limit: itemsPerPage,
+                search: debouncedSearchTerm.trim() || undefined,
+            });
+            if (res.isSuccessful && res.data) {
+                setMappingList(res.data.records ?? []);
+                const pagination = res.data.pagination;
+                setTotalMappingCount(
+                    pagination?.totalCount != null ? pagination.totalCount : (res.data.records ?? []).length,
+                );
+            } else {
+                setListError(res.message || "Failed to load SKU operation mappings.");
+                setMappingList([]);
+                setTotalMappingCount(0);
+            }
+        } catch {
+            setListError("Unable to load SKU operation mappings. Please try again.");
+            setMappingList([]);
+            setTotalMappingCount(0);
+        } finally {
+            setIsListLoading(false);
+        }
+    }, [currentPage, itemsPerPage, debouncedSearchTerm]);
 
     const loadFgOptions = useCallback(async () => {
         setIsLoadingFg(true);
@@ -183,24 +225,10 @@ export function ProductionSkuOperationTab({ canEdit, canDelete = canEdit }: Prod
 
             const byId = new Map<number, FgOption>();
             for (const res of fetchLists) {
+                if (!res.isSuccessful) continue;
                 for (const row of mapDropdownResponse(res)) {
                     byId.set(row.id, row);
                 }
-            }
-
-            const gsv7FgSfg: FgOption[] = Object.values(GSV7_ITEMS)
-                .filter((item) => item.type === "FG" || item.type === "SFG")
-                .map((item) => ({
-                    id: getGsv7ItemIdByCode(item.code),
-                    code: item.code,
-                    name: item.name,
-                }));
-
-            for (const demo of gsv7FgSfg) {
-                const exists = [...byId.values()].some(
-                    (m) => normalizeOpCode(m.code) === normalizeOpCode(demo.code),
-                );
-                if (!exists) byId.set(demo.id, demo);
             }
 
             const merged = [...byId.values()].sort((a, b) =>
@@ -209,54 +237,97 @@ export function ProductionSkuOperationTab({ canEdit, canDelete = canEdit }: Prod
             setFgOptions(merged);
         } catch (e) {
             console.error("Failed to load FG/SFG items:", e);
-            setFgOptions(
-                Object.values(GSV7_ITEMS)
-                    .filter((item) => item.type === "FG" || item.type === "SFG")
-                    .map((item) => ({
-                        id: getGsv7ItemIdByCode(item.code),
-                        code: item.code,
-                        name: item.name,
-                    })),
-            );
+            setFgOptions([]);
         } finally {
             setIsLoadingFg(false);
         }
     }, [fgTypeId, sfgTypeId]);
 
+    const loadSkuOptions = useCallback(async (itemId?: number) => {
+        if (itemId == null || !Number.isFinite(itemId) || itemId <= 0) {
+            setSkuRecords([]);
+            return;
+        }
+
+        setIsLoadingSku(true);
+        try {
+            const res = await commonApi.getSkuDropdown({ item_id: itemId });
+            if (res.isSuccessful && res.data) {
+                const records = [...parseSkuDropdownRecords(res.data)];
+                const preserve = editSkuPreserveRef.current;
+                if (preserve && preserve.id > 0 && preserve.code && preserve.name) {
+                    editSkuPreserveRef.current = null;
+                    if (!records.some((sku) => sku.id === preserve.id)) {
+                        records.push(preserve);
+                        records.sort((a, b) =>
+                            a.code.localeCompare(b.code, undefined, { sensitivity: "base" }),
+                        );
+                    }
+                }
+                setSkuRecords(records);
+            } else {
+                setSkuRecords([]);
+            }
+        } catch (e) {
+            console.error("Failed to load SKUs:", e);
+            setSkuRecords([]);
+        } finally {
+            setIsLoadingSku(false);
+        }
+    }, []);
+
     const loadOperationOptions = useCallback(async () => {
         setIsLoadingOps(true);
         try {
-            const res = await operationsApi.getAll({ page: 1, limit: 500 });
-            if (!res?.isSuccessful) {
-                setOperationOptions(mergeOperationOptions([], getGsv7DemoOperationOptions()));
+            const res = await commonApi.getOperations();
+            if (!res.isSuccessful) {
+                setOperationOptions([]);
                 return;
             }
-            const records = Array.isArray(res?.data?.records) ? res.data.records : [];
+            const records = Array.isArray(res.data?.records) ? res.data.records : [];
             const mapped = records
-                .map((row: { operation?: { id?: number; code?: string; name?: string } }) => {
-                    const op = row?.operation ?? row;
-                    return {
-                        id: Number((op as { id?: number }).id),
-                        code: String((op as { code?: string }).code ?? "").trim(),
-                        name: String((op as { name?: string }).name ?? "").trim(),
-                    };
-                })
+                .map((row: Record<string, unknown>) => ({
+                    id: Number(row.id ?? row.operation_id),
+                    code: String(row.code ?? row.operation_code ?? "").trim(),
+                    name: String(row.name ?? row.operation_name ?? "").trim(),
+                }))
                 .filter((op) => Number.isFinite(op.id) && op.id > 0 && op.code && op.name);
-            setOperationOptions(mergeOperationOptions(mapped, getGsv7DemoOperationOptions()));
+            setOperationOptions(mapped);
         } catch (e) {
             console.error("Failed to load operations:", e);
-            setOperationOptions(getGsv7DemoOperationOptions());
+            setOperationOptions([]);
         } finally {
             setIsLoadingOps(false);
         }
     }, []);
 
     useEffect(() => {
-        setSkuRecords(loadProcurementSkuRecords());
-        refreshMappingList();
+        void fetchSkuOperationList();
+    }, [fetchSkuOperationList]);
+
+    useEffect(() => {
+        if (!showConfigureForm) return;
         void loadFgOptions();
         void loadOperationOptions();
-    }, [loadFgOptions, loadOperationOptions, refreshMappingList]);
+    }, [showConfigureForm, loadFgOptions, loadOperationOptions]);
+
+    useEffect(() => {
+        if (!showConfigureForm) return;
+        const itemId = Number(selectedFgId);
+        void loadSkuOptions(Number.isFinite(itemId) && itemId > 0 ? itemId : undefined);
+    }, [showConfigureForm, selectedFgId, loadSkuOptions]);
+
+    const totalPages = Math.max(1, Math.ceil(totalMappingCount / itemsPerPage));
+
+    useEffect(() => {
+        setCurrentPage(1);
+    }, [debouncedSearchTerm, itemsPerPage]);
+
+    useEffect(() => {
+        if (currentPage > totalPages) {
+            setCurrentPage(totalPages);
+        }
+    }, [currentPage, totalPages]);
 
     const selectedFg = useMemo(
         () => fgOptions.find((f) => String(f.id) === selectedFgId),
@@ -270,6 +341,8 @@ export function ProductionSkuOperationTab({ canEdit, canDelete = canEdit }: Prod
     const closeConfigureForm = useCallback(() => {
         setShowConfigureForm(false);
         setFormMode("create");
+        setEditingMappingId(null);
+        setDeletedOperationLineIds([]);
         setSelectedFgId("");
         setSelectedSkuId("");
         setSequenceRows([]);
@@ -277,50 +350,79 @@ export function ProductionSkuOperationTab({ canEdit, canDelete = canEdit }: Prod
         setSelectedOperationId("");
     }, []);
 
-    const loadMappingIntoForm = useCallback((record: SkuOperationMappingRecord) => {
-        setFormMode("edit");
-        setShowConfigureForm(true);
-        setSelectedFgId(String(record.fg_item_id));
-        setSelectedSkuId(String(record.sku_id));
-        setSequenceRows(withSkuOperationSequences(record.operations));
-        setActiveMappingKey(skuOperationMappingKey(record.fg_item_id, record.sku_id));
-        setSelectedOperationId("");
+    const ensureDetailOptionsInDropdowns = useCallback((detail: SkuOperationDetailRecord) => {
+        if (detail.item_id > 0 && detail.item_code && detail.item_name) {
+            setFgOptions((prev) => {
+                if (prev.some((item) => item.id === detail.item_id)) return prev;
+                return [
+                    ...prev,
+                    { id: detail.item_id, code: detail.item_code, name: detail.item_name },
+                ].sort((a, b) => a.code.localeCompare(b.code, undefined, { sensitivity: "base" }));
+            });
+        }
+
+        if (detail.sku_id > 0 && detail.sku_code && detail.sku_name) {
+            setSkuRecords((prev) => {
+                if (prev.some((sku) => sku.id === detail.sku_id)) return prev;
+                return [
+                    ...prev,
+                    { id: detail.sku_id, code: detail.sku_code, name: detail.sku_name },
+                ].sort((a, b) => a.code.localeCompare(b.code, undefined, { sensitivity: "base" }));
+            });
+        }
     }, []);
 
-    useEffect(() => {
-        if (!selectedFgId || !selectedSkuId) {
-            if (!activeMappingKey) setSequenceRows([]);
-            return;
-        }
-        const fgId = Number(selectedFgId);
-        const skuId = Number(selectedSkuId);
-        if (!Number.isFinite(fgId) || !Number.isFinite(skuId)) return;
+    const handleEditClick = useCallback(
+        async (row: SkuOperationListRecord) => {
+            setFormMode("edit");
+            setShowConfigureForm(true);
+            setEditingMappingId(row.id);
+            setDeletedOperationLineIds([]);
+            setSelectedFgId("");
+            setSelectedSkuId("");
+            setSequenceRows([]);
+            setActiveMappingKey(null);
+            setSelectedOperationId("");
+            setIsFormDetailLoading(true);
 
-        const key = skuOperationMappingKey(fgId, skuId);
-        if (activeMappingKey === key) return;
+            try {
+                const res = await skuOperationApi.getById(row.id);
+                if (!res.isSuccessful || !res.data) {
+                    toast({
+                        variant: "destructive",
+                        title: "Error",
+                        description: res.message || "Failed to load SKU operation mapping.",
+                    });
+                    closeConfigureForm();
+                    return;
+                }
 
-        const stored = getSkuOperationMapping(fgId, skuId);
-        setSequenceRows(stored?.operations ? withSkuOperationSequences(stored.operations) : []);
-        setActiveMappingKey(key);
-        setSelectedOperationId("");
-    }, [selectedFgId, selectedSkuId, activeMappingKey]);
-
-    const filteredMappingList = useMemo(() => {
-        const q = debouncedSearchTerm.trim().toLowerCase();
-        if (!q) return mappingList;
-        return mappingList.filter(
-            (r) =>
-                r.fg_code.toLowerCase().includes(q) ||
-                r.fg_name.toLowerCase().includes(q) ||
-                r.sku_code.toLowerCase().includes(q) ||
-                r.sku_name.toLowerCase().includes(q) ||
-                r.operations.some(
-                    (op) =>
-                        op.operation_code.toLowerCase().includes(q) ||
-                        op.operation_name.toLowerCase().includes(q),
-                ),
-        );
-    }, [mappingList, debouncedSearchTerm]);
+                const detail = res.data;
+                ensureDetailOptionsInDropdowns(detail);
+                editSkuPreserveRef.current = {
+                    id: detail.sku_id,
+                    code: detail.sku_code,
+                    name: detail.sku_name,
+                };
+                setSelectedFgId(String(detail.item_id));
+                setSelectedSkuId(String(detail.sku_id));
+                setSequenceRows(mapDetailOperationsToSequenceRows(detail.operations ?? []));
+                setActiveMappingKey(skuOperationMappingKey(detail.item_id, detail.sku_id));
+            } catch (error: unknown) {
+                const message =
+                    error instanceof Error ? error.message : "Failed to load SKU operation mapping.";
+                toast({
+                    variant: "destructive",
+                    title: "Error",
+                    description: message,
+                });
+                closeConfigureForm();
+            } finally {
+                setIsFormDetailLoading(false);
+            }
+        },
+        [closeConfigureForm, ensureDetailOptionsInDropdowns, toast],
+    );
 
     const operationDropdownOptions = useMemo(
         () =>
@@ -358,6 +460,8 @@ export function ProductionSkuOperationTab({ canEdit, canDelete = canEdit }: Prod
 
     const handleNewMapping = () => {
         setFormMode("create");
+        setEditingMappingId(null);
+        setDeletedOperationLineIds([]);
         setShowConfigureForm(true);
         setSelectedFgId("");
         setSelectedSkuId("");
@@ -387,7 +491,7 @@ export function ProductionSkuOperationTab({ canEdit, canDelete = canEdit }: Prod
             return;
         }
         setSequenceRows((prev) =>
-            withSkuOperationSequences([
+            withSequenceRows([
                 ...prev,
                 {
                     operation_id: op.id,
@@ -400,8 +504,15 @@ export function ProductionSkuOperationTab({ canEdit, canDelete = canEdit }: Prod
         setSelectedOperationId("");
     };
 
-    const handleRemove = (operationId: number) => {
-        setSequenceRows((prev) => withSkuOperationSequences(prev.filter((r) => r.operation_id !== operationId)));
+    const handleRemove = (row: SkuOperationSequenceRow) => {
+        if (row.lineId != null) {
+            setDeletedOperationLineIds((prev) =>
+                prev.includes(row.lineId!) ? prev : [...prev, row.lineId!],
+            );
+        }
+        setSequenceRows((prev) =>
+            withSequenceRows(prev.filter((r) => r.operation_id !== row.operation_id)),
+        );
     };
 
     const reorderRows = (fromIndex: number, toIndex: number) => {
@@ -410,11 +521,11 @@ export function ProductionSkuOperationTab({ canEdit, canDelete = canEdit }: Prod
             const next = [...prev];
             const [moved] = next.splice(fromIndex, 1);
             next.splice(toIndex, 0, moved);
-            return withSkuOperationSequences(next);
+            return withSequenceRows(next);
         });
     };
 
-    const handleSave = () => {
+    const handleSave = async () => {
         if (!selectedFg || !selectedSku) {
             toast({
                 variant: "destructive",
@@ -434,46 +545,131 @@ export function ProductionSkuOperationTab({ canEdit, canDelete = canEdit }: Prod
 
         setIsSaving(true);
         try {
-            const record: SkuOperationMappingRecord = {
-                fg_item_id: selectedFg.id,
-                fg_code: selectedFg.code,
-                fg_name: selectedFg.name,
+            if (formMode === "create") {
+                const res = await skuOperationApi.create({
+                    item_id: selectedFg.id,
+                    sku_id: selectedSku.id,
+                    operations: sequenceRows.map((row) => ({
+                        operation_id: row.operation_id,
+                        sequence: row.sequence,
+                    })),
+                });
+                if (res.isSuccessful) {
+                    toast({
+                        ...crudSuccessToast,
+                        title: "Mapping Created",
+                        description:
+                            res.message ||
+                            `SKU operation mapping created for ${selectedFg.code} / ${selectedSku.code}.`,
+                    });
+                    closeConfigureForm();
+                    if (currentPage !== 1) {
+                        setCurrentPage(1);
+                    } else {
+                        void fetchSkuOperationList();
+                    }
+                } else {
+                    toast({
+                        variant: "destructive",
+                        title: "Error",
+                        description: res.message || "Failed to create SKU operation mapping.",
+                    });
+                }
+                return;
+            }
+
+            if (editingMappingId == null) {
+                toast({
+                    variant: "destructive",
+                    title: "Error",
+                    description: "Mapping id is missing. Please reopen the record and try again.",
+                });
+                return;
+            }
+
+            const res = await skuOperationApi.update(editingMappingId, {
+                item_id: selectedFg.id,
                 sku_id: selectedSku.id,
-                sku_code: selectedSku.code,
-                sku_name: selectedSku.name,
-                operations: sequenceRows,
-            };
-            saveSkuOperationMapping(record);
-            setActiveMappingKey(skuOperationMappingKey(record.fg_item_id, record.sku_id));
-            refreshMappingList();
-            toast({
-                ...crudSuccessToast,
-                title: "Mapping Saved",
-                description: `SKU operation flow saved for ${selectedFg.code} / ${selectedSku.code}.`,
+                operations: sequenceRows.map((row) => {
+                    const operation: {
+                        operation_id: number;
+                        sequence: number;
+                        id?: number;
+                    } = {
+                        operation_id: row.operation_id,
+                        sequence: row.sequence,
+                    };
+                    if (row.lineId != null) operation.id = row.lineId;
+                    return operation;
+                }),
+                delete: deletedOperationLineIds.map((id) => ({ id })),
             });
-            closeConfigureForm();
+            if (res.isSuccessful) {
+                toast({
+                    ...crudSuccessToast,
+                    title: "Mapping Updated",
+                    description:
+                        res.message ||
+                        `SKU operation mapping updated for ${selectedFg.code} / ${selectedSku.code}.`,
+                });
+                closeConfigureForm();
+                void fetchSkuOperationList();
+            } else {
+                toast({
+                    variant: "destructive",
+                    title: "Error",
+                    description: res.message || "Failed to update SKU operation mapping.",
+                });
+            }
+        } catch (error: unknown) {
+            const message =
+                error instanceof Error ? error.message : "Failed to save SKU operation mapping.";
+            toast({
+                variant: "destructive",
+                title: "Error",
+                description: message,
+            });
         } finally {
             setIsSaving(false);
         }
     };
 
-    const handleDeleteClick = (record: SkuOperationMappingRecord) => {
+    const handleDeleteClick = (record: SkuOperationListRecord) => {
         setMappingToDelete(record);
         setIsDeleteAlertOpen(true);
     };
 
-    const confirmDeleteMapping = () => {
+    const confirmDeleteMapping = async () => {
         if (!mappingToDelete) return;
         setIsDeleting(true);
         try {
-            deleteSkuOperationMapping(mappingToDelete.fg_item_id, mappingToDelete.sku_id);
-            refreshMappingList();
-            const key = skuOperationMappingKey(mappingToDelete.fg_item_id, mappingToDelete.sku_id);
-            if (activeMappingKey === key) closeConfigureForm();
+            const res = await skuOperationApi.delete(mappingToDelete.id);
+            if (res.isSuccessful) {
+                toast({
+                    ...crudSuccessToast,
+                    title: "Deleted",
+                    description: res.message || "SKU operation mapping deleted successfully.",
+                });
+                if (editingMappingId === mappingToDelete.id) closeConfigureForm();
+                if (mappingList.length === 1 && currentPage > 1) {
+                    setCurrentPage(currentPage - 1);
+                } else {
+                    void fetchSkuOperationList();
+                }
+            } else {
+                toast({
+                    variant: "destructive",
+                    title: "Error",
+                    description: res.message || "Failed to delete SKU operation mapping.",
+                });
+            }
+        } catch (error: unknown) {
+            const message =
+                error instanceof Error ? error.message : "Failed to delete SKU operation mapping.";
             toast({
-                ...crudSuccessToast,
-                title: "Deleted",
-                description: "SKU operation mapping removed.",
+                variant: "destructive",
+                title: "Error",
+                description: message,
             });
         } finally {
             setIsDeleting(false);
@@ -482,8 +678,19 @@ export function ProductionSkuOperationTab({ canEdit, canDelete = canEdit }: Prod
         }
     };
 
-    const isLoading = isLoadingFg || isLoadingOps;
+    const isLoading = isLoadingFg || isLoadingSku || isLoadingOps || isFormDetailLoading;
     const canConfigure = Boolean(selectedFgId && selectedSkuId);
+
+    const renderListLoadingRow = (colSpan: number) => (
+        <TableRow>
+            <TableCell colSpan={colSpan} className="h-32 text-center">
+                <div className="flex flex-col items-center justify-center gap-3">
+                    <Loader2 className="h-8 w-8 animate-spin text-primary" />
+                    <p className="text-sm text-muted-foreground">Loading...</p>
+                </div>
+            </TableCell>
+        </TableRow>
+    );
 
     return (
         <div className="flex flex-col gap-6">
@@ -491,7 +698,10 @@ export function ProductionSkuOperationTab({ canEdit, canDelete = canEdit }: Prod
                 search={{
                     placeholder: "Search by code, name...",
                     value: searchTerm,
-                    onChange: setSearchTerm,
+                    onChange: (val: string) => {
+                        setSearchTerm(val);
+                        setCurrentPage(1);
+                    },
                 }}
                 actions={
                     canEdit
@@ -522,38 +732,49 @@ export function ProductionSkuOperationTab({ canEdit, canDelete = canEdit }: Prod
                                 </TableRow>
                             </TableHeader>
                             <TableBody>
-                                {filteredMappingList.length === 0 ? (
+                                {isListLoading ? (
+                                    renderListLoadingRow(4)
+                                ) : listError ? (
+                                    <TableRow>
+                                        <TableCell
+                                            colSpan={4}
+                                            className="h-24 text-center text-destructive text-sm"
+                                        >
+                                            {listError}
+                                        </TableCell>
+                                    </TableRow>
+                                ) : mappingList.length === 0 ? (
                                     <TableRow>
                                         <TableCell
                                             colSpan={4}
                                             className="h-24 text-center text-muted-foreground text-sm"
                                         >
-                                            {mappingList.length === 0
-                                                ? 'No mappings yet. Click "New Mapping" to create one.'
-                                                : "No mappings match your search."}
+                                            {debouncedSearchTerm.trim()
+                                                ? "No mappings match your search."
+                                                : 'No mappings yet. Click "New Mapping" to create one.'}
                                         </TableCell>
                                     </TableRow>
                                 ) : (
-                                    filteredMappingList.map((row) => {
-                                        const key = skuOperationMappingKey(row.fg_item_id, row.sku_id);
+                                    mappingList.map((row) => {
+                                        const key = skuOperationMappingKey(row.item_id, row.sku_id);
                                         const isActive = activeMappingKey === key;
                                         return (
                                             <TableRow
-                                                key={key}
+                                                key={row.id}
                                                 className={cn(isActive && "bg-blue-50/60")}
                                             >
                                                 <TableCell className="min-w-[180px] align-top whitespace-normal">
                                                     <div
                                                         className="text-sm font-medium wrap-anywhere"
-                                                        title={row.fg_name}
+                                                        title={row.item_name}
                                                     >
-                                                        {row.fg_name}
+                                                        {row.item_name}
                                                     </div>
                                                     <div
                                                         className="font-mono text-xs text-muted-foreground wrap-anywhere"
-                                                        title={row.fg_code}
+                                                        title={row.item_code}
                                                     >
-                                                        {row.fg_code}
+                                                        {row.item_code}
                                                     </div>
                                                 </TableCell>
                                                 <TableCell className="min-w-[180px] align-top whitespace-normal">
@@ -571,14 +792,12 @@ export function ProductionSkuOperationTab({ canEdit, canDelete = canEdit }: Prod
                                                     </div>
                                                 </TableCell>
                                                 <TableCell className="text-center text-sm font-medium tabular-nums">
-                                                    {row.operations.length}
+                                                    {row.operation_count}
                                                 </TableCell>
                                                 <TableCell className="text-center">
                                                     <TableActionButtons
                                                         onEdit={
-                                                            canEdit
-                                                                ? () => loadMappingIntoForm(row)
-                                                                : undefined
+                                                            canEdit ? () => void handleEditClick(row) : undefined
                                                         }
                                                         onDelete={
                                                             canDelete
@@ -594,6 +813,17 @@ export function ProductionSkuOperationTab({ canEdit, canDelete = canEdit }: Prod
                             </TableBody>
                         </Table>
                     </div>
+
+                    {!isListLoading && !listError && (
+                        <DataTablePagination
+                            currentPage={currentPage}
+                            totalPages={totalPages}
+                            totalItems={totalMappingCount}
+                            itemsPerPage={itemsPerPage}
+                            onPageChange={setCurrentPage}
+                            onItemsPerPageChange={setItemsPerPage}
+                        />
+                    )}
                 </CardContent>
             </Card>
 
@@ -631,20 +861,23 @@ export function ProductionSkuOperationTab({ canEdit, canDelete = canEdit }: Prod
                             onChange={(val) => {
                                 setActiveMappingKey(null);
                                 setSelectedFgId(coerceSelectValue(val));
+                                if (formMode === "create") {
+                                    setSelectedSkuId("");
+                                }
                             }}
-                            disabled={!canEdit}
+                            disabled={!canEdit || isLoadingFg}
                         />
                         <SearchableSelect
                             label="SKU"
                             required
-                            placeholder="Select SKU"
+                            placeholder={selectedFgId ? "Select SKU" : "Select FG/SFG first"}
                             value={selectedSkuId || undefined}
                             options={skuDropdownOptions}
                             onChange={(val) => {
                                 setActiveMappingKey(null);
                                 setSelectedSkuId(coerceSelectValue(val));
                             }}
-                            disabled={!canEdit}
+                            disabled={!canEdit || isLoadingSku || !selectedFgId}
                         />
                     </div>
 
@@ -710,7 +943,7 @@ export function ProductionSkuOperationTab({ canEdit, canDelete = canEdit }: Prod
                                 ) : (
                                     sequenceRows.map((row, index) => (
                                                 <TableRow
-                                                    key={row.operation_id}
+                                                    key={row.lineId ?? `new-${row.operation_id}`}
                                                     draggable={canEdit}
                                                     onDragStart={() =>
                                                         canEdit && setDraggedRowIndex(index)
@@ -760,9 +993,7 @@ export function ProductionSkuOperationTab({ canEdit, canDelete = canEdit }: Prod
                                                                 variant="ghost"
                                                                 size="icon"
                                                                 className="h-8 w-8 text-destructive hover:bg-destructive/10"
-                                                                onClick={() =>
-                                                                    handleRemove(row.operation_id)
-                                                                }
+                                                                onClick={() => handleRemove(row)}
                                                                 onMouseDown={(e) => e.stopPropagation()}
                                                             >
                                                                 <Trash2 className="h-4 w-4" />
@@ -798,6 +1029,7 @@ export function ProductionSkuOperationTab({ canEdit, canDelete = canEdit }: Prod
                                 onClick={handleSave}
                                 loading={isSaving}
                                 disabled={
+                                    isFormDetailLoading ||
                                     !selectedFgId ||
                                     !selectedSkuId ||
                                     sequenceRows.length === 0
@@ -825,7 +1057,7 @@ export function ProductionSkuOperationTab({ canEdit, canDelete = canEdit }: Prod
                                 <>
                                     Are you sure you want to delete the mapping for{" "}
                                     <span className="font-semibold text-foreground">
-                                        {mappingToDelete.fg_name} / {mappingToDelete.sku_name}
+                                        {mappingToDelete.item_name} / {mappingToDelete.sku_name}
                                     </span>
                                     ? This action cannot be undone.
                                 </>

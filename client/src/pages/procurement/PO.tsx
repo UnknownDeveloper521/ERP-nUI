@@ -26,7 +26,7 @@ import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { DataTablePagination } from "@/components/shared/DataTablePagination";
 import { AppListToolbar } from "@/components/shared/AppListToolbar";
-import { commonApi, procurementApi, POListRecord, POSubmitRequest } from "@/lib/api";
+import { commonApi, procurementApi, POListRecord, POSubmitRequest, type PODetailItem } from "@/lib/api";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useCommonStore } from "@/store/commonStore";
 import {
@@ -110,6 +110,28 @@ import {
 import { CURRENCY_SYMBOL } from "@/config/appConfig";
 import { SearchableSelect } from "@/components/shared/SearchableSelect";
 import { isCurrencyEntityName } from "@/services/loadCommonData";
+
+/** PO line with optional SKU display (not on shared MRItem type). */
+type POItemWithSku = MRItem & {
+    skuCode?: string;
+    skuName?: string;
+};
+
+const mapPODetailItem = (item: PODetailItem & Record<string, unknown>): POItemWithSku => ({
+    id: item.id,
+    itemCode: item.item_code,
+    itemName: item.item_name,
+    uom: item.uom,
+    type: "RM",
+    requiredQty: item.requested_qty,
+    availableQty: 0,
+    quotations: [],
+    qtyReceived: item.received_qty,
+    price: Number(item.price_per_uom) || 0,
+    deliveryDate: item.delivery_date || "",
+    skuCode: String(item.sku_code ?? item.skuCode ?? "").trim() || undefined,
+    skuName: String(item.sku_name ?? item.skuName ?? "").trim() || undefined,
+});
 
 // ============================================================================
 // HELPERS
@@ -659,19 +681,7 @@ const PO = () => {
                         ? getCurrencyCode(currencyMatch)
                         : (det.currency_name || ""),
                     notes: String(det.remarks ?? "").trim(),
-                    items: det.items.map(item => ({
-                        id: item.id,
-                        itemCode: item.item_code,
-                        itemName: item.item_name,
-                        uom: item.uom,
-                        type: "RM", 
-                        requiredQty: item.requested_qty,
-                        availableQty: 0,
-                        quotations: [],
-                        qtyReceived: item.received_qty,
-                        price: Number(item.price_per_uom) || 0,
-                        deliveryDate: item.delivery_date || ""
-                    })),
+                    items: det.items.map((item) => mapPODetailItem(item)),
                     receptions: receipts.map((r: any) => ({
                         id: r.grn_item_id,
                         itemCode: r.item.code,
@@ -1050,6 +1060,7 @@ const PO = () => {
                                     <tr>
                                         <th style={{ border: "1px solid #eee", padding: "12px", textAlign: "left", background: "#f9f9f9", fontSize: "11px", textTransform: "uppercase" }}>Item Code</th>
                                         <th style={{ border: "1px solid #eee", padding: "12px", textAlign: "left", background: "#f9f9f9", fontSize: "11px", textTransform: "uppercase" }}>Item Name</th>
+                                        <th style={{ border: "1px solid #eee", padding: "12px", textAlign: "left", background: "#f9f9f9", fontSize: "11px", textTransform: "uppercase" }}>SKU</th>
                                         <th style={{ border: "1px solid #eee", padding: "12px", textAlign: "left", background: "#f9f9f9", fontSize: "11px", textTransform: "uppercase" }}>UOM</th>
                                         <th style={{ border: "1px solid #eee", padding: "12px", textAlign: "left", background: "#f9f9f9", fontSize: "11px", textTransform: "uppercase" }}>Quantity</th>
                                         <th style={{ border: "1px solid #eee", padding: "12px", textAlign: "left", background: "#f9f9f9", fontSize: "11px", textTransform: "uppercase" }}>Price</th>
@@ -1057,16 +1068,25 @@ const PO = () => {
                                     </tr>
                                 </thead>
                                 <tbody>
-                                    {activePO?.items.map((item) => (
+                                    {activePO?.items.map((item) => {
+                                        const line = item as POItemWithSku;
+                                        return (
                                         <tr key={item.id}>
                                             <td style={{ border: "1px solid #eee", padding: "12px", textAlign: "left", fontSize: "12px" }}>{item.itemCode}</td>
                                             <td style={{ border: "1px solid #eee", padding: "12px", textAlign: "left", fontSize: "12px" }}>{item.itemName}</td>
+                                            <td style={{ border: "1px solid #eee", padding: "12px", textAlign: "left", fontSize: "12px" }}>
+                                                <div>{line.skuCode || "-"}</div>
+                                                {line.skuName ? (
+                                                    <div style={{ fontSize: "11px", color: "#666", marginTop: "2px" }}>{line.skuName}</div>
+                                                ) : null}
+                                            </td>
                                             <td style={{ border: "1px solid #eee", padding: "12px", textAlign: "left", fontSize: "12px" }}>{item.uom}</td>
                                             <td style={{ border: "1px solid #eee", padding: "12px", textAlign: "left", fontSize: "12px" }}>{item.requiredQty}</td>
                                             <td style={{ border: "1px solid #eee", padding: "12px", textAlign: "left", fontSize: "12px" }}>{poCurrencyDisplay} {typeof item.price === 'number' ? item.price.toLocaleString() : (Number(item.price) || 0).toLocaleString()}</td>
                                             <td style={{ border: "1px solid #eee", padding: "12px", textAlign: "left", fontSize: "12px" }}>{item.deliveryDate ? formatDate(item.deliveryDate) : "N/A"}</td>
                                         </tr>
-                                    ))}
+                                        );
+                                    })}
                                 </tbody>
                             </table>
 
@@ -1167,10 +1187,11 @@ const PO = () => {
                                                 "max-h-[min(42vh,380px)] overflow-y-auto custom-scrollbar"
                                         )}
                                     >
-                                    <Table className="w-full min-w-[720px]">
+                                    <Table className="w-full min-w-[800px]">
                                         <TableHeader>
                                             <TableRow className="bg-muted/50">
                                                 <TableHead className="text-[10px] font-bold uppercase py-3 pl-6">Items</TableHead>
+                                                <TableHead className="text-[10px] font-bold uppercase py-3">SKU</TableHead>
                                                 <TableHead className="text-[10px] font-bold uppercase py-3 text-center">Qty Ordered</TableHead>
                                                 <TableHead className="text-[10px] font-bold uppercase py-3 text-center">UOM</TableHead>
                                                 {activePO?.status === "Draft PO" && isPOEdit ? (
@@ -1188,11 +1209,17 @@ const PO = () => {
                                             </TableRow>
                                         </TableHeader>
                                         <TableBody>
-                                            {activePO?.items.map((item) => (
+                                            {activePO?.items.map((item) => {
+                                                const line = item as POItemWithSku;
+                                                return (
                                                 <TableRow key={item.id} className="hover:bg-muted/20 transition-colors">
                                                     <TableCell className="py-4 pl-6">
                                                         <div className="font-bold text-xs text-primary">{item.itemCode}</div>
                                                         <div className="text-xs text-slate-600 font-medium">{item.itemName}</div>
+                                                    </TableCell>
+                                                    <TableCell className="py-4">
+                                                        <div className="font-bold text-xs text-primary">{line.skuCode || "-"}</div>
+                                                        <div className="text-xs text-slate-600 font-medium">{line.skuName || "-"}</div>
                                                     </TableCell>
                                                     <TableCell className="text-center font-bold text-slate-700">{item.requiredQty}</TableCell>
                                                     <TableCell className="text-center text-xs font-medium text-slate-600 uppercase">{item.uom}</TableCell>
@@ -1247,7 +1274,8 @@ const PO = () => {
                                                         </>
                                                     )}
                                                 </TableRow>
-                                            ))}
+                                                );
+                                            })}
                                         </TableBody>
                                     </Table>
                                     </div>

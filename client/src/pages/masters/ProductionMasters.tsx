@@ -101,6 +101,18 @@ const MASTER_SLUGS: Record<MasterType, string> = {
 
 const MASTER_TYPES: MasterType[] = ["Work Centers", "Machines", "Operations", "SKU Operation"];
 
+const MASTER_TYPE_LABELS: Record<MasterType, string> = {
+    "Work Centers": "Work Centers",
+    "Machines": "Machines",
+    "Operations": "General Operation",
+    "SKU Operation": "SKU Operation",
+};
+
+function getMasterListTitle(master: MasterType): string {
+    if (master === "Operations") return "General Operation";
+    return `${master} List`;
+}
+
 interface WorkCenter {
     id: number;
     code: string;
@@ -1041,7 +1053,6 @@ export default function ProductionMasters() {
         [operationOutputTypes]
     );
 
-
     const [cycleTimeHH, setCycleTimeHH] = useState<string>("00");
     const [cycleTimeMM, setCycleTimeMM] = useState<string>("00");
 
@@ -1102,14 +1113,26 @@ export default function ProductionMasters() {
         const itemId = type === "inputs" ? selectedInputId : selectedOutputId;
         const itemType = type === "inputs" ? selectedInputType : selectedOutputType;
 
-        if (!itemId) return;
+        if (!itemId) {
+            toast({ variant: "destructive", title: "Validation Error", description: "Please select an item." });
+            return;
+        }
 
         const list = type === "inputs" ? inputItemList : outputItemList;
         const picked = list.find((i) => Number(i.id) === Number(itemId));
 
+        const parsedItemId = parseInt(itemId, 10);
+        const exists = (formData[type] || []).some(
+            (existing: OperationItem) => Number(existing.item_id) === parsedItemId,
+        );
+        if (exists) {
+            toast({ variant: "destructive", title: "Duplicate", description: "This item is already added." });
+            return;
+        }
+
         const newItem: OperationItem = {
             id: Math.random(), // Temp ID
-            item_id: parseInt(itemId, 10),
+            item_id: parsedItemId,
             type: normalizeTypeLabel(
                 itemType,
                 type === "inputs" ? "RM" : "SFG"
@@ -1338,6 +1361,8 @@ export default function ProductionMasters() {
             });
             setCycleTimeHH("00");
             setCycleTimeMM("00");
+            setSelectedInputId("");
+            setSelectedOutputId("");
             setIsDialogOpen(true);
             return;
         }
@@ -2710,15 +2735,16 @@ export default function ProductionMasters() {
 
                     <div>
                         <SectionHeader title="Inputs (RM / SFG / Waste)" required />
-                        <div className="flex min-w-0 gap-2 items-end mb-4">
-                            <div className="w-[220px] shrink-0 space-y-2">
+                        <div className="mb-4 overflow-x-auto">
+                            <div className="grid min-w-[560px] grid-cols-[minmax(160px,200px)_minmax(200px,1fr)_auto] gap-3 items-end">
+                            <div className="min-w-0 space-y-2">
                                 <Label>Input Type</Label>
                                 <SearchableSelect 
                                     value={selectedInputType || undefined} 
                                     onChange={(val: any) => {
                                         if (val === selectedInputType) return;
                                         setSelectedInputType(val);
-                                        setSelectedInputId(""); 
+                                        setSelectedInputId("");
                                     }}
                                     options={inputTypeSelectOptions}
                                     placeholder={isOperationTypesLoading ? "Loading..." : "Select type"}
@@ -2737,9 +2763,10 @@ export default function ProductionMasters() {
                                             value: String(item.id),
                                             primaryText: String(item.code ?? ""),
                                             secondaryText: String(item.name ?? ""),
-                                            disabled: formData.inputs?.some((existing: OperationItem) => existing.item_id === item.id)
                                         }))}
-                                    onChange={(val) => setSelectedInputId(val)}
+                                    onChange={(val) => {
+                                        setSelectedInputId(val);
+                                    }}
                                     className="h-auto min-h-10 items-start! py-1"
                                     selectedTruncate="end"
                                     selectedPrimaryLineClamp={2}
@@ -2747,15 +2774,23 @@ export default function ProductionMasters() {
                                     showSelectedTitle
                                 />
                             </div>
-                            <Button type="button" className="shrink-0" onClick={() => addOperationItem("inputs")}><Plus className="h-4 w-4 mr-2" /> Add</Button>
+                            <Button
+                                type="button"
+                                className="shrink-0"
+                                disabled={!selectedInputId}
+                                onClick={() => addOperationItem("inputs")}
+                            >
+                                <Plus className="h-4 w-4 mr-2" /> Add
+                            </Button>
+                            </div>
                         </div>
                         <div className="rounded-md border min-w-0 overflow-x-auto">
                             <Table className="w-full table-fixed">
                                 <TableHeader>
                                     <TableRow className="bg-muted/50">
-                                        <TableHead className="min-w-0 w-[50%]">Item Details</TableHead>
-                                        <TableHead className="w-[22%]">UOM</TableHead>
-                                        <TableHead className="w-[18%]">Type</TableHead>
+                                        <TableHead className="min-w-0 w-[55%]">Item Details</TableHead>
+                                        <TableHead className="w-[20%]">UOM</TableHead>
+                                        <TableHead className="w-[15%]">Type</TableHead>
                                         <TableHead className="w-[50px]"></TableHead>
                                     </TableRow>
                                 </TableHeader>
@@ -2803,15 +2838,16 @@ export default function ProductionMasters() {
 
                     <div>
                         <SectionHeader title="Outputs (SFG / FG / Waste)" required />
-                        <div className="flex min-w-0 gap-2 items-end mb-4">
-                            <div className="w-[220px] shrink-0 space-y-2">
+                        <div className="mb-4 overflow-x-auto">
+                            <div className="grid min-w-[560px] grid-cols-[minmax(160px,200px)_minmax(200px,1fr)_auto] gap-3 items-end">
+                            <div className="min-w-0 space-y-2">
                                 <Label>Output Type</Label>
                                 <SearchableSelect 
                                     value={selectedOutputType || undefined} 
                                     onChange={(val: any) => {
                                         if (val === selectedOutputType) return;
                                         setSelectedOutputType(val);
-                                        setSelectedOutputId(""); 
+                                        setSelectedOutputId("");
                                     }}
                                     options={outputTypeSelectOptions}
                                     placeholder={isOperationTypesLoading ? "Loading..." : "Select type"}
@@ -2830,9 +2866,10 @@ export default function ProductionMasters() {
                                             value: String(item.id),
                                             primaryText: String(item.code ?? ""),
                                             secondaryText: String(item.name ?? ""),
-                                            disabled: formData.outputs?.some((existing: OperationItem) => existing.item_id === item.id)
                                         }))}
-                                    onChange={(val) => setSelectedOutputId(val)}
+                                    onChange={(val) => {
+                                        setSelectedOutputId(val);
+                                    }}
                                     className="h-auto min-h-10 items-start! py-1"
                                     selectedTruncate="end"
                                     selectedPrimaryLineClamp={2}
@@ -2840,15 +2877,23 @@ export default function ProductionMasters() {
                                     showSelectedTitle
                                 />
                             </div>
-                            <Button type="button" className="shrink-0" onClick={() => addOperationItem("outputs")}><Plus className="h-4 w-4 mr-2" /> Add</Button>
+                            <Button
+                                type="button"
+                                className="shrink-0"
+                                disabled={!selectedOutputId}
+                                onClick={() => addOperationItem("outputs")}
+                            >
+                                <Plus className="h-4 w-4 mr-2" /> Add
+                            </Button>
+                            </div>
                         </div>
                         <div className="rounded-md border min-w-0 overflow-x-auto">
                             <Table className="w-full table-fixed">
                                 <TableHeader>
                                     <TableRow className="bg-muted/50">
-                                        <TableHead className="min-w-0 w-[50%]">Item Details</TableHead>
-                                        <TableHead className="w-[22%]">UOM</TableHead>
-                                        <TableHead className="w-[18%]">Type</TableHead>
+                                        <TableHead className="min-w-0 w-[55%]">Item Details</TableHead>
+                                        <TableHead className="w-[20%]">UOM</TableHead>
+                                        <TableHead className="w-[15%]">Type</TableHead>
                                         <TableHead className="w-[50px]"></TableHead>
                                     </TableRow>
                                 </TableHeader>
@@ -3003,7 +3048,7 @@ export default function ProductionMasters() {
                                     onClick={() => handleMasterChange(type)}
                                     className="data-[state=active]:bg-transparent data-[state=active]:shadow-none data-[state=active]:border-primary data-[state=active]:text-primary px-4 py-2 text-sm font-medium border-b-2 border-transparent transition-colors rounded-none text-muted-foreground hover:text-foreground hover:border-muted-foreground/30 whitespace-nowrap"
                                 >
-                                    {type}
+                                    {MASTER_TYPE_LABELS[type]}
                                 </TabsTrigger>
                             ))}
                         </TabsList>
@@ -3078,7 +3123,7 @@ export default function ProductionMasters() {
 
                                 <Card>
                                     <CardHeader className="pb-3">
-                                        <CardTitle>{selectedMaster} List</CardTitle>
+                                        <CardTitle>{getMasterListTitle(selectedMaster)}</CardTitle>
                                     </CardHeader>
                                     <CardContent className="relative">
                                         {isListLoading &&

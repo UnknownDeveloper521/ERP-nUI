@@ -14,6 +14,9 @@ export interface DailyFGPlanOutput {
     plannedQty: string;
     fulfilledQty: string;
     uom: string;
+    skuId?: string;
+    skuCode?: string;
+    skuName?: string;
 }
 
 export interface DailyFGPlan {

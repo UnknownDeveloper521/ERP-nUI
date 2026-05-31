@@ -44,7 +44,11 @@ import { AppListToolbar } from "@/components/shared/AppListToolbar";
 import { itemsApi, commonApi, materialThresholdApi } from "@/lib/api";
 import { useCommonStore } from "@/store/commonStore";
 import { SearchableSelect } from "@/components/shared/SearchableSelect";
-import { ProcurementSkuTab } from "@/pages/masters/ProcurementSkuTab";
+import {
+    ProcurementSkuTab,
+    loadProcurementSkuRecords,
+    type SkuRecord,
+} from "@/pages/masters/ProcurementSkuTab";
 
 /**
  * Entity master data (GET /api/common/getentityvalues)
@@ -152,6 +156,7 @@ interface SelectedUser {
 interface ThresholdData {
     id?: number;
     materialId: number | null;
+    skuId: number | null;
     itemTypeId: number | null; // Added for reactive filtering
     upperLimit: number | null;
     upperSelectedUsers: SelectedUser[];
@@ -304,8 +309,10 @@ export default function ProcurementMasters() {
     // Material Master State
     const [materialMasters, setMaterialMasters] = useState<MaterialMaster[]>(initialMaterialMasters);
     const [isThresholdDialogOpen, setIsThresholdDialogOpen] = useState(false);
+    const [thresholdSkuRecords, setThresholdSkuRecords] = useState<SkuRecord[]>([]);
     const [thresholdFormData, setThresholdFormData] = useState<ThresholdData>({
         materialId: null,
+        skuId: null,
         itemTypeId: null,
         upperLimit: null,
         upperSelectedUsers: [],
@@ -460,10 +467,23 @@ export default function ProcurementMasters() {
         }
     };
 
+    const thresholdSkuOptions = useMemo(() => {
+        if (!thresholdFormData.materialId) return [];
+        return thresholdSkuRecords
+            .filter((s) => Number(s.item_id) === Number(thresholdFormData.materialId))
+            .map((s) => ({
+                value: s.id.toString(),
+                label: `${s.code} — ${s.name}`,
+                primaryText: s.name,
+                secondaryText: s.code,
+            }));
+    }, [thresholdSkuRecords, thresholdFormData.materialId]);
+
     const fetchThresholdFormDeps = async () => {
         setIsThresholdFormDepsLoading(true);
         try {
             await loadThresholdFormDepsData();
+            setThresholdSkuRecords(loadProcurementSkuRecords());
         } catch (error) {
             console.error("Error fetching threshold form deps:", error);
         } finally {
@@ -674,6 +694,7 @@ export default function ProcurementMasters() {
         setIsThresholdDialogOpen(true);
         try {
             await loadThresholdFormDepsData();
+            setThresholdSkuRecords(loadProcurementSkuRecords());
 
             const res = await materialThresholdApi.getOne(id);
             if (res.isSuccessful) {
@@ -701,6 +722,7 @@ export default function ProcurementMasters() {
                 setThresholdFormData({
                     id: data.id,
                     materialId: data.item_id,
+                    skuId: data.sku_id != null ? Number(data.sku_id) : null,
                     itemTypeId: data.item_type_id || null,
                     upperLimit:
                         data.upper_limit !== undefined && data.upper_limit !== null
@@ -874,10 +896,15 @@ export default function ProcurementMasters() {
     };
 
     const handleThresholdSave = async () => {
-        const { materialId, itemTypeId, upperLimit, lowerLimit, upperSelectedUsers, lowerSelectedUsers } = thresholdFormData;
+        const { materialId, itemTypeId, skuId, upperLimit, lowerLimit, upperSelectedUsers, lowerSelectedUsers } = thresholdFormData;
 
         if (!materialId) {
             toast({ variant: "destructive", title: "Validation Error", description: "Please select an item." });
+            return;
+        }
+
+        if (!skuId) {
+            toast({ variant: "destructive", title: "Validation Error", description: "Please select a SKU." });
             return;
         }
 
@@ -1474,6 +1501,7 @@ export default function ProcurementMasters() {
 
                                             setThresholdFormData({ 
                                                 materialId: null, 
+                                                skuId: null,
                                                 itemTypeId: null, 
                                                 upperLimit: null, 
                                                 upperSelectedUsers: [], 
@@ -1635,7 +1663,7 @@ export default function ProcurementMasters() {
                         {/* Basic Information */}
                         <div>
                             <SectionHeader title="Basic Info" />
-                            <div className="grid grid-cols-1 gap-6 md:grid-cols-2">
+                            <div className="grid grid-cols-1 gap-6 md:grid-cols-3">
                                 <div className="flex-1 space-y-2">
                                     <Label className="text-xs font-semibold">Select Item Type *</Label>
                                     <SearchableSelect
@@ -1644,7 +1672,7 @@ export default function ProcurementMasters() {
                                         options={itemTypes.map((type: any) => ({ label: type.name ?? type.value_name, value: type.id.toString() }))}
                                         onChange={(val) => {
                                             const id = parseInt(val);
-                                            setThresholdFormData({ ...thresholdFormData, itemTypeId: id, materialId: null });
+                                            setThresholdFormData({ ...thresholdFormData, itemTypeId: id, materialId: null, skuId: null });
                                             fetchItemsByTypeId(id);
                                         }}
                                         disabled={!!editingId}
@@ -1665,12 +1693,35 @@ export default function ProcurementMasters() {
                                                 secondaryText: String(m.code ?? ""),
                                                 disabled: m.threshold_configured && !editingId
                                             }))}
-                                        onChange={(val) => setThresholdFormData({ ...thresholdFormData, materialId: parseInt(val) })}
+                                        onChange={(val) => setThresholdFormData({ ...thresholdFormData, materialId: parseInt(val), skuId: null })}
                                         selectedPrimaryLineClamp={2}
                                         compactStackedSelected
                                         showSelectedTitle
                                         selectedTruncate="end"
                                         disabled={!!editingId}
+                                    />
+                                </div>
+                                <div className="space-y-2">
+                                    <Label className="text-xs font-semibold">SKU *</Label>
+                                    <SearchableSelect
+                                        placeholder={
+                                            !thresholdFormData.materialId
+                                                ? "Select item first"
+                                                : thresholdSkuOptions.length === 0
+                                                  ? "No SKUs for this item"
+                                                  : "Select SKU"
+                                        }
+                                        value={thresholdFormData.skuId?.toString()}
+                                        options={thresholdSkuOptions}
+                                        onChange={(val) => setThresholdFormData({ ...thresholdFormData, skuId: parseInt(val) })}
+                                        selectedPrimaryLineClamp={2}
+                                        compactStackedSelected
+                                        showSelectedTitle
+                                        selectedTruncate="end"
+                                        disabled={
+                                            !thresholdFormData.materialId ||
+                                            thresholdSkuOptions.length === 0
+                                        }
                                     />
                                 </div>
                             </div>
@@ -1899,12 +1950,12 @@ export default function ProcurementMasters() {
                             Cancel
                         </Button>
                         <Button
-                             disabled={!thresholdFormData.itemTypeId || !thresholdFormData.materialId || isSubmitting || isFormDetailLoading || isThresholdFormDepsLoading}
+                             disabled={!thresholdFormData.itemTypeId || !thresholdFormData.materialId || !thresholdFormData.skuId || isSubmitting || isFormDetailLoading || isThresholdFormDepsLoading}
                              onClick={handleThresholdSave}
                              loading={isSubmitting}
                              className={cn(
                                  "h-9 min-w-[100px] transition-all font-semibold",
-                                 (!thresholdFormData.itemTypeId || !thresholdFormData.materialId || isSubmitting || isFormDetailLoading || isThresholdFormDepsLoading)
+                                 (!thresholdFormData.itemTypeId || !thresholdFormData.materialId || !thresholdFormData.skuId || isSubmitting || isFormDetailLoading || isThresholdFormDepsLoading)
                                      ? "bg-slate-300 text-slate-600 cursor-not-allowed hover:bg-slate-300 border-none shadow-none" 
                                      : "bg-blue-600 hover:bg-blue-700 text-white shadow-sm active:scale-95"
                              )}

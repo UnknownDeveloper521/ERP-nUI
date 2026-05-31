@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useCallback, type ReactNode } from "react";
+import { useState, useEffect, useMemo, useCallback, useRef, type ReactNode } from "react";
 import { useDebounce } from "@/hooks/useDebounce";
 import { format, parse, isValid } from "date-fns";
 import { useLocation, useRoute } from "wouter";
@@ -55,7 +55,14 @@ import {
 import { AppListToolbar } from "@/components/shared/AppListToolbar";
 import { SearchableSelect as SharedSearchableSelect } from "@/components/shared/SearchableSelect";
 import { DatePicker as SharedDatePicker } from "@/components/shared/DatePicker";
-import { productionApi, BOMListRecord, commonApi, operationsApi } from "@/lib/api";
+import {
+    productionApi,
+    BOMListRecord,
+    commonApi,
+    operationsApi,
+    parseSkuDropdownRecords,
+    type SkuDropdownRecord,
+} from "@/lib/api";
 import {
     BOM_SFG_FG_MOCK_DROPDOWN_ONLY,
     buildGsv7NestedBomTree,
@@ -64,10 +71,11 @@ import {
     gsv7TreeToTopLevelComponents,
     isGsv7CatalogItemCode,
 } from "@/lib/gsv7BomTreeBuilder";
+import { GSV7_ITEM_ID_BASE } from "@/lib/gsv7OperationsMockData";
+import { mergeSkuDropdownWithMock } from "@/lib/bomSkuMockData";
 import { useCommonStore } from "@/store/commonStore";
 import { useHasPermission } from "@/hooks/usePermissions";
 import Unauthorized from "@/pages/Unauthorized";
-import { loadProcurementSkuRecords, type SkuRecord } from "@/pages/masters/ProcurementSkuTab";
 
 // ============================================================================
 // HELPERS & MOCK DATA
@@ -155,6 +163,15 @@ const formatBomSfgFgLabel = (code: string, name: string): string => {
     return trimmedCode ? `${trimmedCode} - ${trimmedName}` : trimmedName;
 };
 
+const normalizeBomItemCode = (code: string) =>
+    String(code ?? "")
+        .trim()
+        .toUpperCase()
+        .replace(/\s+/g, "");
+
+const isGsv7MockItemId = (id: number) =>
+    Number.isFinite(id) && id >= GSV7_ITEM_ID_BASE && id < GSV7_ITEM_ID_BASE + 200;
+
 const getBomComponentOptionLabel = (record: any, _index: number): string => {
     const oc = record.output_component || {};
     const code = String(oc.code || "").trim();
@@ -197,8 +214,25 @@ interface BomStructureLine {
     type: string;
     uom: string;
     quantity: number | string;
+    sku_id?: number;
+    sku_code?: string;
+    sku_name?: string;
     producedBy?: { code: string; name: string };
     nestedOperation?: BomStructureOperation;
+}
+
+interface BomLineRef {
+    operationId: number;
+    section: "inputs" | "outputs";
+    itemId: number;
+}
+
+interface BomSkuRowProps {
+    skuOptionsByItemId: Record<number, SkuDropdownRecord[]>;
+    skuLoadingItemIds: Set<number>;
+    loadSkuOptionsForItem: (itemId: number, itemCode?: string) => void;
+    onSkuChange?: (ref: BomLineRef, skuId: string) => void;
+    popoverCollisionBoundary?: HTMLElement | null;
 }
 
 interface BomStructureOperation {
@@ -415,6 +449,61 @@ async function buildBomOperationTree(params: {
     };
 }
 
+function collectAllItemIdsFromOperation(op: BomStructureOperation, ids: Set<number>) {
+    for (const line of [...op.outputs, ...op.inputs]) {
+        if (line.item_id > 0) ids.add(line.item_id);
+        if (line.nestedOperation) collectAllItemIdsFromOperation(line.nestedOperation, ids);
+    }
+}
+
+function collectAllItemIdsFromTree(tree: BomOperationTree): number[] {
+    const ids = new Set<number>();
+    collectAllItemIdsFromOperation(tree.mainOperation, ids);
+    tree.childOperations.forEach((child) => collectAllItemIdsFromOperation(child, ids));
+    return [...ids];
+}
+
+function patchBomOperationSku(
+    op: BomStructureOperation,
+    ref: BomLineRef,
+    sku: { id: number; code: string; name: string } | null,
+): BomStructureOperation {
+    const patchLines = (lines: BomStructureLine[], section: "inputs" | "outputs"): BomStructureLine[] =>
+        lines.map((line) => {
+            let updated = line;
+            if (op.id === ref.operationId && section === ref.section && line.item_id === ref.itemId) {
+                updated = sku
+                    ? { ...line, sku_id: sku.id, sku_code: sku.code, sku_name: sku.name }
+                    : { ...line, sku_id: undefined, sku_code: undefined, sku_name: undefined };
+            }
+            if (line.nestedOperation) {
+                updated = {
+                    ...updated,
+                    nestedOperation: patchBomOperationSku(line.nestedOperation, ref, sku),
+                };
+            }
+            return updated;
+        });
+
+    return {
+        ...op,
+        outputs: patchLines(op.outputs, "outputs"),
+        inputs: patchLines(op.inputs, "inputs"),
+    };
+}
+
+function patchBomTreeSku(
+    tree: BomOperationTree,
+    ref: BomLineRef,
+    sku: { id: number; code: string; name: string } | null,
+): BomOperationTree {
+    return {
+        ...tree,
+        mainOperation: patchBomOperationSku(tree.mainOperation, ref, sku),
+        childOperations: tree.childOperations.map((child) => patchBomOperationSku(child, ref, sku)),
+    };
+}
+
 // ============================================================================
 // OPERATION-BASED BOM STRUCTURE (view)
 // ============================================================================
@@ -439,9 +528,11 @@ function BomTypeBadge({ type }: { type: string }) {
 function BomNestedOperationPanel({
     operation,
     depth = 0,
+    skuProps,
 }: {
     operation: BomStructureOperation;
     depth?: number;
+    skuProps?: BomSkuRowProps;
 }) {
     return (
         <div
@@ -465,8 +556,11 @@ function BomNestedOperationPanel({
                         <BomMaterialRow
                             key={`nest-out-${operation.id}-${line.item_id}`}
                             line={line}
+                            operationId={operation.id}
+                            section="outputs"
                             highlighted
                             disabled
+                            skuProps={skuProps}
                         />
                     )}
                 />
@@ -475,11 +569,18 @@ function BomNestedOperationPanel({
                     lines={operation.inputs}
                     renderLine={(line) => (
                         <div key={`nest-in-${operation.id}-${line.item_id}`} className="space-y-2">
-                            <BomMaterialRow line={line} disabled />
+                            <BomMaterialRow
+                                line={line}
+                                operationId={operation.id}
+                                section="inputs"
+                                disabled
+                                skuProps={skuProps}
+                            />
                             {line.nestedOperation && (
                                 <BomNestedOperationPanel
                                     operation={line.nestedOperation}
                                     depth={depth + 1}
+                                    skuProps={skuProps}
                                 />
                             )}
                         </div>
@@ -492,21 +593,43 @@ function BomNestedOperationPanel({
 
 function BomMaterialRow({
     line,
+    operationId,
+    section,
     highlighted,
     disabled,
     onQuantityChange,
+    skuProps,
 }: {
     line: BomStructureLine;
+    operationId: number;
+    section: "inputs" | "outputs";
     highlighted?: boolean;
     disabled?: boolean;
     onQuantityChange?: (itemId: number, qty: string) => void;
+    skuProps?: BomSkuRowProps;
 }) {
     const producedByLabel = line.producedBy ? `(made by ${line.producedBy.code})` : null;
+    const skuOptions = skuProps?.skuOptionsByItemId[line.item_id] ?? [];
+    const isSkuLoading = skuProps?.skuLoadingItemIds.has(line.item_id) ?? false;
+    const skuSelectOptions = useMemo(
+        () =>
+            skuOptions.map((s) => ({
+                value: String(s.id),
+                label: `${s.code} — ${s.name}`,
+                primaryText: s.name,
+                secondaryText: s.code,
+            })),
+        [skuOptions],
+    );
+
+    useEffect(() => {
+        if (line.item_id > 0) skuProps?.loadSkuOptionsForItem(line.item_id, line.item_code);
+    }, [line.item_id, line.item_code, skuProps?.loadSkuOptionsForItem]);
 
     return (
         <div
             className={cn(
-                "grid grid-cols-1 gap-2 rounded-md border px-3 py-2.5 sm:grid-cols-[1fr_auto_auto_88px] sm:items-center sm:gap-3",
+                "grid grid-cols-1 gap-2 rounded-md border px-3 py-2.5 sm:grid-cols-[minmax(0,1fr)_minmax(220px,320px)_auto_auto_88px] sm:items-center sm:gap-3",
                 highlighted ? "border-blue-200 bg-blue-50/80" : "border-border bg-white",
             )}
         >
@@ -519,6 +642,37 @@ function BomMaterialRow({
                 </p>
                 {line.item_code && (
                     <p className="text-[10px] font-mono text-muted-foreground truncate">{line.item_code}</p>
+                )}
+            </div>
+            <div className="min-w-0 sm:min-w-[220px]">
+                <span className="text-[10px] font-semibold uppercase text-muted-foreground sm:hidden">SKU</span>
+                {skuProps?.onSkuChange ? (
+                    <SharedSearchableSelect
+                        className="w-full min-w-[220px]"
+                        value={line.sku_id ? String(line.sku_id) : undefined}
+                        options={skuSelectOptions}
+                        placeholder={
+                            isSkuLoading
+                                ? "Loading SKUs..."
+                                : skuSelectOptions.length === 0
+                                  ? "No SKUs for this item"
+                                  : "Select SKU"
+                        }
+                        onChange={(val) =>
+                            skuProps.onSkuChange?.(
+                                { operationId, section, itemId: line.item_id },
+                                String(val ?? ""),
+                            )
+                        }
+                        selectedTruncate="end"
+                        popoverCollisionBoundary={skuProps.popoverCollisionBoundary}
+                        popoverCollisionPadding={8}
+                        listClassName="max-h-[200px]"
+                    />
+                ) : (
+                    <p className="text-xs text-muted-foreground truncate">
+                        {line.sku_code ? `${line.sku_code}${line.sku_name ? ` — ${line.sku_name}` : ""}` : "—"}
+                    </p>
                 )}
             </div>
             <div className="flex items-center gap-2 sm:justify-center">
@@ -577,12 +731,14 @@ function BomOperationCardBody({
     onQuantityChange,
     editableOutputItemCode,
     isGsv7Nested,
+    skuProps,
 }: {
     operation: BomStructureOperation;
     disabled?: boolean;
     onQuantityChange?: (itemId: number, qty: string) => void;
     editableOutputItemCode?: string;
     isGsv7Nested?: boolean;
+    skuProps?: BomSkuRowProps;
 }) {
     const canEditOutput = (line: BomStructureLine) => {
         if (!onQuantityChange || disabled) return false;
@@ -600,9 +756,12 @@ function BomOperationCardBody({
                     <BomMaterialRow
                         key={`out-${operation.id}-${line.item_id}`}
                         line={line}
+                        operationId={operation.id}
+                        section="outputs"
                         highlighted
                         disabled={disabled && !canEditOutput(line)}
                         onQuantityChange={canEditOutput(line) ? onQuantityChange : undefined}
+                        skuProps={skuProps}
                     />
                 )}
             />
@@ -614,11 +773,14 @@ function BomOperationCardBody({
                     <div key={`in-${operation.id}-${line.item_id}`} className="space-y-2">
                         <BomMaterialRow
                             line={line}
+                            operationId={operation.id}
+                            section="inputs"
                             disabled={disabled || isGsv7Nested}
                             onQuantityChange={isGsv7Nested ? undefined : onQuantityChange}
+                            skuProps={skuProps}
                         />
                         {line.nestedOperation && (
-                            <BomNestedOperationPanel operation={line.nestedOperation} />
+                            <BomNestedOperationPanel operation={line.nestedOperation} skuProps={skuProps} />
                         )}
                     </div>
                 )}
@@ -640,12 +802,14 @@ function BomMainOperationCard({
     onQuantityChange,
     editableOutputItemCode,
     isGsv7Nested,
+    skuProps,
 }: {
     operation: BomStructureOperation;
     disabled?: boolean;
     onQuantityChange?: (itemId: number, qty: string) => void;
     editableOutputItemCode?: string;
     isGsv7Nested?: boolean;
+    skuProps?: BomSkuRowProps;
 }) {
     return (
         <div className="rounded-lg border border-border bg-white shadow-sm">
@@ -665,6 +829,7 @@ function BomMainOperationCard({
                 onQuantityChange={onQuantityChange}
                 editableOutputItemCode={editableOutputItemCode}
                 isGsv7Nested={isGsv7Nested}
+                skuProps={skuProps}
             />
         </div>
     );
@@ -674,10 +839,12 @@ function BomChildOperationCard({
     operation,
     disabled,
     onQuantityChange,
+    skuProps,
 }: {
     operation: BomStructureOperation;
     disabled?: boolean;
     onQuantityChange?: (itemId: number, qty: string) => void;
+    skuProps?: BomSkuRowProps;
 }) {
     const [open, setOpen] = useState(true);
 
@@ -701,7 +868,12 @@ function BomChildOperationCard({
                 )}
             </div>
             <CollapsibleContent>
-                <BomOperationCardBody operation={operation} disabled={disabled} onQuantityChange={onQuantityChange} />
+                <BomOperationCardBody
+                    operation={operation}
+                    disabled={disabled}
+                    onQuantityChange={onQuantityChange}
+                    skuProps={skuProps}
+                />
             </CollapsibleContent>
         </Collapsible>
     );
@@ -714,6 +886,7 @@ function BomOperationStructureView({
     selectedItemLabel,
     disabled,
     onQuantityChange,
+    skuProps,
 }: {
     tree: BomOperationTree | null;
     isLoading: boolean;
@@ -721,6 +894,7 @@ function BomOperationStructureView({
     selectedItemLabel?: string;
     disabled?: boolean;
     onQuantityChange?: (itemId: number, qty: string) => void;
+    skuProps?: BomSkuRowProps;
 }) {
     const isGsv7Nested = tree?.isGsv7Nested === true;
     return (
@@ -765,6 +939,7 @@ function BomOperationStructureView({
                         onQuantityChange={onQuantityChange}
                         editableOutputItemCode={tree.selectedItemCode}
                         isGsv7Nested={isGsv7Nested}
+                        skuProps={skuProps}
                     />
                     {!isGsv7Nested && tree.childOperations.length > 0 && (
                         <div className="space-y-3">
@@ -777,6 +952,7 @@ function BomOperationStructureView({
                                     operation={child}
                                     disabled={disabled}
                                     onQuantityChange={onQuantityChange}
+                                    skuProps={skuProps}
                                 />
                             ))}
                         </div>
@@ -808,6 +984,9 @@ interface BOMComponent {
     item_id: string;
     type: string;
     quantity: number | string;
+    sku_id?: number;
+    sku_code?: string;
+    sku_name?: string;
     item?: {
         id: string;
         code: string;
@@ -894,7 +1073,111 @@ export default function BOM() {
         selectedSkuId: "",
         components: []
     });
-    const [skuRecords, setSkuRecords] = useState<SkuRecord[]>([]);
+    const [skuOptionsByItemId, setSkuOptionsByItemId] = useState<Record<number, SkuDropdownRecord[]>>({});
+    const [skuLoadingItemIds, setSkuLoadingItemIds] = useState<Set<number>>(() => new Set());
+    const loadedSkuItemIdsRef = useRef<Set<number>>(new Set());
+    const skuLoadingRef = useRef<Set<number>>(new Set());
+    const realItemIdByCodeRef = useRef<Record<string, number>>({});
+    const itemsDropdownCacheRef = useRef<{ id: number; code: string }[] | null>(null);
+
+    const ensureItemsDropdownCache = useCallback(async () => {
+        if (itemsDropdownCacheRef.current) return itemsDropdownCacheRef.current;
+        try {
+            const res = await commonApi.getItemsDropdown({ status: 1 });
+            if (!res.isSuccessful) return [];
+            const raw = res.data?.records ?? res.data;
+            const records = Array.isArray(raw) ? raw : [];
+            const mapped = records
+                .map((row: Record<string, unknown>) => ({
+                    id: Number(row.id ?? row.item_id),
+                    code: String(row.code ?? row.item_code ?? "").trim(),
+                }))
+                .filter((row) => Number.isFinite(row.id) && row.id > 0 && row.code);
+            itemsDropdownCacheRef.current = mapped;
+            return mapped;
+        } catch (err) {
+            console.error("Failed to load items for SKU resolution:", err);
+            return [];
+        }
+    }, []);
+
+    const resolveRealItemId = useCallback(
+        async (itemId: number, itemCode?: string): Promise<number> => {
+            if (!isGsv7MockItemId(itemId)) return itemId;
+
+            const code = String(itemCode ?? "").trim();
+            if (!code) return itemId;
+
+            const key = normalizeBomItemCode(code);
+            const cached = realItemIdByCodeRef.current[key];
+            if (cached) return cached;
+
+            const mapItemRow = (row: Record<string, unknown>) => ({
+                id: Number(row.id ?? row.item_id),
+                code: String(row.code ?? row.item_code ?? "").trim(),
+            });
+
+            const items = await ensureItemsDropdownCache();
+            let match = items.find((row) => normalizeBomItemCode(row.code) === key);
+
+            if (!match) {
+                try {
+                    const res = await commonApi.getItemsDropdown({ status: 1, search: code });
+                    const raw = res.data?.records ?? res.data;
+                    const searchRows = Array.isArray(raw) ? raw : [];
+                    match = searchRows
+                        .map(mapItemRow)
+                        .find((row) => Number.isFinite(row.id) && row.id > 0 && normalizeBomItemCode(row.code) === key);
+                } catch (err) {
+                    console.error("Failed to search item by code for SKU:", code, err);
+                }
+            }
+
+            if (match) {
+                realItemIdByCodeRef.current[key] = match.id;
+                return match.id;
+            }
+            return itemId;
+        },
+        [ensureItemsDropdownCache],
+    );
+
+    const loadSkuOptionsForItem = useCallback(
+        (itemId: number, itemCode?: string) => {
+            if (!itemId || itemId <= 0) return;
+            if (loadedSkuItemIdsRef.current.has(itemId) || skuLoadingRef.current.has(itemId)) return;
+
+            skuLoadingRef.current.add(itemId);
+            setSkuLoadingItemIds((prev) => new Set(prev).add(itemId));
+
+            void (async () => {
+                try {
+                    const resolvedId = await resolveRealItemId(itemId, itemCode);
+                    const res = await commonApi.getSkuDropdown({ item_id: resolvedId });
+                    const apiRecords =
+                        res.isSuccessful && res.data != null ? parseSkuDropdownRecords(res.data) : [];
+                    const records = mergeSkuDropdownWithMock(apiRecords, itemCode);
+                    loadedSkuItemIdsRef.current.add(itemId);
+                    setSkuOptionsByItemId((prev) => ({ ...prev, [itemId]: records }));
+                } catch (err) {
+                    console.error("Failed to load SKUs for item", itemId, err);
+                    loadedSkuItemIdsRef.current.add(itemId);
+                    setSkuOptionsByItemId((prev) => ({
+                        ...prev,
+                        [itemId]: mergeSkuDropdownWithMock([], itemCode),
+                    }));
+                } finally {
+                    skuLoadingRef.current.delete(itemId);
+                    setSkuLoadingItemIds((prev) => {
+                        const next = new Set(prev);
+                        next.delete(itemId);
+                        return next;
+                    });
+                }
+            })();
+        },
+        [resolveRealItemId],
+    );
 
     const [isSaving, setIsSaving] = useState(false);
     const [isDetailLoading, setIsDetailLoading] = useState(false);
@@ -918,18 +1201,14 @@ export default function BOM() {
             components: []
         });
         setOperationTree(null);
+        loadedSkuItemIdsRef.current.clear();
+        realItemIdByCodeRef.current = {};
+        itemsDropdownCacheRef.current = null;
+        setSkuOptionsByItemId({});
+        setSkuLoadingItemIds(new Set());
         fetchBOMComponents();
-        loadSkuRecords();
         setDialogOpen(true);
     };
-
-    const loadSkuRecords = useCallback(() => {
-        try {
-            setSkuRecords(loadProcurementSkuRecords());
-        } catch {
-            setSkuRecords([]);
-        }
-    }, []);
 
     const handleEditClick = async (record: BOM2Record) => {
         if (openingBOMId !== null) return;
@@ -940,7 +1219,6 @@ export default function BOM() {
         setDialogOpen(true);
         setIsDetailLoading(true);
         void fetchBOMComponents();
-        loadSkuRecords();
         try {
             const response = await productionApi.getBOMDetail(record.id);
             if (response.isSuccessful && response.data) {
@@ -974,7 +1252,6 @@ export default function BOM() {
         setDialogOpen(true);
         setIsDetailLoading(true);
         void fetchBOMComponents();
-        loadSkuRecords();
         try {
             const response = await productionApi.getBOMDetail(record.id);
             if (response.isSuccessful && response.data) {
@@ -1070,18 +1347,44 @@ export default function BOM() {
 
     const filteredSkuDropdownOptions = useMemo(() => {
         const itemId = resolveSelectedOutputItem?.id;
-        let list = skuRecords;
-        if (itemId && Number.isFinite(itemId)) {
-            const forItem = skuRecords.filter((s) => Number(s.item_id) === Number(itemId));
-            if (forItem.length > 0) list = forItem;
-        }
+        if (!itemId || !Number.isFinite(itemId)) return [];
+        const list = skuOptionsByItemId[itemId] ?? [];
         return list.map((s) => ({
             value: String(s.id),
             label: `${s.code} — ${s.name}`,
             primaryText: s.name,
             secondaryText: s.code,
         }));
-    }, [skuRecords, resolveSelectedOutputItem?.id]);
+    }, [skuOptionsByItemId, resolveSelectedOutputItem?.id]);
+
+    const headerSkuItemId = resolveSelectedOutputItem?.id;
+    const isHeaderSkuLoading = Boolean(
+        headerSkuItemId && skuLoadingItemIds.has(headerSkuItemId),
+    );
+
+    useEffect(() => {
+        const itemId = resolveSelectedOutputItem?.id;
+        if (dialogOpen && itemId && itemId > 0) {
+            loadSkuOptionsForItem(itemId, resolveSelectedOutputItem?.code);
+        }
+    }, [dialogOpen, resolveSelectedOutputItem?.id, resolveSelectedOutputItem?.code, loadSkuOptionsForItem]);
+
+    useEffect(() => {
+        if (!dialogOpen) return;
+        void ensureItemsDropdownCache();
+    }, [dialogOpen, ensureItemsDropdownCache]);
+
+    useEffect(() => {
+        if (!dialogOpen || !operationTree) return;
+        const loadLineSkus = (op: BomStructureOperation) => {
+            for (const line of [...op.outputs, ...op.inputs]) {
+                if (line.item_id > 0) loadSkuOptionsForItem(line.item_id, line.item_code);
+                if (line.nestedOperation) loadLineSkus(line.nestedOperation);
+            }
+        };
+        loadLineSkus(operationTree.mainOperation);
+        operationTree.childOperations.forEach(loadLineSkus);
+    }, [dialogOpen, operationTree, loadSkuOptionsForItem]);
 
     useEffect(() => {
         if (!dialogOpen || !resolveSelectedOutputItem?.code) {
@@ -1225,6 +1528,41 @@ export default function BOM() {
         });
     };
 
+    const handleStructureSkuChange = useCallback(
+        (ref: BomLineRef, skuId: string) => {
+            const options = skuOptionsByItemId[ref.itemId] ?? [];
+            const picked = options.find((s) => String(s.id) === skuId);
+            const sku = picked ? { id: picked.id, code: picked.code, name: picked.name } : null;
+
+            setOperationTree((prev) => (prev ? patchBomTreeSku(prev, ref, sku) : prev));
+
+            setFormData((prev) => {
+                const idx = prev.components.findIndex((c) => Number(c.item_id) === ref.itemId);
+                if (idx < 0) return prev;
+                const components = [...prev.components];
+                components[idx] = {
+                    ...components[idx],
+                    sku_id: picked?.id,
+                    sku_code: picked?.code,
+                    sku_name: picked?.name,
+                };
+                return { ...prev, components };
+            });
+        },
+        [skuOptionsByItemId],
+    );
+
+    const skuRowProps: BomSkuRowProps = useMemo(
+        () => ({
+            skuOptionsByItemId,
+            skuLoadingItemIds,
+            loadSkuOptionsForItem,
+            onSkuChange: dialogMode === "view" ? undefined : handleStructureSkuChange,
+            popoverCollisionBoundary: dialogEl,
+        }),
+        [skuOptionsByItemId, skuLoadingItemIds, loadSkuOptionsForItem, handleStructureSkuChange, dialogMode, dialogEl],
+    );
+
     // Re-resolve UOM labels when master UOM data loads after BOM detail fetch
     useEffect(() => {
         if (!dialogOpen || uoms.length === 0) return;
@@ -1291,7 +1629,8 @@ export default function BOM() {
                     description: formData.bomDescription,
                     components: formData.components.map((c: any) => ({
                         input_component_id: Number(c.item_id),
-                        quantity: Number(c.quantity)
+                        quantity: Number(c.quantity),
+                        ...(c.sku_id ? { sku_id: Number(c.sku_id) } : {}),
                     })),
                 });
 
@@ -1321,7 +1660,8 @@ export default function BOM() {
                     description: formData.bomDescription,
                     components: formData.components.map((c: any) => ({
                         input_component_id: Number(c.item_id),
-                        quantity: Number(c.quantity)
+                        quantity: Number(c.quantity),
+                        ...(c.sku_id ? { sku_id: Number(c.sku_id) } : {}),
                     }))
                 });
 
@@ -1585,7 +1925,7 @@ export default function BOM() {
             <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
                 <DialogContent
                     ref={setDialogEl}
-                    className="flex! min-h-0 w-[95%] max-h-[82vh] flex-col gap-0 overflow-hidden bg-white p-0 sm:max-w-3xl md:max-w-4xl lg:max-w-4xl xl:max-w-4xl"
+                    className="flex! min-h-0 w-[98%] max-h-[82vh] flex-col gap-0 overflow-hidden bg-white p-0 sm:max-w-5xl md:max-w-6xl lg:max-w-6xl xl:max-w-7xl"
                     onPointerDownOutside={(e) => e.preventDefault()}
                     onInteractOutside={(e) => e.preventDefault()}
                 >
@@ -1685,9 +2025,11 @@ export default function BOM() {
                                     placeholder={
                                         !resolveSelectedOutputItem
                                             ? "Select SFG / FG first"
-                                            : filteredSkuDropdownOptions.length === 0
-                                              ? "No SKUs for this item"
-                                              : "Select SKU"
+                                            : isHeaderSkuLoading
+                                              ? "Loading SKUs..."
+                                              : filteredSkuDropdownOptions.length === 0
+                                                ? "No SKUs for this item"
+                                                : "Select SKU"
                                     }
                                     onChange={(val) => {
                                         const s = String(val ?? "").trim();
@@ -1702,6 +2044,7 @@ export default function BOM() {
                                     disabled={
                                         dialogMode === "view" ||
                                         !resolveSelectedOutputItem ||
+                                        isHeaderSkuLoading ||
                                         filteredSkuDropdownOptions.length === 0
                                     }
                                     selectedTruncate="end"
@@ -1735,6 +2078,7 @@ export default function BOM() {
                             onQuantityChange={
                                 dialogMode === "view" ? undefined : handleStructureQuantityChange
                             }
+                            skuProps={skuRowProps}
                         />
                     </div>
                     </div>
