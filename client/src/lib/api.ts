@@ -2,6 +2,31 @@
 import { getAccessToken } from './supabase';
 
 import { API_BASE, HAS_BACKEND_API } from './config';
+import {
+  fetchSkuDropdown,
+  parseSkuDropdownRecords,
+  skuApi,
+  skuOperationApi,
+  type SkuDropdownRecord,
+  type SkuDetailRecord,
+  type CreateSkuRequest,
+  type SkuOperationListRecord,
+  type SkuOperationDetailRecord,
+  type SkuOperationDetailOperation,
+} from './skuApi';
+
+export {
+  fetchSkuDropdown,
+  parseSkuDropdownRecords,
+  skuApi,
+  skuOperationApi,
+  type SkuDropdownRecord,
+  type SkuDetailRecord,
+  type CreateSkuRequest,
+  type SkuOperationListRecord,
+  type SkuOperationDetailRecord,
+  type SkuOperationDetailOperation,
+};
 
 // Generic fetch wrapper
 export async function apiRequest<T>(
@@ -1254,6 +1279,7 @@ export const commonApi = {
       isSuccessful: boolean;
     }>(`/common/getproductionplan${qs ? `?${qs}` : ''}`);
   },
+  getSkuDropdown: (params: { item_id: number }) => fetchSkuDropdown(params),
 };
 
 // ==================== PAY PERIOD API ====================
