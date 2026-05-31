@@ -54,6 +54,12 @@ export function loadMockCommonData(store: StoreRef) {
       toEntity("Kilograms", "uom", MOCK_UOM.KG, "KG"),
       toEntity("Litres", "uom", MOCK_UOM.LTR, "LTR"),
     ];
+    const productionPlanStatuses = [
+      { id: 1, value_name: "To Do", value_code: "TO_DO", code: "TO_DO", name: "To Do" },
+      { id: 2, value_name: "In Progress", value_code: "IN_PROGRESS", code: "IN_PROGRESS", name: "In Progress" },
+      { id: 3, value_name: "Completed", value_code: "COMPLETED", code: "COMPLETED", name: "Completed" },
+      { id: 4, value_name: "Overdue", value_code: "OVERDUE", code: "OVERDUE", name: "Overdue" },
+    ];
 
     const entityValues = [
       ...departments,
@@ -72,6 +78,7 @@ export function loadMockCommonData(store: StoreRef) {
       currencies,
       itemTypes,
       uoms,
+      productionPlanStatuses,
     });
   } finally {
     store.setLoading(false);

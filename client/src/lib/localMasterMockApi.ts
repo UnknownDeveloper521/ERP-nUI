@@ -2,10 +2,13 @@ import {
   BOM_STORAGE_KEY,
   ITEMS_STORAGE_KEY,
   OPERATIONS_STORAGE_KEY,
+  PRODUCTION_PLAN_STORAGE_KEY,
   type LocalBomRecord,
   type LocalItemRecord,
   type LocalOperationRecord,
+  type LocalProductionPlanRecord,
 } from "@/lib/localMasterSeed";
+import { getAllGsv7BomComponentRecords } from "@/lib/gsv7BomTreeBuilder";
 
 type ApiSuccess<T> = {
   isSuccessful: true;
@@ -364,25 +367,290 @@ export async function mockGetUoms() {
 
 export async function mockGetBOMComponents() {
   const boms = readJson<LocalBomRecord>(BOM_STORAGE_KEY);
-  return success({
-    records: boms.map((bom) => ({
-      id: `local-bom-${bom.id}`,
-      bom_component_id: `local-bom-${bom.id}`,
-      output_component: {
-        id: bom.item_id,
-        code: readJson<LocalItemRecord>(ITEMS_STORAGE_KEY).find((item) => item.id === bom.item_id)?.code ?? "",
-        name: bom.item_name,
-        item_type: bom.item_type,
-        uom: "Nos",
-      },
-      input_components: bom.components.map((component) => ({
-        item_id: component.item_id,
-        item_code: component.item_code,
-        item_name: component.item_name,
-        item_type: component.item_type,
-        uom: component.uom ?? "Nos",
-        quantity: component.quantity,
-      })),
+  const gsv7Records = getAllGsv7BomComponentRecords();
+  const localCodes = new Set(
+    boms.map((bom) =>
+      String(
+        readJson<LocalItemRecord>(ITEMS_STORAGE_KEY).find((item) => item.id === bom.item_id)?.code ?? "",
+      )
+        .trim()
+        .toUpperCase(),
+    ),
+  );
+  const mergedGsv7 = gsv7Records.filter(
+    (record) => !localCodes.has(String(record.output_component.code).trim().toUpperCase()),
+  );
+
+  const localRecords = boms.map((bom) => ({
+    id: `local-bom-${bom.id}`,
+    bom_component_id: `local-bom-${bom.id}`,
+    output_component: {
+      id: bom.item_id,
+      code: readJson<LocalItemRecord>(ITEMS_STORAGE_KEY).find((item) => item.id === bom.item_id)?.code ?? "",
+      name: bom.item_name,
+      item_type: bom.item_type,
+      uom: "Nos",
+    },
+    input_components: bom.components.map((component) => ({
+      item_id: component.item_id,
+      item_code: component.item_code,
+      item_name: component.item_name,
+      item_type: component.item_type,
+      uom: component.uom ?? "Nos",
+      quantity: component.quantity,
     })),
+  }));
+
+  return success({ records: [...mergedGsv7, ...localRecords] });
+}
+
+export async function mockGetOperationsWithOutput() {
+  const operations = readJson<LocalOperationRecord>(OPERATIONS_STORAGE_KEY);
+  const records: Array<{
+    operation: {
+      operation_id: number;
+      operation_name: string;
+      operation_code: string;
+      code: string;
+    };
+    output_component: {
+      item_id: number;
+      item_name: string;
+      item_code: string;
+      uom: string;
+      item_type: string;
+    };
+  }> = [];
+
+  for (const op of operations) {
+    for (const out of op.outputs ?? []) {
+      const type = String(out.type ?? "").toUpperCase();
+      if (type !== "SFG" && type !== "FG") continue;
+      records.push({
+        operation: {
+          operation_id: op.id,
+          operation_name: op.name,
+          operation_code: op.code,
+          code: op.code,
+        },
+        output_component: {
+          item_id: out.item_id,
+          item_name: out.item_name,
+          item_code: out.item_code,
+          uom: out.item_uom ?? "Nos",
+          item_type: out.type,
+        },
+      });
+    }
+  }
+
+  return success({ records });
+}
+
+export async function mockGetShiftForProduction() {
+  return success({
+    records: [
+      { shift_id: 1, id: 1, shift_name: "Morning", name: "Morning", value_name: "Morning" },
+      { shift_id: 2, id: 2, shift_name: "Night", name: "Night", value_name: "Night" },
+    ],
   });
 }
+
+export const mockProductionPlanApi = {
+  async getProductionPlanList(params: {
+    page: number;
+    limit: number;
+    search?: string;
+    operation_id?: number | string;
+    shift_id?: number | string;
+    status_id?: number | string;
+    date?: string;
+  }) {
+    let records = readJson<LocalProductionPlanRecord>(PRODUCTION_PLAN_STORAGE_KEY);
+
+    if (params.operation_id && params.operation_id !== "all" && params.operation_id !== "All") {
+      const opId = Number(params.operation_id);
+      records = records.filter((record) => record.operation_id === opId);
+    }
+    if (params.shift_id && params.shift_id !== "all" && params.shift_id !== "All") {
+      const shiftId = Number(params.shift_id);
+      records = records.filter((record) => record.shift_id === shiftId);
+    }
+    if (params.status_id && params.status_id !== "all" && params.status_id !== "All") {
+      const statusId = Number(params.status_id);
+      records = records.filter((record) => record.status_id === statusId);
+    }
+    if (params.date) {
+      records = records.filter(
+        (record) => record.start_date <= params.date! && record.end_date >= params.date!,
+      );
+    }
+    records = filterBySearch(records, params.search);
+
+    const pageData = paginate(records, params.page, params.limit);
+    return success({
+      records: pageData.records.map((record) => ({
+        id: record.id,
+        plan_code: record.plan_code,
+        start_date: record.start_date,
+        end_date: record.end_date,
+        operation_id: record.operation_id,
+        operation_name: record.operation_name,
+        shift_id: record.shift_id,
+        shift_name: record.shift_name,
+        status_id: record.status_id,
+        status_code: record.status_code,
+        output: record.outputs,
+      })),
+      pagination: pageData.pagination,
+    });
+  },
+
+  async getProductionPlanById(id: number) {
+    const record = readJson<LocalProductionPlanRecord>(PRODUCTION_PLAN_STORAGE_KEY).find(
+      (plan) => plan.id === id,
+    );
+    if (!record) return failure("Production plan not found.");
+    return success({
+      plan_code: record.plan_code,
+      plane_code: record.plan_code,
+      start_date: record.start_date,
+      end_date: record.end_date,
+      operation_id: record.operation_id,
+      operation_name: record.operation_name,
+      shift_id: record.shift_id,
+      shift_name: record.shift_name,
+      status_id: record.status_id,
+      status_code: record.status_code,
+      outputs: record.outputs.map((out) => ({
+        id: out.id,
+        item_id: out.item_id,
+        item_code: out.item_code,
+        item_name: out.item_name,
+        uom: out.uom,
+        target_qty: out.target_qty,
+        fulfilled_qty: out.fulfilled_qty,
+        sku_id: out.sku_id,
+        sku_code: out.sku_code,
+        sku_name: out.sku_name,
+      })),
+    });
+  },
+
+  async createProductionPlan(data: {
+    start_date: string;
+    end_date: string;
+    shift_id: number;
+    operation_id: number;
+    outputs: { item_id: number; target_qty: number }[];
+  }) {
+    const records = readJson<LocalProductionPlanRecord>(PRODUCTION_PLAN_STORAGE_KEY);
+    const items = readJson<LocalItemRecord>(ITEMS_STORAGE_KEY);
+    const operations = readJson<LocalOperationRecord>(OPERATIONS_STORAGE_KEY);
+    const operation = operations.find((op) => op.id === data.operation_id);
+    const shiftName = data.shift_id === 2 ? "Night" : "Morning";
+
+    const outputs = data.outputs.map((out, index) => {
+      const item = items.find((row) => row.id === out.item_id);
+      return {
+        id: index + 1,
+        item_id: out.item_id,
+        item_code: item?.code ?? "",
+        item_name: item?.name ?? "Item",
+        uom: item?.uom_name ?? "Nos",
+        target_qty: out.target_qty,
+        fulfilled_qty: 0,
+      };
+    });
+
+    const created: LocalProductionPlanRecord = {
+      id: nextId(records),
+      plan_code: `PLN-GSV7-${String(nextId(records)).padStart(3, "0")}`,
+      start_date: data.start_date,
+      end_date: data.end_date,
+      operation_id: data.operation_id,
+      operation_name: operation?.name ?? "Operation",
+      operation_code: operation?.code ?? "",
+      shift_id: data.shift_id,
+      shift_name: shiftName,
+      status_id: 1,
+      status_code: "TO_DO",
+      outputs,
+    };
+
+    writeJson(PRODUCTION_PLAN_STORAGE_KEY, [...records, created]);
+    return success(created, "Production plan created.");
+  },
+
+  async updateProductionPlan(id: number, data: Record<string, unknown>) {
+    const records = readJson<LocalProductionPlanRecord>(PRODUCTION_PLAN_STORAGE_KEY);
+    const index = records.findIndex((plan) => plan.id === id);
+    if (index < 0) return failure("Production plan not found.");
+
+    const next = { ...records[index] };
+    if (typeof data.start_date === "string") next.start_date = data.start_date;
+    if (typeof data.end_date === "string") next.end_date = data.end_date;
+    if (typeof data.shift_id === "number") {
+      next.shift_id = data.shift_id;
+      next.shift_name = data.shift_id === 2 ? "Night" : "Morning";
+    }
+    if (typeof data.operation_id === "number") {
+      const operation = readJson<LocalOperationRecord>(OPERATIONS_STORAGE_KEY).find(
+        (op) => op.id === data.operation_id,
+      );
+      next.operation_id = data.operation_id;
+      next.operation_name = operation?.name ?? next.operation_name;
+      next.operation_code = operation?.code ?? next.operation_code;
+    }
+    if (Array.isArray(data.outputs)) {
+      const items = readJson<LocalItemRecord>(ITEMS_STORAGE_KEY);
+      next.outputs = (data.outputs as { item_id: number; target_qty: number; id?: number }[]).map(
+        (out, idx) => {
+          const item = items.find((row) => row.id === out.item_id);
+          const existing = next.outputs[idx];
+          return {
+            id: out.id ?? existing?.id ?? idx + 1,
+            item_id: out.item_id,
+            item_code: item?.code ?? existing?.item_code ?? "",
+            item_name: item?.name ?? existing?.item_name ?? "Item",
+            uom: item?.uom_name ?? existing?.uom ?? "Nos",
+            target_qty: out.target_qty,
+            fulfilled_qty: existing?.fulfilled_qty ?? 0,
+            sku_id: existing?.sku_id,
+            sku_code: existing?.sku_code,
+            sku_name: existing?.sku_name,
+          };
+        },
+      );
+    }
+
+    records[index] = next;
+    writeJson(PRODUCTION_PLAN_STORAGE_KEY, records);
+    return success(next, "Production plan updated.");
+  },
+
+  async deleteProductionPlan(id: number) {
+    const records = readJson<LocalProductionPlanRecord>(PRODUCTION_PLAN_STORAGE_KEY);
+    const nextRecords = records.filter((plan) => plan.id !== id);
+    if (nextRecords.length === records.length) return failure("Production plan not found.");
+    writeJson(PRODUCTION_PLAN_STORAGE_KEY, nextRecords);
+    return success(undefined, "Production plan deleted.");
+  },
+
+  async updateStatusToCompleted(id: number) {
+    const records = readJson<LocalProductionPlanRecord>(PRODUCTION_PLAN_STORAGE_KEY);
+    const index = records.findIndex((plan) => plan.id === id);
+    if (index < 0) return failure("Production plan not found.");
+    records[index] = {
+      ...records[index],
+      status_id: 3,
+      status_code: "COMPLETED",
+      outputs: records[index].outputs.map((out) => ({
+        ...out,
+        fulfilled_qty: out.target_qty,
+      })),
+    };
+    writeJson(PRODUCTION_PLAN_STORAGE_KEY, records);
+    return success(records[index], "Production plan marked completed.");
+  },
+};

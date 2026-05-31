@@ -1,6 +1,8 @@
+import { format } from "date-fns";
 import {
   GSV7_FLOW_STORAGE_FLAG,
   GSV7_ITEMS,
+  GSV7_MAIN_OPERATION_CODE,
   GSV7_MOCK_OPERATIONS,
   getGsv7DemoOperationId,
   getGsv7ItemIdByCode,
@@ -10,7 +12,7 @@ import {
 } from "@/lib/gsv7OperationsMockData";
 import { gsv7TreeToTopLevelComponents, buildGsv7NestedBomTree } from "@/lib/gsv7BomTreeBuilder";
 
-export const LOCAL_MASTER_SEED_VERSION = "gsv7-v1";
+export const LOCAL_MASTER_SEED_VERSION = "gsv7-v2";
 export const LOCAL_MASTER_SEED_FLAG = "master-erp-local-seed-version";
 
 export const ITEMS_STORAGE_KEY = "master-erp-local-items";
@@ -18,6 +20,7 @@ export const OPERATIONS_STORAGE_KEY = "master-erp-local-operations";
 export const BOM_STORAGE_KEY = "master-erp-local-boms";
 export const SKU_STORAGE_KEY = "master-erp-procurement-skus";
 export const SKU_OPERATION_STORAGE_KEY = "master-erp-sku-operation-api-records";
+export const PRODUCTION_PLAN_STORAGE_KEY = "master-erp-local-production-plans";
 
 export const MOCK_ITEM_TYPE = {
   RM: 401,
@@ -48,6 +51,32 @@ export type LocalItemRecord = {
 };
 
 export type LocalOperationRecord = ReturnType<typeof mockOperationToListRow>;
+
+export type LocalProductionPlanRecord = {
+  id: number;
+  plan_code: string;
+  start_date: string;
+  end_date: string;
+  operation_id: number;
+  operation_name: string;
+  operation_code: string;
+  shift_id: number;
+  shift_name: string;
+  status_id: number;
+  status_code: string;
+  outputs: Array<{
+    id: number;
+    item_id: number;
+    item_code: string;
+    item_name: string;
+    uom: string;
+    target_qty: number;
+    fulfilled_qty: number;
+    sku_id?: number;
+    sku_code?: string;
+    sku_name?: string;
+  }>;
+};
 
 export type LocalBomRecord = {
   id: number;
@@ -212,6 +241,114 @@ export function buildLocalSkuOperationSeed(fgItemId: number) {
   ];
 }
 
+export function buildLocalProductionPlanSeed(fgItemId: number): LocalProductionPlanRecord[] {
+  const today = format(new Date(), "yyyy-MM-dd");
+  const asmOpId = getGsv7DemoOperationId(GSV7_MAIN_OPERATION_CODE);
+  const gridDryOpId = getGsv7DemoOperationId("OPR-GRID-DRY");
+
+  return [
+    {
+      id: 1,
+      plan_code: "PLN-GSV7-001",
+      start_date: today,
+      end_date: today,
+      operation_id: asmOpId,
+      operation_name: "GSV7 Assembly",
+      operation_code: GSV7_MAIN_OPERATION_CODE,
+      shift_id: 1,
+      shift_name: "Morning",
+      status_id: 2,
+      status_code: "IN_PROGRESS",
+      outputs: [
+        {
+          id: 1,
+          item_id: fgItemId,
+          item_code: GSV7_ITEMS.FG_GSV7.code,
+          item_name: GSV7_ITEMS.FG_GSV7.name,
+          uom: "Nos",
+          target_qty: 100,
+          fulfilled_qty: 45,
+          sku_id: 910001,
+          sku_code: "SKU-GSV7-12V",
+          sku_name: "GSV7 Battery 12V Standard",
+        },
+      ],
+    },
+    {
+      id: 2,
+      plan_code: "PLN-GSV7-002",
+      start_date: today,
+      end_date: today,
+      operation_id: gridDryOpId,
+      operation_name: "Grid Drying",
+      operation_code: "OPR-GRID-DRY",
+      shift_id: 2,
+      shift_name: "Night",
+      status_id: 1,
+      status_code: "TO_DO",
+      outputs: [
+        {
+          id: 1,
+          item_id: getGsv7ItemIdByCode(GSV7_ITEMS.SFG_GRID_POS_DRY.code),
+          item_code: GSV7_ITEMS.SFG_GRID_POS_DRY.code,
+          item_name: GSV7_ITEMS.SFG_GRID_POS_DRY.name,
+          uom: "Nos",
+          target_qty: 500,
+          fulfilled_qty: 0,
+        },
+      ],
+    },
+    {
+      id: 3,
+      plan_code: "PLN-GSV7-003",
+      start_date: "2026-01-10",
+      end_date: "2026-01-20",
+      operation_id: getGsv7DemoOperationId("OPR-PURIFY-LEAD"),
+      operation_name: "Lead Purification",
+      operation_code: "OPR-PURIFY-LEAD",
+      shift_id: 1,
+      shift_name: "Morning",
+      status_id: 4,
+      status_code: "OVERDUE",
+      outputs: [
+        {
+          id: 1,
+          item_id: getGsv7ItemIdByCode(GSV7_ITEMS.SFG_LEAD_INGOT.code),
+          item_code: GSV7_ITEMS.SFG_LEAD_INGOT.code,
+          item_name: GSV7_ITEMS.SFG_LEAD_INGOT.name,
+          uom: "Kg",
+          target_qty: 2000,
+          fulfilled_qty: 1200,
+        },
+      ],
+    },
+    {
+      id: 4,
+      plan_code: "PLN-GSV7-004",
+      start_date: "2026-01-05",
+      end_date: "2026-01-15",
+      operation_id: getGsv7DemoOperationId("OPR-GRID-CAST"),
+      operation_name: "Grid Casting",
+      operation_code: "OPR-GRID-CAST",
+      shift_id: 2,
+      shift_name: "Night",
+      status_id: 3,
+      status_code: "COMPLETED",
+      outputs: [
+        {
+          id: 1,
+          item_id: getGsv7ItemIdByCode(GSV7_ITEMS.SFG_GRID_CAST.code),
+          item_code: GSV7_ITEMS.SFG_GRID_CAST.code,
+          item_name: GSV7_ITEMS.SFG_GRID_CAST.name,
+          uom: "Nos",
+          target_qty: 800,
+          fulfilled_qty: 800,
+        },
+      ],
+    },
+  ];
+}
+
 export function buildLocalBomSeed(fgItemId: number): LocalBomRecord[] {
   const tree = buildGsv7NestedBomTree(GSV7_ITEMS.FG_GSV7.code);
   const topLevel = tree ? gsv7TreeToTopLevelComponents(tree) : [];
@@ -284,12 +421,14 @@ export function seedLocalMasterData(options?: { force?: boolean }) {
   const skus = buildLocalSkuSeed(fgItemId);
   const skuOperations = buildLocalSkuOperationSeed(fgItemId);
   const boms = buildLocalBomSeed(fgItemId);
+  const productionPlans = buildLocalProductionPlanSeed(fgItemId);
 
   localStorage.setItem(ITEMS_STORAGE_KEY, JSON.stringify(items));
   localStorage.setItem(OPERATIONS_STORAGE_KEY, JSON.stringify(operations));
   localStorage.setItem(SKU_STORAGE_KEY, JSON.stringify(skus));
   localStorage.setItem(SKU_OPERATION_STORAGE_KEY, JSON.stringify(skuOperations));
   localStorage.setItem(BOM_STORAGE_KEY, JSON.stringify(boms));
+  localStorage.setItem(PRODUCTION_PLAN_STORAGE_KEY, JSON.stringify(productionPlans));
 
   localStorage.removeItem(GSV7_FLOW_STORAGE_FLAG);
   seedGsv7DemoFlowMapping();
@@ -299,13 +438,14 @@ export function seedLocalMasterData(options?: { force?: boolean }) {
 
   return {
     seeded: true,
-    message: "Seeded GSV7 demo data for items, SKUs, operations, SKU mappings, and BOMs.",
+    message: "Seeded GSV7 demo data for items, SKUs, operations, SKU mappings, BOMs, and production plans.",
     counts: {
       items: items.length,
       skus: skus.length,
       operations: operations.length,
       skuOperations: skuOperations.length,
       boms: boms.length,
+      productionPlans: productionPlans.length,
     },
   };
 }

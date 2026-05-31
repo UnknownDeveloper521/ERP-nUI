@@ -136,6 +136,33 @@ function buildScaledOperation(
     };
 }
 
+/** Remove nested operation panels — used when showing operations as separate boxes. */
+function stripNestedFromOperation(op: Gsv7BomStructureOperation): Gsv7BomStructureOperation {
+    return {
+        ...op,
+        inputs: op.inputs.map(({ nestedOperation: _nested, ...line }) => line),
+    };
+}
+
+/** Collect every nested operation under the root into a flat list (depth-first). */
+function flattenNestedOperations(rootOp: Gsv7BomStructureOperation): Gsv7BomStructureOperation[] {
+    const acc: Gsv7BomStructureOperation[] = [];
+
+    const walk = (op: Gsv7BomStructureOperation) => {
+        for (const input of op.inputs) {
+            if (!input.nestedOperation) continue;
+            acc.push(input.nestedOperation);
+            walk(input.nestedOperation);
+        }
+    };
+
+    walk(rootOp);
+    return acc.map((op, index) => ({
+        ...stripNestedFromOperation(op),
+        sequence: index + 1,
+    }));
+}
+
 /** Nested BOM tree for any GSV7 catalog SFG/FG; quantities scale from root output qty. */
 export function buildGsv7NestedBomTree(
     itemCode: string,
@@ -148,23 +175,15 @@ export function buildGsv7NestedBomTree(
         (i) => normalizeCode(i.code) === normalizeCode(itemCode),
     );
     const mainOperation = buildScaledOperation(producer, itemCode, rootOutputQty, new Set());
-
-    const childOperations: Gsv7BomStructureOperation[] = [];
-    if (normalizeCode(producer.code) === normalizeCode(GSV7_MAIN_OPERATION_CODE)) {
-        mainOperation.inputs.forEach((input, index) => {
-            if (input.nestedOperation) {
-                childOperations.push({
-                    ...input.nestedOperation,
-                    sequence: index + 1,
-                });
-            }
-        });
-    }
+    const childOperations =
+        normalizeCode(producer.code) === normalizeCode(GSV7_MAIN_OPERATION_CODE)
+            ? flattenNestedOperations(mainOperation)
+            : [];
 
     return {
         selectedItemCode: itemCode,
         selectedItemName: item?.name ?? itemCode,
-        mainOperation,
+        mainOperation: stripNestedFromOperation(mainOperation),
         childOperations,
         rootOutputQuantity: rootOutputQty,
         isGsv7Nested: true,
@@ -299,4 +318,83 @@ export function gsv7TreeToExplodedRmComponents(tree: Gsv7BomOperationTree): Flat
     const acc = new Map<string, FlatBomComponent>();
     collectLeafMaterials(tree.mainOperation, acc);
     return [...acc.values()];
+}
+
+// ---------------------------------------------------------------------------
+// BOM quantity persistence (BOM form → Production Plan)
+// ---------------------------------------------------------------------------
+
+const GSV7_BOM_QTY_STORAGE_KEY = "master-erp-gsv7-bom-quantities";
+
+export type Gsv7BomQuantityMap = Record<string, number | string>;
+
+function collectQtyFromOperation(op: Gsv7BomStructureOperation, acc: Gsv7BomQuantityMap) {
+    for (const line of [...op.outputs, ...op.inputs]) {
+        if (line.item_id > 0) acc[String(line.item_id)] = line.quantity;
+    }
+}
+
+export function collectGsv7TreeQuantities(tree: {
+    mainOperation: Gsv7BomStructureOperation;
+    childOperations: Gsv7BomStructureOperation[];
+}): Gsv7BomQuantityMap {
+    const acc: Gsv7BomQuantityMap = {};
+    collectQtyFromOperation(tree.mainOperation, acc);
+    tree.childOperations.forEach((child) => collectQtyFromOperation(child, acc));
+    return acc;
+}
+
+export function saveGsv7BomQuantities(itemCode: string, quantities: Gsv7BomQuantityMap) {
+    try {
+        const key = normalizeCode(itemCode);
+        if (!key) return;
+        const raw = localStorage.getItem(GSV7_BOM_QTY_STORAGE_KEY);
+        const all = raw ? (JSON.parse(raw) as Record<string, Gsv7BomQuantityMap>) : {};
+        all[key] = quantities;
+        localStorage.setItem(GSV7_BOM_QTY_STORAGE_KEY, JSON.stringify(all));
+    } catch {
+        /* ignore */
+    }
+}
+
+export function loadGsv7BomQuantities(itemCode: string): Gsv7BomQuantityMap {
+    try {
+        const key = normalizeCode(itemCode);
+        if (!key) return {};
+        const raw = localStorage.getItem(GSV7_BOM_QTY_STORAGE_KEY);
+        if (!raw) return {};
+        const all = JSON.parse(raw) as Record<string, Gsv7BomQuantityMap>;
+        return all[key] ?? {};
+    } catch {
+        return {};
+    }
+}
+
+function applyQtyMapToOperation(
+    op: Gsv7BomStructureOperation,
+    qtyMap: Gsv7BomQuantityMap,
+): Gsv7BomStructureOperation {
+    const patch = (lines: Gsv7BomStructureOperation["inputs"]) =>
+        lines.map((line) => {
+            const q = qtyMap[String(line.item_id)];
+            return q !== undefined ? { ...line, quantity: q } : line;
+        });
+
+    return {
+        ...op,
+        outputs: patch(op.outputs),
+        inputs: patch(op.inputs),
+    };
+}
+
+export function applyGsv7BomQuantityMap(
+    tree: Gsv7BomOperationTree,
+    qtyMap: Gsv7BomQuantityMap,
+): Gsv7BomOperationTree {
+    if (Object.keys(qtyMap).length === 0) return tree;
+    return {
+        ...tree,
+        mainOperation: applyQtyMapToOperation(tree.mainOperation, qtyMap),
+        childOperations: tree.childOperations.map((child) => applyQtyMapToOperation(child, qtyMap)),
+    };
 }

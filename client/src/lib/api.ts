@@ -20,9 +20,12 @@ import {
   mockGetItemTypes,
   mockGetItemsDropdown,
   mockGetOperationsDropdown,
+  mockGetOperationsWithOutput,
+  mockGetShiftForProduction,
   mockGetUoms,
   mockItemsApi,
   mockOperationsApi,
+  mockProductionPlanApi,
 } from './localMasterMockApi';
 
 export {
@@ -1263,7 +1266,8 @@ export const commonApi = {
   // Get BOM components for dropdown and auto-population
   getBOMComponents: () =>
     HAS_BACKEND_API ? apiRequest<any>('/common/getbomcomponents') : mockGetBOMComponents(),
-  getOperationsWithOutput: () => apiRequest<any>('/common/getoperationwithoutput'),
+  getOperationsWithOutput: () =>
+    HAS_BACKEND_API ? apiRequest<any>('/common/getoperationwithoutput') : mockGetOperationsWithOutput(),
   getAssignedWorkCenters: () => apiRequest<any>('/common/getassignedworkcenter'),
   /** Operations allowed for a work center (create flow, material release, etc.) */
   getOperationWithWorkCenter: (work_center_id: number) =>
@@ -3350,6 +3354,8 @@ export const productionApi = {
     status_id?: number | string;
     date?: string;
   }) => {
+    if (!HAS_BACKEND_API) return mockProductionPlanApi.getProductionPlanList(params);
+
     const query = new URLSearchParams();
     query.set('page', String(params.page));
     query.set('limit', String(params.limit));
@@ -3373,23 +3379,37 @@ export const productionApi = {
     shift_id: number; 
     operation_id: number; 
     outputs: { item_id: number; target_qty: number }[] 
-  }) => apiRequest<any>('/production/plan/createproductionplan', {
-    method: 'POST',
-    body: JSON.stringify(data),
-  }),
-  getProductionPlanById: (id: number) => apiRequest<any>(`/production/plan/getproductionplanbyid/${id}`),
-  updateProductionPlan: (id: number, data: any) => apiRequest<any>(`/production/plan/updateproductionplan/${id}`, {
-    method: 'PATCH',
-    body: JSON.stringify(data),
-  }),
-  deleteProductionPlan: (id: number) => apiRequest<any>(`/production/plan/deleteproductionplan/${id}`, {
-    method: 'DELETE',
-  }),
-  updateStatusToCompleted: (id: number, data: { status_id: string | number }) => 
-    apiRequest<any>(`/production/plan/updatestatustocompleted/${id}`, {
+  }) => {
+    if (!HAS_BACKEND_API) return mockProductionPlanApi.createProductionPlan(data);
+    return apiRequest<any>('/production/plan/createproductionplan', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
+  },
+  getProductionPlanById: (id: number) => {
+    if (!HAS_BACKEND_API) return mockProductionPlanApi.getProductionPlanById(id);
+    return apiRequest<any>(`/production/plan/getproductionplanbyid/${id}`);
+  },
+  updateProductionPlan: (id: number, data: any) => {
+    if (!HAS_BACKEND_API) return mockProductionPlanApi.updateProductionPlan(id, data);
+    return apiRequest<any>(`/production/plan/updateproductionplan/${id}`, {
       method: 'PATCH',
       body: JSON.stringify(data),
-    }),
+    });
+  },
+  deleteProductionPlan: (id: number) => {
+    if (!HAS_BACKEND_API) return mockProductionPlanApi.deleteProductionPlan(id);
+    return apiRequest<any>(`/production/plan/deleteproductionplan/${id}`, {
+      method: 'DELETE',
+    });
+  },
+  updateStatusToCompleted: (id: number, data: { status_id: string | number }) => {
+    if (!HAS_BACKEND_API) return mockProductionPlanApi.updateStatusToCompleted(id);
+    return apiRequest<any>(`/production/plan/updatestatustocompleted/${id}`, {
+      method: 'PATCH',
+      body: JSON.stringify(data),
+    });
+  },
   getMyRequestList: (params: {
     page: number;
     limit: number;
@@ -3635,7 +3655,8 @@ export const productionApi = {
       method: 'DELETE',
     });
   },
-  getShiftForProduction: () => apiRequest<any>('/common/getshiftforproduction'),
+  getShiftForProduction: () =>
+    HAS_BACKEND_API ? apiRequest<any>('/common/getshiftforproduction') : mockGetShiftForProduction(),
 };
 
 // ==================== ROLES & PERMISSIONS API ====================

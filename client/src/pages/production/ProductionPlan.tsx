@@ -68,8 +68,10 @@ import {
 } from "@/utils/assignedDropdown";
 import {
     buildGsv7NestedBomTree,
+    applyGsv7BomQuantityMap,
     getAllGsv7BomComponentRecords,
     isGsv7CatalogItemCode,
+    loadGsv7BomQuantities,
     type Gsv7BomOperationTree,
     type Gsv7BomStructureLine,
     type Gsv7BomStructureOperation,
@@ -699,6 +701,122 @@ function gsv7BomTreeToPlanTree(tree: Gsv7BomOperationTree): PlanOperationTree {
     };
 }
 
+function buildGsv7PlanTreeFromBom(itemCode: string, bomRecord: any | null): PlanOperationTree | null {
+    let gsv7Tree = buildGsv7NestedBomTree(itemCode, 1);
+    if (!gsv7Tree) return null;
+
+    const savedQty = loadGsv7BomQuantities(itemCode);
+    gsv7Tree = applyGsv7BomQuantityMap(gsv7Tree, savedQty);
+
+    if (Object.keys(savedQty).length === 0 && Array.isArray(bomRecord?.input_components)) {
+        const bomQtyMap: Record<string, number> = {};
+        bomRecord.input_components.forEach((inp: { item_id: number; quantity?: number }) => {
+            bomQtyMap[String(inp.item_id)] = Number(inp.quantity) || 1;
+        });
+        gsv7Tree = applyGsv7BomQuantityMap(gsv7Tree, bomQtyMap);
+    }
+
+    return gsv7BomTreeToPlanTree(gsv7Tree);
+}
+
+function PlanMainOperationCard({
+    operation,
+    highlightedItemId,
+    highlightedType,
+}: {
+    operation: PlanStructureOperation;
+    highlightedItemId?: number;
+    highlightedType?: string;
+}) {
+    return (
+        <div className="rounded-lg border border-blue-200 bg-white shadow-sm overflow-hidden">
+            <div className="flex flex-wrap items-center justify-between gap-2 border-b bg-muted/30 px-4 py-3">
+                <p className="text-sm font-bold text-foreground">
+                    <span className="font-mono">{operation.code}</span>
+                    <span className="text-muted-foreground font-normal"> • </span>
+                    {operation.name}
+                </p>
+                <Badge className="bg-blue-600 hover:bg-blue-600 text-white text-[10px] shrink-0">
+                    Main Operation
+                </Badge>
+            </div>
+            <div className="space-y-4 p-4">
+                {operation.outputs.length > 0 && (
+                    <div className="space-y-2">
+                        <p className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">
+                            Output
+                        </p>
+                        <div className="space-y-2">
+                            {operation.outputs.map((line) => (
+                                <PlanOperationItemRow
+                                    key={`main-out-${line.item_id}`}
+                                    line={line}
+                                    highlighted={line.item_id === highlightedItemId}
+                                    typeOverride={
+                                        line.item_id === highlightedItemId ? highlightedType : undefined
+                                    }
+                                />
+                            ))}
+                        </div>
+                    </div>
+                )}
+                {operation.inputs.length > 0 && (
+                    <div className="space-y-2">
+                        <p className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">
+                            Inputs
+                        </p>
+                        <div className="space-y-2">
+                            {operation.inputs.map((line) => (
+                                <PlanOperationItemRow key={`main-in-${line.item_id}`} line={line} />
+                            ))}
+                        </div>
+                    </div>
+                )}
+            </div>
+        </div>
+    );
+}
+
+function PlanChildOperationCard({ operation }: { operation: PlanStructureOperation }) {
+    return (
+        <div className="rounded-lg border border-border/80 bg-white shadow-sm overflow-hidden">
+            <div className="border-b bg-muted/20 px-4 py-3">
+                <p className="text-sm font-bold text-foreground">
+                    <span className="font-mono">{operation.code}</span>
+                    <span className="text-muted-foreground font-normal"> • </span>
+                    {operation.name}
+                </p>
+            </div>
+            <div className="space-y-4 p-4">
+                {operation.outputs.length > 0 && (
+                    <div className="space-y-2">
+                        <p className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">
+                            Output
+                        </p>
+                        <div className="space-y-2">
+                            {operation.outputs.map((line) => (
+                                <PlanOperationItemRow key={`child-out-${operation.id}-${line.item_id}`} line={line} />
+                            ))}
+                        </div>
+                    </div>
+                )}
+                {operation.inputs.length > 0 && (
+                    <div className="space-y-2">
+                        <p className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">
+                            Inputs
+                        </p>
+                        <div className="space-y-2">
+                            {operation.inputs.map((line) => (
+                                <PlanOperationItemRow key={`child-in-${operation.id}-${line.item_id}`} line={line} />
+                            ))}
+                        </div>
+                    </div>
+                )}
+            </div>
+        </div>
+    );
+}
+
 function PlanOperationItemRow({
     line,
     highlighted,
@@ -749,10 +867,6 @@ function PlanOperationItemRow({
 export default function ProductionPlan() {
     const { isMenuVisible, canCreate, canEdit, canDelete, canView } = useHasPermission();
     const permissionModule = "PRODUCTION/PRODUCTION_PLAN";
-
-    if (!isMenuVisible(permissionModule)) {
-        return <Unauthorized />;
-    }
 
     const { toast } = useToast();
 
@@ -1161,14 +1275,10 @@ export default function ProductionPlan() {
     const bomSummaryText = useMemo(() => {
         if (!selectedFinishedGood) return "";
         const code = selectedFinishedGood.item.code || selectedFinishedGood.item.name;
-        const bomRef = selectedFinishedGood.item.code
-            ? `BOM-${selectedFinishedGood.item.code.replace(/\s+/g, "")}`
-            : "BOM";
-        const bomLoaded = selectedFinishedGood.hasBom ? "BOM loaded" : "operation master loaded";
         if (effectiveTargetQty != null) {
-            return `${code} × ${effectiveTargetQty.toLocaleString()} → Tasks built from ${bomRef} (${bomLoaded})`;
+            return `${code} × ${effectiveTargetQty.toLocaleString()} → quantities calculated from BOM (per-unit × target)`;
         }
-        return `${code} → ${bomLoaded} · enter target quantity to calculate totals`;
+        return `${code} → BOM loaded · enter target quantity to calculate required amounts`;
     }, [selectedFinishedGood, effectiveTargetQty]);
 
     // Pagination
@@ -1246,12 +1356,12 @@ export default function ProductionPlan() {
             Array.isArray(bomRecord?.input_components) && bomRecord.input_components.length > 0;
 
         if (isGsv7CatalogItemCode(selectedFinishedGood.item.code)) {
-            const gsv7Tree = buildGsv7NestedBomTree(selectedFinishedGood.item.code, 1);
+            const planTree = buildGsv7PlanTreeFromBom(selectedFinishedGood.item.code, bomRecord);
             if (cancelled) return;
-            if (gsv7Tree) {
+            if (planTree) {
                 setIsPlanTreeDemo(false);
-                setPlanOperationTreeBase(gsv7BomTreeToPlanTree(gsv7Tree));
-                setSelectedOpId(String(gsv7Tree.mainOperation.id));
+                setPlanOperationTreeBase(planTree);
+                setSelectedOpId(String(planTree.mainOperation.id));
             } else {
                 setPlanOperationTreeBase(null);
                 setSelectedOpId(String(selectedFinishedGood.operationId));
@@ -1632,6 +1742,10 @@ export default function ProductionPlan() {
     };
 
     const isRowActionBusy = openingPlanId !== null || isSaving;
+
+    if (!isMenuVisible(permissionModule)) {
+        return <Unauthorized />;
+    }
 
     return (
         <div className="h-full flex flex-col gap-6 animate-in fade-in duration-500">
@@ -2059,9 +2173,9 @@ export default function ProductionPlan() {
                                     <div className="space-y-4">
                                         {isGsv7PlanItem && (
                                             <p className="text-xs text-blue-900 rounded-md border border-blue-200 bg-blue-50 px-3 py-2">
-                                                GSV7 nested BOM loaded — enter{" "}
+                                                BOM quantities loaded (per 1 finished unit). Enter{" "}
                                                 <span className="font-semibold">Target Qty</span> to multiply
-                                                all operation inputs and outputs for this plan.
+                                                all inputs and outputs for this production plan.
                                             </p>
                                         )}
                                         {isPlanTreeDemo && !isGsv7PlanItem && (
@@ -2074,96 +2188,28 @@ export default function ProductionPlan() {
                                         )}
                                         {effectiveTargetQty == null && (
                                             <p className="text-xs text-muted-foreground rounded-md border border-dashed bg-muted/20 px-3 py-2">
-                                                Enter <span className="font-semibold">Target Qty</span> to scale
-                                                required quantities for this plan. Showing BOM structure per
-                                                operation below.
+                                                Showing BOM quantities for{" "}
+                                                <span className="font-semibold">1 unit</span>. Enter{" "}
+                                                <span className="font-semibold">Target Qty</span> to scale all
+                                                required amounts.
                                             </p>
                                         )}
-                                        <div className="rounded-lg border border-blue-200 bg-white shadow-sm overflow-hidden">
-                                            <div className="flex flex-wrap items-center justify-between gap-2 border-b bg-muted/30 px-4 py-3">
-                                                <p className="text-sm font-bold text-foreground">
-                                                    <span className="font-mono">{displayPlanTree.mainOperation.code}</span>
-                                                    <span className="text-muted-foreground font-normal"> • </span>
-                                                    {displayPlanTree.mainOperation.name}
-                                                </p>
-                                                <Badge className="bg-blue-600 hover:bg-blue-600 text-white text-[10px] shrink-0">
-                                                    Main Operation
-                                                </Badge>
-                                            </div>
-                                            <div className="space-y-4 p-4">
-                                                {displayPlanTree.mainOperation.outputs.length > 0 && (
-                                                    <div className="space-y-2">
-                                                        <p className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">
-                                                            Output
-                                                        </p>
-                                                        <div className="space-y-2">
-                                                            {displayPlanTree.mainOperation.outputs.map((line) => (
-                                                                <PlanOperationItemRow
-                                                                    key={`main-out-${line.item_id}`}
-                                                                    line={line}
-                                                                    highlighted={
-                                                                        line.item_id ===
-                                                                        selectedFinishedGood?.item.id
-                                                                    }
-                                                                    typeOverride={
-                                                                        line.item_id ===
-                                                                        selectedFinishedGood?.item.id
-                                                                            ? selectedFinishedGood.item.type
-                                                                            : undefined
-                                                                    }
-                                                                />
-                                                            ))}
-                                                        </div>
-                                                    </div>
-                                                )}
-                                                {displayPlanTree.mainOperation.inputs.length > 0 && (
-                                                    <div className="space-y-2">
-                                                        <p className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">
-                                                            Inputs
-                                                        </p>
-                                                        <div className="space-y-2">
-                                                            {displayPlanTree.mainOperation.inputs.map((line) => (
-                                                                <PlanOperationItemRow
-                                                                    key={`main-in-${line.item_id}`}
-                                                                    line={line}
-                                                                />
-                                                            ))}
-                                                        </div>
-                                                    </div>
-                                                )}
-                                            </div>
-
+                                        <div className="space-y-4">
+                                            <PlanMainOperationCard
+                                                operation={displayPlanTree.mainOperation}
+                                                highlightedItemId={selectedFinishedGood?.item.id}
+                                                highlightedType={selectedFinishedGood?.item.type}
+                                            />
                                             {displayPlanTree.childOperations.length > 0 && (
-                                                <div className="border-t bg-muted/10 px-4 py-4 space-y-3">
+                                                <div className="space-y-3">
                                                     <p className="text-xs font-semibold text-muted-foreground">
-                                                        Mini operations that feed the assembly
+                                                        Related operations from BOM
                                                     </p>
                                                     {displayPlanTree.childOperations.map((child) => (
-                                                        <div
+                                                        <PlanChildOperationCard
                                                             key={child.id}
-                                                            className="rounded-md border border-border bg-muted/5 p-3 space-y-3"
-                                                        >
-                                                            <p className="text-sm font-bold">
-                                                                <span className="font-mono">{child.code}</span>
-                                                                <span className="text-muted-foreground font-normal">
-                                                                    {" "}
-                                                                    •{" "}
-                                                                </span>
-                                                                {child.name}
-                                                            </p>
-                                                            {child.outputs.map((line) => (
-                                                                <PlanOperationItemRow
-                                                                    key={`child-${child.id}-out-${line.item_id}`}
-                                                                    line={line}
-                                                                />
-                                                            ))}
-                                                            {child.inputs.map((line) => (
-                                                                <PlanOperationItemRow
-                                                                    key={`child-${child.id}-in-${line.item_id}`}
-                                                                    line={line}
-                                                                />
-                                                            ))}
-                                                        </div>
+                                                            operation={child}
+                                                        />
                                                     ))}
                                                 </div>
                                             )}
