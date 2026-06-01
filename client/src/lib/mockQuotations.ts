@@ -1,4 +1,4 @@
-import { mockCustomers, mockFinishedGoods } from "./masterMockData";
+import { mockCustomers } from "./masterMockData";
 
 export type QuotationStatus = "Draft Quote" | "Submitted Quote" | "Expired Quotations" | "Converted to SO";
 
@@ -6,6 +6,10 @@ export interface QuotationItem {
     id: number;
     itemCode: string;
     item: string;
+    skuId?: number | string;
+    skuCode?: string;
+    skuName?: string;
+    uom?: string;
     qty: number | string;
     rate: number | string;
     amount: number;
@@ -77,22 +81,28 @@ let mockQuotations: QuotationData[] = [
         quotationValidity: "2026-03-31",
         remarks: "Standard terms apply. All products come with 1-year warranty.",
         items: [
-            { 
-                id: 1, 
-                itemCode: "FG-001", 
-                item: "GSV 7", 
-                qty: 10, 
-                rate: 1200, 
-                amount: 12000 
+            {
+                id: 1,
+                itemCode: "FG-GSV7",
+                item: "GSV7 Battery",
+                skuCode: "SKU-GSV7-12V",
+                skuName: "GSV7 Battery 12V Standard",
+                uom: "NOS",
+                qty: 120,
+                rate: 185000,
+                amount: 22200000,
             },
-            { 
-                id: 2, 
-                itemCode: "FG-002", 
-                item: "GSV 8", 
-                qty: 20, 
-                rate: 450, 
-                amount: 9000 
-            }
+            {
+                id: 2,
+                itemCode: "FG-GSV7",
+                item: "GSV7 Battery",
+                skuCode: "SKU-GSV7-EXP",
+                skuName: "GSV7 Battery Export Grade",
+                uom: "NOS",
+                qty: 40,
+                rate: 195000,
+                amount: 7800000,
+            },
         ],
         status: "Draft Quote",
         discountValue: 5,
@@ -126,22 +136,28 @@ let mockQuotations: QuotationData[] = [
         quotationValidity: "2026-04-25",
         remarks: "Include installation and commissioning services.",
         items: [
-            { 
-                id: 1, 
-                itemCode: "FG-003", 
-                item: "GSMX 2.5", 
-                qty: 15, 
-                rate: 850, 
-                amount: 12750 
+            {
+                id: 1,
+                itemCode: "FG-GSV7",
+                item: "GSV7 Battery",
+                skuCode: "SKU-GSV7-12V",
+                skuName: "GSV7 Battery 12V Standard",
+                uom: "NOS",
+                qty: 80,
+                rate: 185000,
+                amount: 14800000,
             },
-            { 
-                id: 2, 
-                itemCode: "FG-004", 
-                item: "GSMx 6.5", 
-                qty: 30, 
-                rate: 125, 
-                amount: 3750 
-            }
+            {
+                id: 2,
+                itemCode: "FG-GSV7",
+                item: "GSV7 Battery",
+                skuCode: "SKU-GSV7-EXP",
+                skuName: "GSV7 Battery Export Grade",
+                uom: "NOS",
+                qty: 25,
+                rate: 195000,
+                amount: 4875000,
+            },
         ],
         status: "Submitted Quote",
         discountValue: 500,
@@ -174,30 +190,28 @@ let mockQuotations: QuotationData[] = [
         quotationValidity: "2026-04-05",
         remarks: "Priority order - expedited delivery required",
         items: [
-            { 
-                id: 1, 
-                itemCode: "FG-001", 
-                item: "GSV 7", 
-                qty: 100, 
-                rate: 1200, 
-                amount: 120000 
+            {
+                id: 1,
+                itemCode: "FG-GSV7",
+                item: "GSV7 Battery",
+                skuCode: "SKU-GSV7-12V",
+                skuName: "GSV7 Battery 12V Standard",
+                uom: "NOS",
+                qty: 100,
+                rate: 185000,
+                amount: 18500000,
             },
-            { 
-                id: 2, 
-                itemCode: "FG-002", 
-                item: "GSV 8", 
-                qty: 50, 
-                rate: 450, 
-                amount: 22500 
+            {
+                id: 2,
+                itemCode: "FG-GSV7",
+                item: "GSV7 Battery",
+                skuCode: "SKU-GSV7-EXP",
+                skuName: "GSV7 Battery Export Grade",
+                uom: "NOS",
+                qty: 50,
+                rate: 195000,
+                amount: 9750000,
             },
-            { 
-                id: 3, 
-                itemCode: "FG-003", 
-                item: "GSMX 2.5", 
-                qty: 75, 
-                rate: 850, 
-                amount: 63750 
-            }
         ],
         status: "Submitted Quote",
         discountValue: 10,
@@ -231,22 +245,28 @@ let mockQuotations: QuotationData[] = [
         quotationValidity: "2026-04-07",
         remarks: "Bulk order - special pricing applied",
         items: [
-            { 
-                id: 1, 
-                itemCode: "FG-004", 
-                item: "GSMx 6.5", 
-                qty: 200, 
-                rate: 125, 
-                amount: 25000 
+            {
+                id: 1,
+                itemCode: "FG-GSV7",
+                item: "GSV7 Battery",
+                skuCode: "SKU-GSV7-12V",
+                skuName: "GSV7 Battery 12V Standard",
+                uom: "NOS",
+                qty: 200,
+                rate: 182000,
+                amount: 36400000,
             },
-            { 
-                id: 2, 
-                itemCode: "FG-005", 
-                item: "SMF 20", 
-                qty: 150, 
-                rate: 95, 
-                amount: 14250 
-            }
+            {
+                id: 2,
+                itemCode: "FG-GSV7",
+                item: "GSV7 Battery",
+                skuCode: "SKU-GSV7-EXP",
+                skuName: "GSV7 Battery Export Grade",
+                uom: "NOS",
+                qty: 150,
+                rate: 192000,
+                amount: 28800000,
+            },
         ],
         status: "Submitted Quote",
         discountValue: 1500,
@@ -279,14 +299,17 @@ let mockQuotations: QuotationData[] = [
         quotationValidity: "2026-04-09",
         remarks: "Standard delivery terms - FOB destination",
         items: [
-            { 
-                id: 1, 
-                itemCode: "FG-001", 
-                item: "GSV 7", 
-                qty: 50, 
-                rate: 1200, 
-                amount: 60000 
-            }
+            {
+                id: 1,
+                itemCode: "FG-GSV7",
+                item: "GSV7 Battery",
+                skuCode: "SKU-GSV7-12V",
+                skuName: "GSV7 Battery 12V Standard",
+                uom: "NOS",
+                qty: 50,
+                rate: 185000,
+                amount: 9250000,
+            },
         ],
         status: "Draft Quote",
         discountValue: 5,

@@ -73,7 +73,7 @@ const CommonStoreContext = createContext<CommonStoreContextValue | undefined>(un
  * WHY: This is necessary when we change how data is grouped or normalized in loadCommonData.ts,
  * as it ensure users receive the new correctly-tagged records immediately.
  */
-const STORAGE_KEY = "erp_common_data_v21";
+const STORAGE_KEY = "erp_common_data_v22";
 
 const loadInitialState = (): CommonState => {
   try {

@@ -44,6 +44,7 @@ import {
     getFirstAssignedMatch,
     prioritizeByAssigned,
 } from "@/utils/assignedDropdown";
+import { getBomMockSkusForItem } from "@/lib/bomSkuMockData";
 
 /** Green styling for successful actions; keep errors as destructive. */
 const crudSuccessToast = {
@@ -65,6 +66,35 @@ const formatDate = (date: Date | string): string => {
     const year = d.getFullYear();
     return `${day}-${month}-${year}`;
 };
+
+const formatWhReceiveItemSkuLabel = (item: {
+    skuCode?: string;
+    skuName?: string;
+    itemCode?: string;
+}): string => {
+    if (item.skuCode) {
+        return item.skuName ? `${item.skuCode} — ${item.skuName}` : item.skuCode;
+    }
+    if (item.skuName) return item.skuName;
+    const mock = getBomMockSkusForItem(item.itemCode)[0];
+    if (mock) return mock.name ? `${mock.code} — ${mock.name}` : mock.code;
+    return "—";
+};
+
+function mapWhReceiveProducedItem(r: Record<string, unknown>, index: number): ProducedItem {
+    return {
+        id: Number(r.item_id ?? r.id ?? index + 1),
+        itemCode: String(r.item_code ?? r.itemCode ?? ""),
+        itemName: String(r.item_name ?? r.itemName ?? ""),
+        uom: String(r.uom_name ?? r.uom ?? ""),
+        qtyProduced: Number(
+            r.total_qty ?? r.produced_qty ?? r.qty_produced ?? r.qtyProduced ?? r.qty ?? 0
+        ),
+        skuCode: String(r.sku_code ?? r.skuCode ?? ""),
+        skuName: String(r.sku_name ?? r.skuName ?? ""),
+        itemTypeCode: String(r.item_type_code ?? r.itemTypeCode ?? ""),
+    };
+}
 
 function mapWhReceiveListRecord(r: Record<string, any>): OperationRelease {
   const st = (r.status_name ?? r.status ?? "Issued to Warehouse") as string;
@@ -111,13 +141,7 @@ function mapWhReceiveDetailPayload(d: Record<string, any>): OperationRelease {
   const rawItems =
     d.items ?? d.produced_items ?? d.output_items ?? d.material_release_items ?? d.production_items ?? [];
   let items: ProducedItem[] = Array.isArray(rawItems)
-    ? rawItems.map((r: any, i: number) => ({
-          id: Number(r.item_id ?? r.id ?? i + 1),
-          itemCode: String(r.item_code ?? r.itemCode ?? ""),
-          itemName: String(r.item_name ?? r.itemName ?? ""),
-          uom: String(r.uom_name ?? r.uom ?? ""),
-          qtyProduced: Number(r.total_qty ?? r.produced_qty ?? r.qty_produced ?? r.qtyProduced ?? r.qty ?? 0)
-      }))
+    ? rawItems.map((r: any, i: number) => mapWhReceiveProducedItem(r, i))
     : [];
 
   const bwo = parseBatchWiseOutputs(
@@ -152,13 +176,7 @@ function mapWhReceiveDetailPayload(d: Record<string, any>): OperationRelease {
         batchNo: String(bd.batch_no ?? bd.batchNo ?? bd.batch_code ?? ""),
         shift,
         items: Array.isArray(bItems)
-          ? bItems.map((r: any, i: number) => ({
-                id: Number(r.item_id ?? r.id ?? i + 1),
-                itemCode: String(r.item_code ?? r.itemCode ?? ""),
-                itemName: String(r.item_name ?? r.itemName ?? ""),
-                uom: String(r.uom_name ?? r.uom ?? ""),
-                qtyProduced: Number(r.total_qty ?? r.produced_qty ?? r.qty_produced ?? r.qtyProduced ?? 0)
-            }))
+          ? bItems.map((r: any, i: number) => mapWhReceiveProducedItem(r, i))
           : []
       };
     });
@@ -910,15 +928,17 @@ export default function WHReceive() {
                                                     "overflow-x-auto",
                                                     selectedWHReceive.items.length > 6 && "max-h-[min(45vh,360px)] overflow-y-auto custom-scrollbar"
                                                 )}>
-                                                <Table className="w-full min-w-[640px] table-fixed">
+                                                <Table className="w-full min-w-[720px] table-fixed">
                                                     <colgroup>
-                                                        <col className="w-[62%]" />
+                                                        <col className="w-[32%]" />
+                                                        <col className="w-[34%]" />
                                                         <col className="w-[14%]" />
-                                                        <col className="w-[24%]" />
+                                                        <col className="w-[20%]" />
                                                     </colgroup>
                                                     <TableHeader>
                                                         <TableRow className="bg-muted/30 hover:bg-muted/30">
-                                                            <TableHead className="py-2.5 pl-4 text-[10px] font-bold uppercase tracking-wider">Item</TableHead>
+                                                            <TableHead className="py-2.5 pl-4 pr-2 text-[10px] font-bold uppercase tracking-wider">Item</TableHead>
+                                                            <TableHead className="py-2.5 pl-0 pr-2 text-left text-[10px] font-bold uppercase tracking-wider">SKU</TableHead>
                                                             <TableHead className="py-2.5 text-[10px] font-bold uppercase tracking-wider">UOM</TableHead>
                                                             <TableHead className="py-2.5 pr-4 text-right text-[10px] font-bold uppercase tracking-wider">Received Qty</TableHead>
                                                         </TableRow>
@@ -926,13 +946,21 @@ export default function WHReceive() {
                                                     <TableBody>
                                                         {selectedWHReceive.items.map((item, index) => (
                                                             <TableRow key={index} className="border-b last:border-0 hover:bg-muted/10 transition-colors">
-                                                                <TableCell className="max-w-0 py-3 pl-4 align-top">
+                                                                <TableCell className="max-w-0 py-3 pl-4 pr-2 align-top">
                                                                     <div className="flex flex-col">
                                                                         <span className="font-bold text-xs text-primary truncate" title={item.itemCode}>{item.itemCode}</span>
                                                                         <span className="text-[10px] text-slate-500 font-medium whitespace-normal wrap-break-word leading-snug" title={item.itemName}>
                                                                             {item.itemName}
                                                                         </span>
                                                                     </div>
+                                                                </TableCell>
+                                                                <TableCell className="max-w-0 py-3 pl-0 pr-2 align-top text-left text-xs text-muted-foreground">
+                                                                    <span
+                                                                        className="line-clamp-2"
+                                                                        title={formatWhReceiveItemSkuLabel(item)}
+                                                                    >
+                                                                        {formatWhReceiveItemSkuLabel(item)}
+                                                                    </span>
                                                                 </TableCell>
                                                                 <TableCell className="whitespace-nowrap text-xs">{item.uom}</TableCell>
                                                                 <TableCell className="whitespace-nowrap text-right font-bold text-xs text-primary pr-4 tabular-nums">{item.qtyProduced}</TableCell>

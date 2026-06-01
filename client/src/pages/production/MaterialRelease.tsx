@@ -47,6 +47,7 @@ import {
   getFirstAssignedMatch,
   prioritizeByAssigned,
 } from "@/utils/assignedDropdown";
+import { getBomMockSkusForItem } from "@/lib/bomSkuMockData";
 
 // ============================================================================
 // OPERATION-WISE RELEASE REQUEST / ISSUE TO WH MODULE
@@ -384,27 +385,43 @@ function mapGetBatchWithItemsToBatchTracking(
   r: Record<string, any>,
   operation: string,
   workCenter: string,
-  warehouse: string
+  warehouses: { id: number; name: string }[]
 ): BatchTracking {
   const rawItems = Array.isArray(r.items) ? r.items : [];
-  const outputItems: ProducedItem[] = rawItems.map((it: any, i: number) => ({
-    id: Number(it.item_id ?? it.id ?? i + 1),
-    itemCode: String(it.item_code ?? it.itemCode ?? ""),
-    itemName: String(it.item_name ?? it.itemName ?? ""),
-    uom: String(it.uom_name ?? it.uom ?? ""),
-    qtyProduced: Number(it.produced_qty ?? it.qtyProduced ?? 0),
-    itemTypeCode: String(it.item_type_code ?? it.itemTypeCode ?? "")
-  }));
+  const outputItems: ProducedItem[] = rawItems.map((it: any, i: number) => {
+    const wh = pickOutputItemWarehouseFields(it);
+    let warehouseName = wh.warehouseName;
+    let warehouseId = wh.warehouseId;
+    if (!warehouseName && warehouseId != null) {
+      warehouseName =
+        warehouses.find((w) => w.id === warehouseId)?.name ?? "";
+    }
+    return {
+      id: Number(it.item_id ?? it.id ?? i + 1),
+      itemCode: String(it.item_code ?? it.itemCode ?? ""),
+      itemName: String(it.item_name ?? it.itemName ?? ""),
+      uom: String(it.uom_name ?? it.uom ?? ""),
+      qtyProduced: Number(it.produced_qty ?? it.qtyProduced ?? 0),
+      itemTypeCode: String(it.item_type_code ?? it.itemTypeCode ?? ""),
+      skuCode: String(it.sku_code ?? it.skuCode ?? ""),
+      skuName: String(it.sku_name ?? it.skuName ?? ""),
+      warehouseId,
+      warehouseName,
+    };
+  });
+  const batchWarehouse =
+    outputItems.find((it) => it.warehouseName)?.warehouseName ??
+    String(r.warehouse_name ?? r.warehouse ?? "").trim();
   return {
     id: Number(r.batch_id ?? r.id),
     batchNo: String(r.batch_code ?? r.batchNo ?? ""),
     operation,
     workCenter,
-    warehouse,
+    warehouse: batchWarehouse,
     shift: String(r.shift_name ?? r.shift ?? "—"),
     status: String(r.status_name ?? r.status ?? "—"),
     qcStatus: String(r.qc_status_name ?? r.qc_status ?? r.qcStatus ?? "—"),
-    outputItems
+    outputItems,
   };
 }
 
@@ -412,6 +429,63 @@ const resolveFormOperationId = (op: any): number | null => {
   const n = Number((op as any)?.operation_id ?? (op as any)?.id);
   return Number.isFinite(n) ? n : null;
 };
+
+const formatReleaseItemSkuLabel = (item: {
+  skuCode?: string;
+  skuName?: string;
+  itemCode?: string;
+}): string => {
+  if (item.skuCode) {
+    return item.skuName ? `${item.skuCode} — ${item.skuName}` : item.skuCode;
+  }
+  if (item.skuName) return item.skuName;
+  const mock = getBomMockSkusForItem(item.itemCode)[0];
+  if (mock) return mock.name ? `${mock.code} — ${mock.name}` : mock.code;
+  return "—";
+};
+
+function pickOutputItemWarehouseFields(it: Record<string, unknown>): {
+  warehouseId?: number;
+  warehouseName: string;
+} {
+  const rawId = it.warehouse_id ?? it.warehouseId ?? it.to_warehouse_id;
+  const warehouseId = Number(rawId);
+  const warehouseName = String(
+    it.warehouse_name ??
+      it.warehouseName ??
+      it.to_be_stored ??
+      it.to_be_stored_name ??
+      it.storage_warehouse_name ??
+      ""
+  ).trim();
+  return {
+    warehouseId: Number.isFinite(warehouseId) ? warehouseId : undefined,
+    warehouseName,
+  };
+}
+
+function resolveReleaseWarehouseId(
+  batches: BatchTracking[],
+  warehouses: { id: number; name: string }[]
+): number | null {
+  const ids = new Set<number>();
+  for (const batch of batches) {
+    for (const item of batch.outputItems) {
+      if (item.warehouseId != null && Number.isFinite(item.warehouseId)) {
+        ids.add(item.warehouseId);
+        continue;
+      }
+      const name = String(item.warehouseName || batch.warehouse || "").trim();
+      if (!name) continue;
+      const match = warehouses.find(
+        (w) => w.name.toLowerCase() === name.toLowerCase()
+      );
+      if (match) ids.add(match.id);
+    }
+  }
+  if (ids.size === 1) return [...ids][0];
+  return null;
+}
 
 // ============================================================================
 // MAIN COMPONENT
@@ -453,7 +527,6 @@ export default function MaterialRelease() {
   const appliedStatusFilterDefault = useRef(false);
   const appliedFormWorkCenterDefault = useRef(false);
   const appliedFormOperationDefault = useRef(false);
-  const appliedFormWarehouseDefault = useRef(false);
   const [areListFiltersReady, setAreListFiltersReady] = useState(
     () => getAssignedIds("operation").length === 0
   );
@@ -489,8 +562,6 @@ export default function MaterialRelease() {
   const [selectedOperation, setSelectedOperation] = useState("");
   const [operationChangeTick, setOperationChangeTick] = useState(0);
   const [selectedWorkCenter, setSelectedWorkCenter] = useState("");
-  const [selectedWarehouse, setSelectedWarehouse] = useState("");
-  const [selectedWarehouseId, setSelectedWarehouseId] = useState<number | null>(null);
   const [eligibleBatches, setEligibleBatches] = useState<BatchTracking[]>([]);
   const [selectedBatchIds, setSelectedBatchIds] = useState<number[]>([]);
 
@@ -810,24 +881,6 @@ export default function MaterialRelease() {
             (wh) => wh.id
           );
           setFormWarehouses(orderedWarehouses);
-          if (
-            !appliedFormWarehouseDefault.current &&
-            assignedWarehouseIds.length > 0 &&
-            orderedWarehouses.length > 0
-          ) {
-            const firstAssigned = getFirstAssignedMatch(
-              assignedWarehouseIds,
-              orderedWarehouses.map((wh) => wh.id)
-            );
-            if (firstAssigned) {
-              const row = orderedWarehouses.find((wh) => String(wh.id) === firstAssigned);
-              if (row) {
-                setSelectedWarehouseId(row.id);
-                setSelectedWarehouse(row.name);
-                appliedFormWarehouseDefault.current = true;
-              }
-            }
-          }
         } else {
           setFormWarehouses([]);
         }
@@ -906,22 +959,22 @@ export default function MaterialRelease() {
     };
   }, [isCreateModalOpen, selectedWorkCenterId]);
 
-  // Create modal: production plans for the selected operation (common/getproductionplan?operation_id=)
+  // Create modal: production plans for work center operations (common/getproductionplan)
   useEffect(() => {
     if (!isCreateModalOpen) {
       setFormProductionPlans([]);
       return;
     }
-    if (!selectedOperation) {
+    if (selectedWorkCenterId == null || formWorkCenterOperations.length === 0) {
       setFormProductionPlans([]);
       return;
     }
-    const selOpId = Number(selectedOperation);
-    const opRow = formWorkCenterOperations.find(
-      (o) => resolveFormOperationId(o) === selOpId
+    const availableOpIds = new Set(
+      formWorkCenterOperations
+        .map((o) => resolveFormOperationId(o))
+        .filter((id): id is number => id != null)
     );
-    const operationId = resolveFormOperationId(opRow);
-    if (opRow == null || operationId == null) {
+    if (availableOpIds.size === 0) {
       setFormProductionPlans([]);
       return;
     }
@@ -929,10 +982,12 @@ export default function MaterialRelease() {
     (async () => {
       setIsLoadingFormProductionPlans(true);
       try {
-        const res = await commonApi.getProductionPlans({ operation_id: operationId });
+        const res = await commonApi.getProductionPlans();
         if (cancelled) return;
         if (res.isSuccessful && Array.isArray(res.data?.records)) {
-          setFormProductionPlans(res.data.records);
+          setFormProductionPlans(
+            res.data.records.filter((p) => availableOpIds.has(Number(p.operation_id)))
+          );
         } else {
           setFormProductionPlans([]);
         }
@@ -945,11 +1000,16 @@ export default function MaterialRelease() {
     return () => {
       cancelled = true;
     };
-  }, [isCreateModalOpen, selectedOperation, formWorkCenterOperations, operationChangeTick]);
+  }, [isCreateModalOpen, selectedWorkCenterId, formWorkCenterOperations]);
 
   // Eligible batches: GET /common/getbatchwithitems?operation_id= (from selected operation row)
   useEffect(() => {
-    if (!isCreateModalOpen || !selectedOperation || !selectedWorkCenter || !selectedWarehouse) {
+    if (
+      !isCreateModalOpen ||
+      !selectedOperation ||
+      !selectedWorkCenter ||
+      !selectedProductionPlan
+    ) {
       setEligibleBatches([]);
       setSelectedBatchIds([]);
       setProducedItems([]);
@@ -987,7 +1047,7 @@ export default function MaterialRelease() {
                 r,
                 operationLabel,
                 selectedWorkCenter,
-                selectedWarehouse
+                formWarehouses
               )
             )
           );
@@ -1007,8 +1067,9 @@ export default function MaterialRelease() {
     isCreateModalOpen,
     selectedOperation,
     selectedWorkCenter,
-    selectedWarehouse,
+    selectedProductionPlan,
     formWorkCenterOperations,
+    formWarehouses,
     operationChangeTick
   ]);
 
@@ -1034,6 +1095,8 @@ export default function MaterialRelease() {
               uom: item.uom,
               qtyProduced: item.qtyProduced,
               itemTypeCode: item.itemTypeCode,
+              skuCode: item.skuCode,
+              skuName: item.skuName,
             });
           }
         });
@@ -1113,15 +1176,12 @@ export default function MaterialRelease() {
     if (openingViewId !== null || isViewDetailLoading || isSubmittingCreate) return;
     appliedFormWorkCenterDefault.current = false;
     appliedFormOperationDefault.current = false;
-    appliedFormWarehouseDefault.current = false;
     setLatestCreatedReleaseId(null);
     setSelectedWorkCenterId(null);
     setSelectedWorkCenter("");
     setSelectedOperation("");
     setOperationChangeTick(0);
     setFormWorkCenterOperations([]);
-    setSelectedWarehouse("");
-    setSelectedWarehouseId(null);
     setFormProductionPlans([]);
     setEligibleBatches([]);
     setSelectedBatchIds([]);
@@ -1151,7 +1211,6 @@ export default function MaterialRelease() {
     setIsCreateModalOpen(false);
     appliedFormWorkCenterDefault.current = false;
     appliedFormOperationDefault.current = false;
-    appliedFormWarehouseDefault.current = false;
     setLatestCreatedReleaseId(null);
 
     // Reset form
@@ -1160,8 +1219,6 @@ export default function MaterialRelease() {
     setSelectedWorkCenter("");
     setSelectedWorkCenterId(null);
     setFormWorkCenterOperations([]);
-    setSelectedWarehouse("");
-    setSelectedWarehouseId(null);
     setFormProductionPlans([]);
     setEligibleBatches([]);
     setSelectedBatchIds([]);
@@ -1181,9 +1238,28 @@ export default function MaterialRelease() {
     setEligibleBatches([]);
     setSelectedBatchIds([]);
     setProducedItems([]);
-    setSelectedProductionPlan("");
-    setFormProductionPlans([]);
+    if (!operation) {
+      setSelectedProductionPlan("");
+    }
     if (operation) {
+      setOperationChangeTick((t) => t + 1);
+    }
+  };
+
+  const handleProductionPlanChange = (planId: string) => {
+    setSelectedProductionPlan(planId);
+    setEligibleBatches([]);
+    setSelectedBatchIds([]);
+    setProducedItems([]);
+    if (!planId) {
+      setSelectedOperation("");
+      return;
+    }
+    const plan = formProductionPlans.find(
+      (p) => String(p.production_plan_id) === planId
+    );
+    if (plan?.operation_id != null) {
+      setSelectedOperation(String(plan.operation_id));
       setOperationChangeTick((t) => t + 1);
     }
   };
@@ -1199,8 +1275,6 @@ export default function MaterialRelease() {
       setSelectedWorkCenter("");
       setSelectedOperation("");
       setFormWorkCenterOperations([]);
-      setSelectedWarehouse("");
-      setSelectedWarehouseId(null);
       setFormProductionPlans([]);
       setSelectedProductionPlan("");
       setEligibleBatches([]);
@@ -1213,25 +1287,11 @@ export default function MaterialRelease() {
     setSelectedWorkCenterId(Number.isFinite(id) ? id : null);
     setSelectedWorkCenter(row?.work_center_name ?? "");
     setSelectedOperation("");
-    setSelectedWarehouse("");
-    setSelectedWarehouseId(null);
     setFormProductionPlans([]);
     setSelectedProductionPlan("");
     setEligibleBatches([]);
     setSelectedBatchIds([]);
     setProducedItems([]);
-  };
-
-  const handleWarehouseChange = (warehouseIdStr: string) => {
-    if (!warehouseIdStr) {
-      setSelectedWarehouseId(null);
-      setSelectedWarehouse("");
-      return;
-    }
-    const id = Number(warehouseIdStr);
-    const row = formWarehouses.find((w) => w.id === id);
-    setSelectedWarehouseId(Number.isFinite(id) ? id : null);
-    setSelectedWarehouse(row?.name ?? "");
   };
 
   /**
@@ -1274,15 +1334,6 @@ export default function MaterialRelease() {
       toast({
         title: "Validation Error",
         description: "Please select a Work Center",
-        variant: "destructive",
-      });
-      return;
-    }
-
-    if (!selectedWarehouse) {
-      toast({
-        title: "Validation Error",
-        description: "Please select a Warehouse",
         variant: "destructive",
       });
       return;
@@ -1352,15 +1403,6 @@ export default function MaterialRelease() {
       return;
     }
 
-    if (selectedWarehouseId == null || !Number.isFinite(selectedWarehouseId)) {
-      toast({
-        title: "Validation Error",
-        description: "Warehouse is required.",
-        variant: "destructive",
-      });
-      return;
-    }
-
     const productionPlanId = Number(selectedProductionPlan);
     if (!Number.isFinite(productionPlanId)) {
       toast({
@@ -1376,6 +1418,20 @@ export default function MaterialRelease() {
       toast({
         title: "Validation Error",
         description: "Release date must be in YYYY-MM-DD format.",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    const releaseWarehouseId = resolveReleaseWarehouseId(
+      selectedBatches,
+      formWarehouses
+    );
+    if (releaseWarehouseId == null) {
+      toast({
+        title: "Validation Error",
+        description:
+          "Could not determine a single warehouse (To Be Stored) from selected batches. Ensure each produced item has a storage warehouse.",
         variant: "destructive",
       });
       return;
@@ -1429,7 +1485,7 @@ export default function MaterialRelease() {
         released_by: user.id,
         operation_id: operationId,
         work_center_id: selectedWorkCenterId,
-        warehouse_id: selectedWarehouseId,
+        warehouse_id: releaseWarehouseId,
         production_plan_id: productionPlanId,
         batch_ids: selectedBatchIds,
       });
@@ -1706,13 +1762,23 @@ export default function MaterialRelease() {
     [formProductionPlans]
   );
 
+  const formOperationSelectOptionsForPlan = useMemo(() => {
+    if (!selectedProductionPlan) return formOperationSelectOptions;
+    const plan = formProductionPlans.find(
+      (p) => String(p.production_plan_id) === selectedProductionPlan
+    );
+    if (plan?.operation_id == null) return formOperationSelectOptions;
+    return formOperationSelectOptions.filter(
+      (o) => o.value === String(plan.operation_id)
+    );
+  }, [formOperationSelectOptions, formProductionPlans, selectedProductionPlan]);
+
   // Check if primary button should be disabled (used in create modal)
   const isPrimaryButtonDisabled =
     isSubmittingCreate ||
     !selectedProductionPlan ||
     !selectedOperation ||
     !selectedWorkCenter ||
-    !selectedWarehouse ||
     selectedBatchIds.length === 0;
 
   // Check if any selected item is Finished Good (FG)
@@ -2125,62 +2191,53 @@ export default function MaterialRelease() {
 
                 <div className="min-w-0">
                   <SharedSearchableSelect
-                    label="Operation"
+                    label="Production Plan"
                     required
-                    value={selectedOperation}
-                    onChange={(val) => handleOperationChange(String(val))}
-                    options={formOperationSelectOptions}
+                    value={selectedProductionPlan}
+                    onChange={(val) => handleProductionPlanChange(String(val))}
+                    options={formProductionPlanOptions}
                     placeholder={
                       selectedWorkCenterId == null
                         ? "Select a work center first"
-                        : isLoadingFormOperations
-                          ? "Loading operations..."
-                          : "Select Operation"
+                        : isLoadingFormProductionPlans
+                          ? "Loading production plans..."
+                          : "Select Production Plan"
                     }
-                    disabled={selectedWorkCenterId == null || isLoadingFormOperations}
+                    disabled={
+                      selectedWorkCenterId == null || isLoadingFormProductionPlans
+                    }
+                    selectedTruncate="end"
                     showSelectedTitle
-                    selectedPrimaryLineClamp={2}
-                    className="h-auto min-h-[52px] items-start! py-0.5"
+                    lightSelectedText
+                    className="h-9"
                     listClassName="max-h-[220px]"
                   />
                 </div>
 
                 <div className="min-w-0">
                   <SharedSearchableSelect
-                    label="Warehouse"
+                    label="Operation"
                     required
-                    value={selectedWarehouseId != null ? String(selectedWarehouseId) : ""}
-                    onChange={(val) => handleWarehouseChange(String(val))}
-                    options={formWarehouses.map((w) => ({
-                      value: String(w.id),
-                      label: w.name
-                    }))}
-                    placeholder={isLoadingFormWarehouses ? "Loading..." : "Select Warehouse"}
-                    disabled={isLoadingFormWarehouses}
-                    className="h-9"
-                    listClassName="max-h-[200px]"
-                  />
-                </div>
-
-                <div className="min-w-0">
-                  <SharedSearchableSelect
-                    label="Production Plan"
-                    required
-                    value={selectedProductionPlan}
-                    onChange={(val) => setSelectedProductionPlan(String(val))}
-                    options={formProductionPlanOptions}
+                    value={selectedOperation}
+                    onChange={(val) => handleOperationChange(String(val))}
+                    options={formOperationSelectOptionsForPlan}
                     placeholder={
-                      !selectedOperation
-                        ? "Select an operation first"
-                        : isLoadingFormProductionPlans
-                          ? "Loading production plans..."
-                          : "Select Production Plan"
+                      selectedWorkCenterId == null
+                        ? "Select a work center first"
+                        : !selectedProductionPlan
+                          ? "Select a production plan first"
+                          : isLoadingFormOperations
+                            ? "Loading operations..."
+                            : "Select Operation"
                     }
-                    disabled={!selectedOperation || isLoadingFormProductionPlans}
-                    selectedTruncate="end"
+                    disabled={
+                      selectedWorkCenterId == null ||
+                      !selectedProductionPlan ||
+                      isLoadingFormOperations
+                    }
                     showSelectedTitle
-                    lightSelectedText
-                    className="h-9"
+                    selectedPrimaryLineClamp={2}
+                    className="h-auto min-h-[52px] items-start! py-0.5"
                     listClassName="max-h-[220px]"
                   />
                 </div>
@@ -2189,9 +2246,9 @@ export default function MaterialRelease() {
             {/* Eligible Batches Section with Multi-Select */}
             <div>
               <Label className="text-sm font-semibold mb-2 block">Eligible Batches</Label>
-              {!selectedOperation || !selectedWorkCenter || !selectedWarehouse ? (
+              {!selectedOperation || !selectedWorkCenter || !selectedProductionPlan ? (
                 <div className="text-center py-5 text-sm text-muted-foreground border rounded-md">
-                  Please select Work Center, Operation, and Warehouse to view eligible batches
+                  Please select Work Center, Production Plan, and Operation to view eligible batches
                 </div>
               ) : isLoadingEligibleBatches ? (
                 <div className="flex flex-col items-center justify-center gap-3 py-8 text-muted-foreground border rounded-md">
@@ -2203,20 +2260,23 @@ export default function MaterialRelease() {
                   No eligible batches for this operation
                 </div>
               ) : (
-                <div className="rounded-md border">
-                  <Table>
+                <div className="overflow-x-auto rounded-md border">
+                  <Table className="min-w-[900px]">
                     <TableHeader>
                       <TableRow className="bg-muted/50">
                         <TableHead className="w-12">Select</TableHead>
                         <TableHead>Shift</TableHead>
                         <TableHead>Batch Code</TableHead>
                         <TableHead>Items Produced</TableHead>
+                        <TableHead>SKU</TableHead>
+                        <TableHead>UOM</TableHead>
+                        <TableHead>To Be Stored</TableHead>
                       </TableRow>
                     </TableHeader>
                     <TableBody>
                       {eligibleBatches.map((batch) => (
                         <TableRow key={batch.id}>
-                          <TableCell>
+                          <TableCell className="align-top">
                             <input
                               type="checkbox"
                               checked={selectedBatchIds.includes(batch.id)}
@@ -2224,18 +2284,61 @@ export default function MaterialRelease() {
                               className="h-4 w-4 rounded border-gray-300"
                             />
                           </TableCell>
-                          <TableCell>
+                          <TableCell className="align-top">
                             <Badge variant="outline">{batch.shift}</Badge>
                           </TableCell>
-                          <TableCell className="font-medium">{batch.batchNo}</TableCell>
-                          <TableCell>
-                            <div className="flex flex-col gap-1">
+                          <TableCell className="align-top font-medium whitespace-nowrap">
+                            {batch.batchNo}
+                          </TableCell>
+                          <TableCell className="align-top">
+                            <div className="flex flex-col gap-2">
                               {batch.outputItems.map((item, idx) => (
-                                <div key={idx} className="text-sm">
+                                <div key={idx} className="text-sm leading-snug">
                                   <span className="font-medium">{item.itemCode}:</span>{" "}
-                                  <span className="text-muted-foreground">{item.qtyProduced} {item.uom}</span>
+                                  <span className="tabular-nums">{item.qtyProduced}</span>
                                 </div>
                               ))}
+                            </div>
+                          </TableCell>
+                          <TableCell className="align-top">
+                            <div className="flex flex-col gap-2">
+                              {batch.outputItems.map((item, idx) => (
+                                <div
+                                  key={idx}
+                                  className="text-xs text-muted-foreground line-clamp-2"
+                                  title={formatReleaseItemSkuLabel(item)}
+                                >
+                                  {formatReleaseItemSkuLabel(item)}
+                                </div>
+                              ))}
+                            </div>
+                          </TableCell>
+                          <TableCell className="align-top">
+                            <div className="flex flex-col gap-2">
+                              {batch.outputItems.map((item, idx) => (
+                                <div key={idx} className="text-sm whitespace-nowrap">
+                                  {item.uom || "—"}
+                                </div>
+                              ))}
+                            </div>
+                          </TableCell>
+                          <TableCell className="align-top">
+                            <div className="flex flex-col gap-2">
+                              {batch.outputItems.map((item, idx) => {
+                                const storedAt =
+                                  item.warehouseName ||
+                                  (item.warehouseId != null
+                                    ? formWarehouses.find((w) => w.id === item.warehouseId)
+                                        ?.name
+                                    : "") ||
+                                  batch.warehouse ||
+                                  "—";
+                                return (
+                                  <div key={idx} className="text-sm whitespace-nowrap">
+                                    {storedAt}
+                                  </div>
+                                );
+                              })}
                             </div>
                           </TableCell>
                         </TableRow>
@@ -2381,6 +2484,7 @@ export default function MaterialRelease() {
                     <TableHeader>
                       <TableRow className="bg-muted/50 border-none">
                         <TableHead className="font-semibold text-foreground">Item</TableHead>
+                        <TableHead className="font-semibold text-foreground">SKU</TableHead>
                         <TableHead className="font-semibold text-foreground">UOM</TableHead>
                         <TableHead className="font-semibold text-foreground text-right pr-6">Total Qty</TableHead>
                       </TableRow>
@@ -2393,6 +2497,14 @@ export default function MaterialRelease() {
                               <div className="font-medium">{item.itemCode}</div>
                               <div className="text-sm text-muted-foreground">{item.itemName}</div>
                             </div>
+                          </TableCell>
+                          <TableCell className="text-xs text-muted-foreground">
+                            <span
+                              className="line-clamp-2"
+                              title={formatReleaseItemSkuLabel(item)}
+                            >
+                              {formatReleaseItemSkuLabel(item)}
+                            </span>
                           </TableCell>
                           <TableCell>{item.uom}</TableCell>
                           <TableCell className="font-bold text-right pr-6">{item.qtyProduced}</TableCell>

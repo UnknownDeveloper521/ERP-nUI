@@ -13,6 +13,10 @@ export interface ProducedItem {
   uom: string;
   qtyProduced: number;
   itemTypeCode?: string;
+  skuCode?: string;
+  skuName?: string;
+  warehouseId?: number;
+  warehouseName?: string;
 }
 
 export interface OperationRelease {
@@ -83,7 +87,9 @@ export function parseBatchWiseOutputs(raw: unknown): {
             qtyProduced: Number(
               r.total_qty ?? r.produced_qty ?? r.qty_produced ?? r.qtyProduced ?? r.qty ?? 0
             ),
-            itemTypeCode: String(r.item_type_code ?? r.itemTypeCode ?? "")
+            itemTypeCode: String(r.item_type_code ?? r.itemTypeCode ?? ""),
+            skuCode: String(r.sku_code ?? r.skuCode ?? ""),
+            skuName: String(r.sku_name ?? r.skuName ?? ""),
           };
           lineItems.push(row);
           return { ...row };
@@ -104,53 +110,80 @@ export function parseBatchWiseOutputs(raw: unknown): {
 export let mockReleaseRecords: OperationRelease[] = [
   {
     id: 1,
-    releaseNo: "REL-2024-001",
-    releaseDate: "2024-02-21",
-    operation: "Lead Generation & Purification",
-    workCenter: "Lead Furnace Center",
-    warehouse: "Jinja WH",
-    releasedBy: "John Doe",
-    qcVerifiedBy: "Sarah QC",
-    qcVerifiedOn: "2024-02-21",
+    releaseNo: "REL-GSV7-001",
+    releaseDate: "2026-05-30",
+    operation: "GSV7 Assembly",
+    workCenter: "Assembly Line",
+    warehouse: "Jinja Main WH",
+    releasedBy: "Sarah Nambi",
+    qcVerifiedBy: "QC — Daniel Kato",
+    qcVerifiedOn: "2026-05-30",
     status: "Issued to Warehouse",
-    batchIds: ["BT-PL-001", "BT-PL-002"],
+    batchIds: ["BATCH-GSV7-002"],
     items: [
-      { id: 101, itemCode: "SFG-001", itemName: "Purified Lead", uom: "KG", qtyProduced: 950 },
+      {
+        id: 101,
+        itemCode: "FG-GSV7",
+        itemName: "GSV7 Battery",
+        skuCode: "SKU-GSV7-12V",
+        skuName: "GSV7 Battery 12V Standard",
+        uom: "NOS",
+        qtyProduced: 98,
+      },
     ],
     batchDetails: [
       {
-        batchNo: "BT-PL-001",
+        batchNo: "BATCH-GSV7-002",
         shift: "Morning",
-        items: [{ id: 101, itemCode: "SFG-001", itemName: "Purified Lead", uom: "KG", qtyProduced: 500 }]
+        items: [
+          {
+            id: 101,
+            itemCode: "FG-GSV7",
+            itemName: "GSV7 Battery",
+            skuCode: "SKU-GSV7-12V",
+            skuName: "GSV7 Battery 12V Standard",
+            uom: "NOS",
+            qtyProduced: 98,
+          },
+        ],
       },
-      {
-        batchNo: "BT-PL-002",
-        shift: "Night",
-        items: [{ id: 101, itemCode: "SFG-001", itemName: "Purified Lead", uom: "KG", qtyProduced: 450 }]
-      }
-    ]
+    ],
   },
   {
     id: 2,
-    releaseNo: "REL-2024-002",
-    releaseDate: "2024-02-22",
-    operation: "Case Creation",
-    workCenter: "Plastic Casing Center",
-    warehouse: "Jinja WH",
-    releasedBy: "Mike Ross",
+    releaseNo: "REL-GSV7-002",
+    releaseDate: "2026-05-30",
+    operation: "Grid Casting",
+    workCenter: "Grid Casting Center",
+    warehouse: "Jinja Main WH",
+    releasedBy: "Peter Musoke",
     status: "Received By Warehouse",
-    batchIds: ["BT-BC-005"],
+    batchIds: ["BATCH-GSV7-003"],
     items: [
-      { id: 201, itemCode: "SFG-002", itemName: "Battery Cases", uom: "NOS", qtyProduced: 200 },
+      {
+        id: 201,
+        itemCode: "SFG-GRID-CAST",
+        itemName: "Cast Grid",
+        uom: "NOS",
+        qtyProduced: 778,
+      },
     ],
     batchDetails: [
       {
-        batchNo: "BT-BC-005",
-        shift: "Morning",
-        items: [{ id: 201, itemCode: "SFG-002", itemName: "Battery Cases", uom: "NOS", qtyProduced: 200 }]
-      }
-    ]
-  }
+        batchNo: "BATCH-GSV7-003",
+        shift: "Night",
+        items: [
+          {
+            id: 201,
+            itemCode: "SFG-GRID-CAST",
+            itemName: "Cast Grid",
+            uom: "NOS",
+            qtyProduced: 778,
+          },
+        ],
+      },
+    ],
+  },
 ];
 
 // ============================================================================

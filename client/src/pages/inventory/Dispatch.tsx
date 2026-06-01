@@ -67,7 +67,14 @@ import {
     type DispatchEntry
 } from "@/lib/mockSalesOrders";
 
-import { inventoryApi, commonApi, type DispatchRecord } from "@/lib/api";
+import {
+    inventoryApi,
+    commonApi,
+    parseSkuDropdownRecords,
+    type DispatchRecord,
+    type SkuDropdownRecord,
+} from "@/lib/api";
+import { getBomMockSkusForItem, mergeSkuDropdownWithMock } from "@/lib/bomSkuMockData";
 import { useCommonStore } from "@/store/commonStore";
 import { useHasPermission } from "@/hooks/usePermissions";
 import Unauthorized from "@/pages/Unauthorized";
@@ -131,6 +138,20 @@ function getDispatchStatusBadge(status: string) {
     }
     return <Badge variant="outline">{status}</Badge>;
 }
+
+const formatDispatchSkuLabel = (entry: {
+    skuCode?: string;
+    skuName?: string;
+    itemCode?: string;
+}): string => {
+    if (entry.skuCode) {
+        return entry.skuName ? `${entry.skuCode} — ${entry.skuName}` : entry.skuCode;
+    }
+    if (entry.skuName) return entry.skuName;
+    const mock = getBomMockSkusForItem(entry.itemCode)[0];
+    if (mock) return mock.name ? `${mock.code} — ${mock.name}` : mock.code;
+    return "—";
+};
 
 // ============================================================================
 // MAIN DISPATCH COMPONENT
@@ -236,11 +257,15 @@ export default function Dispatch() {
 
     // Dispatch Form State
     const [dispatchForm, setDispatchForm] = useState({
-        itemCode: "",
+        soItemId: "",
+        skuId: "",
+        uom: "",
         dispatchQty: "",
         dispatchDate: new Date(),
-        note: ""
+        note: "",
     });
+    const [dispatchSkuOptions, setDispatchSkuOptions] = useState<SkuDropdownRecord[]>([]);
+    const [isDispatchSkuLoading, setIsDispatchSkuLoading] = useState(false);
     const [tempDispatches, setTempDispatches] = useState<DispatchEntry[]>([]);
     const [remarks, setRemarks] = useState("");
     const [selectedWarehouse, setSelectedWarehouse] = useState("");
@@ -292,6 +317,80 @@ export default function Dispatch() {
     };
 
     const totalPages = Math.ceil(totalRecords / itemsPerPage);
+
+    const getDropdownRowBySoItemId = useCallback(
+        (soItemId: string) =>
+            dropdownItems.find(
+                (row) => String(row.sales_order_item_id ?? row.id ?? "") === String(soItemId)
+            ),
+        [dropdownItems]
+    );
+
+    const loadDispatchSkuOptions = useCallback(
+        async (itemId: number, itemCode?: string, presetSkuId?: number | string | null) => {
+            setIsDispatchSkuLoading(true);
+            try {
+                let options: SkuDropdownRecord[] = [];
+                if (Number.isFinite(itemId) && itemId > 0) {
+                    const res = await commonApi.getSkuDropdown({ item_id: itemId });
+                    const records =
+                        res.isSuccessful && res.data != null
+                            ? parseSkuDropdownRecords(res.data)
+                            : [];
+                    options = mergeSkuDropdownWithMock(records, itemCode);
+                } else {
+                    options = mergeSkuDropdownWithMock([], itemCode);
+                }
+                setDispatchSkuOptions(options);
+
+                const preset = presetSkuId != null && presetSkuId !== "" ? String(presetSkuId) : "";
+                if (preset && options.some((o) => String(o.id) === preset)) {
+                    setDispatchForm((prev) => ({ ...prev, skuId: preset }));
+                } else if (options.length === 1) {
+                    setDispatchForm((prev) => ({ ...prev, skuId: String(options[0].id) }));
+                } else if (preset) {
+                    setDispatchForm((prev) => ({ ...prev, skuId: preset }));
+                } else {
+                    setDispatchForm((prev) => ({ ...prev, skuId: "" }));
+                }
+                return options;
+            } catch {
+                const options = mergeSkuDropdownWithMock([], itemCode);
+                setDispatchSkuOptions(options);
+                if (options.length === 1) {
+                    setDispatchForm((prev) => ({ ...prev, skuId: String(options[0].id) }));
+                }
+                return options;
+            } finally {
+                setIsDispatchSkuLoading(false);
+            }
+        },
+        []
+    );
+
+    const handleDispatchItemSelect = useCallback(
+        async (soItemId: string) => {
+            const row = dropdownItems.find(
+                (item) => String(item.sales_order_item_id ?? item.id ?? "") === String(soItemId)
+            );
+            const uom = String(row?.uom_name ?? row?.uom ?? "").trim();
+            setDispatchForm((prev) => ({
+                ...prev,
+                soItemId,
+                skuId: "",
+                uom,
+            }));
+            setDispatchSkuOptions([]);
+            if (!row) return;
+            const itemId = Number(row.item_id);
+            await loadDispatchSkuOptions(
+                itemId,
+                row.item_code || row.item_name,
+                row.sku_id ?? row.skuId
+            );
+        },
+        [dropdownItems, loadDispatchSkuOptions]
+    );
 
     // Reset to page 1 when filters change
     useEffect(() => {
@@ -352,11 +451,14 @@ export default function Dispatch() {
             setRemarks("");
             setSelectedWarehouse("");
             setDispatchForm({
-                itemCode: "",
+                soItemId: "",
+                skuId: "",
+                uom: "",
                 dispatchQty: "",
                 dispatchDate: new Date(),
-                note: ""
+                note: "",
             });
+            setDispatchSkuOptions([]);
             setScannedSerials([]);
             setScanValue("");
             setSerialError("");
@@ -373,6 +475,8 @@ export default function Dispatch() {
                     id: item.sales_order_item_id,
                     itemCode: item.item_code || item.item_name || "N/A",
                     itemName: item.item_name,
+                    skuCode: item.sku_code || "",
+                    skuName: item.sku_name || "",
                     uom: item.uom_name || item.uom || "-",
                     orderedQty: item.ordered_qty,
                     dispatchedQty: item.dispatched_qty,
@@ -397,8 +501,13 @@ export default function Dispatch() {
                     .filter(item => (Number(item.dispatched_qty) || 0) > 0)
                     .map(item => ({
                         id: item.dispatch_order_item_id || Math.random(),
+                        soItemId: item.sales_order_item_id,
                         itemCode: item.item_code || item.item_name || "N/A",
                         itemName: item.item_name,
+                        skuId: item.sku_id ?? undefined,
+                        skuCode: item.sku_code || "",
+                        skuName: item.sku_name || "",
+                        uom: item.uom_name || item.uom || "",
                         dispatchQty: item.dispatched_qty,
                         dispatchDate: data.dispatch_date || format(new Date(), "yyyy-MM-dd"),
                         note: item.note || "",
@@ -460,12 +569,22 @@ export default function Dispatch() {
     };
 
     const handleAddDispatch = () => {
-        if (!dispatchForm.itemCode || !dispatchForm.dispatchQty) {
+        if (!dispatchForm.soItemId || !dispatchForm.dispatchQty) {
             toast({ 
                 title: "Please Check", 
                 description: "Please fill all required fields.", 
                 variant: "destructive",
                 duration: 15000
+            });
+            return;
+        }
+
+        if (dispatchSkuOptions.length > 0 && !dispatchForm.skuId) {
+            toast({
+                title: "Please Check",
+                description: "Please select an SKU.",
+                variant: "destructive",
+                duration: 15000,
             });
             return;
         }
@@ -481,30 +600,29 @@ export default function Dispatch() {
             return;
         }
 
-        // FIXED: Find item by itemCode OR itemName (since some items might not have itemCode)
-        const item = selectedOrder?.items.find(i => {
-            const itemIdentifier = (i.itemCode && i.itemCode.trim() !== "") ? i.itemCode : i.itemName;
-            return itemIdentifier === dispatchForm.itemCode;
-        });
+        const dropdownRow = getDropdownRowBySoItemId(dispatchForm.soItemId);
+        const item = selectedOrder?.items.find(
+            (i) => String(i.id) === String(dispatchForm.soItemId)
+        );
 
         if (!item) {
-            console.error('[DISPATCH] Item not found:', dispatchForm.itemCode);
+            console.error("[DISPATCH] Item not found:", dispatchForm.soItemId);
             return;
         }
 
-        // Use itemCode if available, otherwise use itemName as identifier
         const itemIdentifier = (item.itemCode && item.itemCode.trim() !== "") ? item.itemCode : item.itemName;
+        const selectedSku = dispatchSkuOptions.find(
+            (s) => String(s.id) === String(dispatchForm.skuId)
+        );
+        const maxQty = Number(
+            dropdownRow?.remaining_qty ?? item.orderedQty ?? 0
+        );
 
-        // Check against ordered quantity
         const currentDispatched = tempDispatches
-            .filter(d => {
-                // Match by itemCode if available, otherwise by itemName
-                const dispatchIdentifier = (d.itemCode && d.itemCode.trim() !== "") ? d.itemCode : d.itemName;
-                return dispatchIdentifier === itemIdentifier;
-            })
+            .filter((d) => String(d.soItemId ?? "") === String(dispatchForm.soItemId))
             .reduce((sum, d) => sum + d.dispatchQty, 0);
 
-        if (currentDispatched + qty > item.orderedQty) {
+        if (currentDispatched + qty > maxQty) {
             toast({ 
                 title: "Please Check", 
                 description: "Total dispatch quantity cannot exceed ordered quantity.", 
@@ -528,8 +646,13 @@ export default function Dispatch() {
 
         const newEntry: DispatchEntry = {
             id: Date.now(),
-            itemCode: itemIdentifier, // Store the identifier (itemCode or itemName)
+            soItemId: Number(dispatchForm.soItemId),
+            itemCode: itemIdentifier,
             itemName: item.itemName,
+            skuId: dispatchForm.skuId ? Number(dispatchForm.skuId) : undefined,
+            skuCode: selectedSku?.code || dropdownRow?.sku_code || item.skuCode || "",
+            skuName: selectedSku?.name || dropdownRow?.sku_name || item.skuName || "",
+            uom: dispatchForm.uom || item.uom || "",
             dispatchQty: qty,
             dispatchDate: format(dispatchForm.dispatchDate, "yyyy-MM-dd"),
             note: dispatchForm.note,
@@ -540,11 +663,14 @@ export default function Dispatch() {
 
         // Reset entry form
         setDispatchForm({
-            itemCode: "",
+            soItemId: "",
+            skuId: "",
+            uom: "",
             dispatchQty: "",
             dispatchDate: new Date(),
-            note: ""
+            note: "",
         });
+        setDispatchSkuOptions([]);
         setScannedSerials([]);
         setScanValue("");
         setSerialError("");
@@ -570,14 +696,16 @@ export default function Dispatch() {
         try {
             // Map items to add
             const itemsToAdd = tempDispatches.map(entry => {
-                // Find the original item to get sales_order_item_id
-                const originalItem = selectedOrder.items.find(i => {
-                    const itemIdentifier = (i.itemCode && i.itemCode.trim() !== "") ? i.itemCode : i.itemName;
-                    return itemIdentifier === entry.itemCode;
-                });
+                const originalItem = selectedOrder.items.find(
+                    (i) =>
+                        entry.soItemId != null
+                            ? String(i.id) === String(entry.soItemId)
+                            : ((i.itemCode && i.itemCode.trim() !== "") ? i.itemCode : i.itemName) ===
+                              entry.itemCode
+                );
 
                 return {
-                    sales_order_item_id: originalItem?.id || 0,
+                    sales_order_item_id: entry.soItemId ?? originalItem?.id ?? 0,
                     dispatch_qty: entry.dispatchQty,
                     note: entry.note || "",
                     serial_numbers: entry.serialNumbers || []
@@ -987,18 +1115,20 @@ export default function Dispatch() {
                             </TabsList>
 
                             <TabsContent value="dispatch-items" className="space-y-6 outline-none">
-                                <div className="rounded-xl border shadow-sm overflow-hidden bg-white">
-                                    <Table className="table-fixed">
+                                <div className="rounded-xl border shadow-sm overflow-hidden bg-white overflow-x-auto">
+                                    <Table className="table-fixed min-w-[720px]">
                                         <colgroup>
-                                            <col className="w-[52%]" />
+                                            <col className="w-[36%]" />
+                                            <col className="w-[18%]" />
                                             <col className="w-[10%]" />
-                                            <col className="w-[16%]" />
+                                            <col className="w-[14%]" />
                                             <col className="w-[11%]" />
                                             <col className="w-[11%]" />
                                         </colgroup>
                                         <TableHeader>
                                             <TableRow className="bg-muted/50">
                                                 <TableHead className="font-bold text-[10px] py-3 uppercase tracking-wider pl-4">Item</TableHead>
+                                                <TableHead className="font-bold text-[10px] py-3 uppercase tracking-wider">SKU</TableHead>
                                                 <TableHead className="font-bold text-[10px] py-3 uppercase tracking-wider">UOM</TableHead>
                                                 <TableHead className="font-bold text-[10px] py-3 uppercase tracking-wider">Rate/UOM</TableHead>
                                                 <TableHead className="font-bold text-[10px] py-3 uppercase tracking-wider text-right">Ordered Qty</TableHead>
@@ -1008,7 +1138,7 @@ export default function Dispatch() {
                                         <TableBody>
                                             {isDetailLoading ? (
                                                 <TableRow>
-                                                    <TableCell colSpan={5} className="h-40 text-center">
+                                                    <TableCell colSpan={6} className="h-40 text-center">
                                                         <div className="flex flex-col items-center gap-2 text-muted-foreground">
                                                             <div className="animate-spin h-6 w-6 border-2 border-primary border-t-transparent rounded-full" />
                                                             <span className="text-xs font-medium">Loading dispatch details...</span>
@@ -1020,10 +1150,13 @@ export default function Dispatch() {
                                                 const itemIdentifier = (item.itemCode && item.itemCode.trim() !== "") ? item.itemCode : item.itemName;
 
                                                 const totalDispatched = tempDispatches
-                                                    .filter(d => {
-                                                        const dispatchIdentifier = (d.itemCode && d.itemCode.trim() !== "") ? d.itemCode : d.itemName;
-                                                        return dispatchIdentifier === itemIdentifier;
-                                                    })
+                                                    .filter(
+                                                        (d) =>
+                                                            String(d.soItemId ?? "") === String(item.id) ||
+                                                            ((d.itemCode && d.itemCode.trim() !== "")
+                                                                ? d.itemCode
+                                                                : d.itemName) === itemIdentifier
+                                                    )
                                                     .reduce((sum, d) => sum + d.dispatchQty, 0);
 
                                                 return (
@@ -1037,6 +1170,9 @@ export default function Dispatch() {
                                                                     {item.itemCode}
                                                                 </div>
                                                             </div>
+                                                        </TableCell>
+                                                        <TableCell className="py-3 text-xs text-muted-foreground whitespace-normal wrap-break-word align-top">
+                                                            {formatDispatchSkuLabel(item)}
                                                         </TableCell>
                                                         <TableCell className="py-3 text-[10px] text-muted-foreground uppercase font-bold align-top">{item.uom}</TableCell>
                                                         <TableCell className="py-3 text-slate-900 font-medium tabular-nums align-top">
@@ -1058,38 +1194,95 @@ export default function Dispatch() {
                                 <div className="space-y-8">
                                     {isEditMode && (
                                         <div className="grid grid-cols-1 gap-4 bg-slate-50 p-4 sm:p-6 rounded-2xl border border-slate-100 shadow-inner md:grid-cols-12 md:gap-6">
-                                            <div className="md:col-span-6">
+                                            <div className="md:col-span-4">
                                                 <SharedSearchableSelect
                                                     label="Item Selection"
-                                                    value={dispatchForm.itemCode}
-                                                    onChange={(v) => setDispatchForm(prev => ({ ...prev, itemCode: v }))}
+                                                    value={dispatchForm.soItemId}
+                                                    onChange={(v) => void handleDispatchItemSelect(String(v))}
                                                     options={dropdownItems.map(item => {
-                                                        const itemValue = item.item_code || item.item_name;
-                                                        
-                                                        // Calculate total quantity already added in tempDispatches (unsaved entries)
+                                                        const soItemKey = String(
+                                                            item.sales_order_item_id ?? item.id ?? ""
+                                                        );
+
                                                         const tempDispatchedQty = tempDispatches
-                                                            .filter(d => d.itemCode === itemValue)
-                                                            .reduce((sum, d) => sum + Number(d.dispatchQty || 0), 0);
-                                                        
-                                                        // Frontend pending = Original remaining - frontend additions
-                                                        const currentPending = Math.max(0, Number(item.remaining_qty || 0) - tempDispatchedQty);
-                                                        
-                                                        const itemName = String(item.item_name || "").trim() || String(itemValue || "").trim();
-                                                        const itemCode = String(item.item_code || "").trim();
-                                                        const secondary = `${itemCode ? `${itemCode} • ` : ""}Pending: ${currentPending}`;
-                                                        
-                                                        return { 
+                                                            .filter(
+                                                                (d) =>
+                                                                    String(d.soItemId ?? "") === soItemKey
+                                                            )
+                                                            .reduce(
+                                                                (sum, d) =>
+                                                                    sum + Number(d.dispatchQty || 0),
+                                                                0
+                                                            );
+
+                                                        const currentPending = Math.max(
+                                                            0,
+                                                            Number(item.remaining_qty || 0) -
+                                                                tempDispatchedQty
+                                                        );
+
+                                                        const itemName =
+                                                            String(item.item_name || "").trim() ||
+                                                            String(item.item_code || "").trim();
+                                                        const itemCode = String(
+                                                            item.item_code || ""
+                                                        ).trim();
+                                                        const skuHint = item.sku_code
+                                                            ? ` • ${item.sku_code}`
+                                                            : "";
+                                                        const secondary = `${itemCode ? `${itemCode}${skuHint} • ` : ""}Pending: ${currentPending}`;
+
+                                                        return {
                                                             label: `${itemCode ? `${itemCode} - ` : ""}${itemName} (Pending: ${currentPending})`,
                                                             primaryText: itemName,
                                                             secondaryText: secondary,
-                                                            value: itemValue,
-                                                            disabled: currentPending <= 0 
+                                                            value: soItemKey,
+                                                            disabled: currentPending <= 0,
                                                         };
                                                     })}
                                                     placeholder="Select Item"
                                                     className="h-auto min-h-[52px] items-start! py-0.5 bg-white border-slate-200"
                                                     listClassName="max-h-[min(320px,calc(var(--radix-popover-content-available-height)-2.5rem))]"
                                                     selectedPrimaryLineClamp={2}
+                                                    compactStackedSelected
+                                                />
+                                            </div>
+
+                                            <div className="md:col-span-4">
+                                                <SharedSearchableSelect
+                                                    label="SKU"
+                                                    required
+                                                    value={dispatchForm.skuId}
+                                                    onChange={(v) =>
+                                                        setDispatchForm((prev) => ({
+                                                            ...prev,
+                                                            skuId: String(v),
+                                                        }))
+                                                    }
+                                                    options={dispatchSkuOptions.map((sku) => ({
+                                                        label: sku.name
+                                                            ? `${sku.code} — ${sku.name}`
+                                                            : sku.code,
+                                                        value: String(sku.id),
+                                                        primaryText: sku.code,
+                                                        secondaryText: sku.name,
+                                                    }))}
+                                                    placeholder={
+                                                        !dispatchForm.soItemId
+                                                            ? "Select item first"
+                                                            : isDispatchSkuLoading
+                                                              ? "Loading SKU..."
+                                                              : dispatchSkuOptions.length === 0
+                                                                ? "No SKU"
+                                                                : "Select SKU"
+                                                    }
+                                                    disabled={
+                                                        !dispatchForm.soItemId ||
+                                                        isDispatchSkuLoading ||
+                                                        dispatchSkuOptions.length === 0
+                                                    }
+                                                    className="h-auto min-h-[52px] items-start! py-0.5 bg-white border-slate-200"
+                                                    listClassName="max-h-[min(280px,calc(var(--radix-popover-content-available-height)-2.5rem))]"
                                                     compactStackedSelected
                                                 />
                                             </div>
@@ -1111,7 +1304,7 @@ export default function Dispatch() {
                                                 />
                                             </div>
 
-                                            <div className="md:col-span-4">
+                                            <div className="md:col-span-2">
                                                 <Label className="text-xs font-bold text-slate-600 mb-2 block uppercase tracking-wide">Note</Label>
                                                 <Input
                                                     className="h-10 bg-white border-slate-200"
@@ -1234,17 +1427,21 @@ export default function Dispatch() {
                                         </div>
                                     )}
 
-                                    <div className="rounded-xl border shadow-sm overflow-hidden bg-white">
-                                        <Table className="table-fixed">
+                                    <div className="rounded-xl border shadow-sm overflow-hidden bg-white overflow-x-auto">
+                                        <Table className="table-fixed min-w-[640px]">
                                             <colgroup>
-                                                <col className="w-[44%]" />
-                                                <col className="w-[14%]" />
-                                                <col className="w-[32%]" />
+                                                <col className="w-[28%]" />
+                                                <col className="w-[18%]" />
+                                                <col className="w-[10%]" />
+                                                <col className="w-[12%]" />
+                                                <col className="w-[22%]" />
                                                 {isEditMode && <col className="w-[10%]" />}
                                             </colgroup>
                                             <TableHeader>
                                                 <TableRow className="bg-muted/50">
                                                     <TableHead className="font-bold text-[10px] py-3 uppercase tracking-wider pl-4">Item</TableHead>
+                                                    <TableHead className="font-bold text-[10px] py-3 uppercase tracking-wider">SKU</TableHead>
+                                                    <TableHead className="font-bold text-[10px] py-3 uppercase tracking-wider text-center">UOM</TableHead>
                                                     <TableHead className="font-bold text-[10px] py-3 uppercase tracking-wider text-center">Dispatch Qty</TableHead>
                                                     <TableHead className="font-bold text-[10px] py-3 uppercase tracking-wider">Note</TableHead>
                                                     {isEditMode && <TableHead className="text-center font-bold text-[10px] py-3 tracking-wider">Actions</TableHead>}
@@ -1253,7 +1450,7 @@ export default function Dispatch() {
                                             <TableBody>
                                                 {tempDispatches.length === 0 ? (
                                                     <TableRow>
-                                                        <TableCell colSpan={isEditMode ? 4 : 3} className="h-20 text-center text-muted-foreground text-xs italic">
+                                                        <TableCell colSpan={isEditMode ? 6 : 5} className="h-20 text-center text-muted-foreground text-xs italic">
                                                             No dispatch entries recorded yet.
                                                         </TableCell>
                                                     </TableRow>
@@ -1269,6 +1466,12 @@ export default function Dispatch() {
                                                                         {entry.itemCode}
                                                                     </div>
                                                                 </div>
+                                                            </TableCell>
+                                                            <TableCell className="py-3 text-xs text-muted-foreground whitespace-normal wrap-break-word align-top">
+                                                                {formatDispatchSkuLabel(entry)}
+                                                            </TableCell>
+                                                            <TableCell className="py-3 text-center text-xs uppercase align-top">
+                                                                {entry.uom || "—"}
                                                             </TableCell>
                                                             <TableCell className="py-3 text-center align-top">
                                                                 <div className="flex flex-col items-center gap-1">

@@ -79,6 +79,7 @@ import {
   getFirstAssignedMatch,
   prioritizeByAssigned,
 } from "@/utils/assignedDropdown";
+import { getBomMockSkusForItem } from "@/lib/bomSkuMockData";
 
 // ============================================================================
 // HELPER FUNCTIONS
@@ -94,6 +95,20 @@ const formatDate = (date: Date | string): string => {
 
 const getCurrentDateForInput = (): string => {
   return new Date().toISOString().split('T')[0];
+};
+
+const formatBatchItemSkuLabel = (item: {
+  skuCode?: string;
+  skuName?: string;
+  itemCode?: string;
+}): string => {
+  if (item.skuCode) {
+    return item.skuName ? `${item.skuCode} — ${item.skuName}` : item.skuCode;
+  }
+  if (item.skuName) return item.skuName;
+  const mock = getBomMockSkusForItem(item.itemCode)[0];
+  if (mock) return mock.name ? `${mock.code} — ${mock.name}` : mock.code;
+  return "—";
 };
 
 // ============================================================================
@@ -130,6 +145,8 @@ function mapGetMrForBatchRecord(r: any): MRRequest {
           id: item.item_id,
           itemCode: item.item_code,
           itemName: item.item_name,
+          skuCode: item.sku_code || "",
+          skuName: item.sku_name || "",
           uom: item.uom,
           availableQty: item.available_qty || 0,
           requiredQty: item.required_qty
@@ -138,6 +155,8 @@ function mapGetMrForBatchRecord(r: any): MRRequest {
           id: item.item_id,
           itemCode: item.item_code,
           itemName: item.item_name,
+          skuCode: item.sku_code || "",
+          skuName: item.sku_name || "",
           uom: item.uom_name || item.uom,
           availableQty: item.total_qty ?? 0,
           requiredQty: item.total_qty ?? 0
@@ -168,6 +187,8 @@ function mapMrForBatchInputsToInputItems(inputs: any[] | undefined): BatchItem[]
     item: row.item_name,
     itemCode: row.item_code,
     itemName: row.item_name,
+    skuCode: row.sku_code || "",
+    skuName: row.sku_name || "",
     uom: row.uom_name || row.uom || "",
     availableQty: row.total_qty ?? row.total_mr_qty ?? 0,
     qtySupplied: 0,
@@ -184,6 +205,8 @@ function mapMrForBatchOutputsToOutputItems(outputs: any[] | undefined): BatchIte
     item: row.item_name,
     itemCode: row.item_code,
     itemName: row.item_name,
+    skuCode: row.sku_code || "",
+    skuName: row.sku_name || "",
     uom: row.uom_name || row.uom || "",
     qtyProduced: row.produced_qty != null && row.produced_qty !== "" ? row.produced_qty : 0,
     qtySupplied: 0
@@ -219,6 +242,8 @@ interface MRRequestItem {
   id: number;
   itemCode: string;
   itemName: string;
+  skuCode?: string;
+  skuName?: string;
   uom: string;
   availableQty: number;
   requiredQty: number;
@@ -1050,6 +1075,8 @@ export default function BatchTracking() {
             item: item.itemName,
             itemCode: item.itemCode,
             itemName: item.itemName,
+            skuCode: item.skuCode || "",
+            skuName: item.skuName || "",
             uom: item.uom,
             availableQty: item.requiredQty,
             qtySupplied: 0,
@@ -1386,6 +1413,9 @@ export default function BatchTracking() {
           item_id: item.item_id,
           item: item.item_name,
           itemName: item.item_name,
+          itemCode: item.item_code,
+          skuCode: item.sku_code || "",
+          skuName: item.sku_name || "",
           uom: item.uom_name || item.uom,
           qtySupplied: item.supplied_qty || 0,
           qtyProduced: 0,
@@ -1398,6 +1428,9 @@ export default function BatchTracking() {
           item_id: item.item_id,
           item: item.item_name,
           itemName: item.item_name,
+          itemCode: item.item_code,
+          skuCode: item.sku_code || "",
+          skuName: item.sku_name || "",
           uom: item.uom_name || item.uom,
           qtyProduced: item.produced_qty || 0,
           qtySupplied: 0,
@@ -1973,7 +2006,7 @@ export default function BatchTracking() {
                   </Card>
                 )}
 
-                <div className="grid grid-cols-1 gap-5 lg:grid-cols-2">
+                <div className="flex flex-col gap-5">
                   <Card className="min-w-0">
                     <CardHeader>
                       <CardTitle>Input Items (Supplied)</CardTitle>
@@ -1981,27 +2014,31 @@ export default function BatchTracking() {
                     <CardContent>
                       <div
                         className={cn(
-                          "overflow-hidden rounded-md border",
+                          "overflow-x-auto overflow-hidden rounded-md border",
                           batchFormData.inputItems.length > 6 &&
                             "max-h-[min(45vh,360px)] overflow-y-auto custom-scrollbar"
                         )}
                       >
-                        <Table className="w-full table-fixed">
+                        <Table className="w-full min-w-[640px]">
                           <colgroup>
-                            <col className="w-[64%]" />
-                            <col className="w-[11%]" />
-                            <col className="w-[12.5%]" />
-                            <col className="w-[12.5%]" />
+                            <col className="w-[32%]" />
+                            <col className="w-[22%]" />
+                            <col className="w-[10%]" />
+                            <col className="w-[18%]" />
+                            <col className="w-[18%]" />
                           </colgroup>
                           <TableHeader>
                             <TableRow className="bg-muted/50">
                               <TableHead className="py-2 pl-3 text-[10px] font-bold uppercase tracking-wider">
                                 Item
                               </TableHead>
+                              <TableHead className="py-2 text-[10px] font-bold uppercase tracking-wider">
+                                SKU
+                              </TableHead>
                               <TableHead className="py-2 pr-4 text-[10px] font-bold uppercase tracking-wider whitespace-nowrap">
                                 UOM
                               </TableHead>
-                              <TableHead className="py-2 pl-2 pr-2 text-right text-[10px] font-bold uppercase tracking-wider leading-tight whitespace-nowrap">
+                              <TableHead className="py-2 pl-2 pr-2 text-center text-[10px] font-bold uppercase tracking-wider leading-tight whitespace-nowrap">
                                 <span className="block">Total MR</span>
                                 <span className="block">Qty</span>
                               </TableHead>
@@ -2014,7 +2051,7 @@ export default function BatchTracking() {
                           <TableBody>
                             {batchFormData.inputItems.length === 0 ? (
                               <TableRow>
-                                <TableCell colSpan={4} className="py-4 text-center text-xs text-muted-foreground">
+                                <TableCell colSpan={5} className="py-4 text-center text-xs text-muted-foreground">
                                   No input items
                                 </TableCell>
                               </TableRow>
@@ -2031,10 +2068,13 @@ export default function BatchTracking() {
                                         {item.item}
                                       </span>
                                     </TableCell>
+                                    <TableCell className="text-xs text-muted-foreground">
+                                      {formatBatchItemSkuLabel(item)}
+                                    </TableCell>
                                     <TableCell className="whitespace-nowrap pr-4 text-[11px]">
                                       {item.uom}
                                     </TableCell>
-                                    <TableCell className="whitespace-nowrap pl-2 pr-2 text-right text-xs tabular-nums">
+                                    <TableCell className="whitespace-nowrap pl-2 pr-2 text-center text-xs tabular-nums">
                                       {totalMRQty}
                                     </TableCell>
                                     <TableCell className="pr-3 text-right">
@@ -2072,28 +2112,32 @@ export default function BatchTracking() {
                     <CardContent>
                       <div
                         className={cn(
-                          "overflow-hidden rounded-md border",
+                          "overflow-x-auto overflow-hidden rounded-md border",
                           batchFormData.outputItems.length > 6 &&
                             "max-h-[min(45vh,360px)] overflow-y-auto custom-scrollbar"
                         )}
                       >
-                        <Table className="w-full table-fixed">
+                        <Table className="w-full min-w-[520px]">
                           <colgroup>
-                            <col className={viewingBatch?.status === "Verified QC" ? "w-[58%]" : "w-[62%]"} />
-                            <col className="w-[8%]" />
+                            <col className="w-[38%]" />
+                            <col className="w-[26%]" />
+                            <col className="w-[12%]" />
                             {viewingBatch?.status === "Verified QC" ? (
                               <>
-                                <col className="w-[17%]" />
-                                <col className="w-[17%]" />
+                                <col className="w-[12%]" />
+                                <col className="w-[12%]" />
                               </>
                             ) : (
-                              <col className="w-[30%]" />
+                              <col className="w-[24%]" />
                             )}
                           </colgroup>
                           <TableHeader>
                             <TableRow className="bg-muted/50">
                               <TableHead className="py-2 text-[10px] font-bold uppercase tracking-wider">
                                 Item
+                              </TableHead>
+                              <TableHead className="py-2 text-[10px] font-bold uppercase tracking-wider">
+                                SKU
                               </TableHead>
                               <TableHead className="py-2 text-[10px] font-bold uppercase tracking-wider">
                                 UOM
@@ -2112,7 +2156,7 @@ export default function BatchTracking() {
                             {batchFormData.outputItems.length === 0 ? (
                               <TableRow>
                                 <TableCell
-                                  colSpan={viewingBatch?.status === "Verified QC" ? 4 : 3}
+                                  colSpan={viewingBatch?.status === "Verified QC" ? 5 : 4}
                                   className="py-4 text-center text-xs text-muted-foreground"
                                 >
                                   No output items
@@ -2125,6 +2169,9 @@ export default function BatchTracking() {
                                     <span className="whitespace-normal text-xs leading-snug wrap-break-word">
                                       {item.item}
                                     </span>
+                                  </TableCell>
+                                  <TableCell className="text-xs text-muted-foreground">
+                                    {formatBatchItemSkuLabel(item)}
                                   </TableCell>
                                   <TableCell className="whitespace-nowrap text-xs">
                                     {item.uom}
@@ -2262,26 +2309,27 @@ export default function BatchTracking() {
               </CardContent>
             </Card>
 
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+            <div className="flex flex-col gap-6">
               <Card>
                 <CardHeader>
                   <CardTitle>Input</CardTitle>
                 </CardHeader>
                 <CardContent>
-                  <div className="rounded-md border">
-                    <Table>
+                  <div className="overflow-x-auto rounded-md border">
+                    <Table className="min-w-[720px]">
                       <TableHeader>
                         <TableRow className="bg-muted/50">
                           <TableHead>Item</TableHead>
+                          <TableHead>SKU</TableHead>
                           <TableHead>UOM</TableHead>
-                          <TableHead className="text-right">Total MR Qty</TableHead>
+                          <TableHead className="text-center">Total MR Qty</TableHead>
                           <TableHead className="text-right">Qty Supplied</TableHead>
                         </TableRow>
                       </TableHeader>
                       <TableBody>
                         {batchFormData.inputItems.length === 0 ? (
                           <TableRow>
-                            <TableCell colSpan={4} className="text-center py-8 text-muted-foreground">
+                            <TableCell colSpan={5} className="text-center py-8 text-muted-foreground">
                               {batchFormData.mrNo ? "No input items" : "Select an MR No to load input items"}
                             </TableCell>
                           </TableRow>
@@ -2294,8 +2342,11 @@ export default function BatchTracking() {
                             return (
                               <TableRow key={item.id}>
                                 <TableCell>{item.item}</TableCell>
+                                <TableCell className="text-xs text-muted-foreground">
+                                  {formatBatchItemSkuLabel(item)}
+                                </TableCell>
                                 <TableCell>{item.uom}</TableCell>
-                                <TableCell className="text-right font-medium text-muted-foreground">
+                                <TableCell className="text-center font-medium text-muted-foreground tabular-nums">
                                   {totalMRQty}
                                 </TableCell>
                                 <TableCell className="text-right">
@@ -2332,11 +2383,12 @@ export default function BatchTracking() {
                   <CardTitle>Output</CardTitle>
                 </CardHeader>
                 <CardContent>
-                  <div className="rounded-md border">
-                    <Table>
+                  <div className="overflow-x-auto rounded-md border">
+                    <Table className="min-w-[560px]">
                       <TableHeader>
                         <TableRow className="bg-muted/50">
                           <TableHead>Item</TableHead>
+                          <TableHead>SKU</TableHead>
                           <TableHead>UOM</TableHead>
                           <TableHead className="text-right">Qty Produced</TableHead>
                         </TableRow>
@@ -2344,7 +2396,7 @@ export default function BatchTracking() {
                       <TableBody>
                         {batchFormData.outputItems.length === 0 ? (
                           <TableRow>
-                            <TableCell colSpan={3} className="text-center py-8 text-muted-foreground">
+                            <TableCell colSpan={4} className="text-center py-8 text-muted-foreground">
                               {batchFormData.mrNo ? "No output items" : "Select an MR No to load output items"}
                             </TableCell>
                           </TableRow>
@@ -2352,6 +2404,9 @@ export default function BatchTracking() {
                           batchFormData.outputItems.map((item) => (
                             <TableRow key={item.id}>
                               <TableCell>{item.item}</TableCell>
+                              <TableCell className="text-xs text-muted-foreground">
+                                {formatBatchItemSkuLabel(item)}
+                              </TableCell>
                               <TableCell>{item.uom}</TableCell>
                               <TableCell className="text-right">
                                 <Input

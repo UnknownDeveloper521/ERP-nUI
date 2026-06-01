@@ -67,6 +67,7 @@ import {
 } from "@/lib/batchSharedData";
 import { useHasPermission } from "@/hooks/usePermissions";
 import Unauthorized from "@/pages/Unauthorized";
+import { getBomMockSkusForItem } from "@/lib/bomSkuMockData";
 
 // ============================================================================
 // TYPE DEFINITIONS
@@ -161,6 +162,20 @@ function isVerifiedQcValueCode(v: string | undefined) {
   return v === "VERIFIED_QC";
 }
 
+const formatBatchItemSkuLabel = (item: {
+  skuCode?: string;
+  skuName?: string;
+  itemCode?: string;
+}): string => {
+  if (item.skuCode) {
+    return item.skuName ? `${item.skuCode} — ${item.skuName}` : item.skuCode;
+  }
+  if (item.skuName) return item.skuName;
+  const mock = getBomMockSkusForItem(item.itemCode)[0];
+  if (mock) return mock.name ? `${mock.code} — ${mock.name}` : mock.code;
+  return "—";
+};
+
 function mapBatchQcDetailItemsToOutputItems(items: any[] | undefined): QCItem[] {
   if (!items?.length) return [];
   return items.map((item) => ({
@@ -169,6 +184,8 @@ function mapBatchQcDetailItemsToOutputItems(items: any[] | undefined): QCItem[] 
     item: item.item_name,
     itemName: item.item_name,
     itemCode: item.item_code,
+    skuCode: item.sku_code || "",
+    skuName: item.sku_name || "",
     uom: item.uom_name,
     qtyProduced: item.produced_qty ?? 0,
     qtySupplied: 0,
@@ -1002,18 +1019,20 @@ export default function BatchQC() {
                   </Label>
                   <div className="overflow-hidden rounded-md border bg-white shadow-sm">
                     <div className="overflow-x-auto">
-                      <Table className="w-full min-w-[760px] table-fixed">
+                      <Table className="w-full min-w-[900px] table-fixed">
                         <colgroup>
-                          <col className="w-[22%]" />
-                          <col className="w-[44%]" />
+                          <col className="w-[16%]" />
+                          <col className="w-[30%]" />
+                          <col className="w-[18%]" />
                           <col className="w-[10%]" />
-                          <col className="w-[12%]" />
-                          <col className="w-[12%]" />
+                          <col className="w-[13%]" />
+                          <col className="w-[13%]" />
                         </colgroup>
                         <TableHeader>
                           <TableRow className="bg-muted/50 hover:bg-muted/50">
                             <TableHead className="py-2 text-[10px] font-bold uppercase tracking-wider">Item Code</TableHead>
                             <TableHead className="py-2 text-[10px] font-bold uppercase tracking-wider">Item Name</TableHead>
+                            <TableHead className="py-2 text-[10px] font-bold uppercase tracking-wider">SKU</TableHead>
                             <TableHead className="py-2 text-[10px] font-bold uppercase tracking-wider">UOM</TableHead>
                             <TableHead className="py-2 text-right text-[10px] font-bold uppercase tracking-wider">Produced Qty</TableHead>
                             <TableHead className="py-2 text-right text-[10px] font-bold uppercase tracking-wider">Verified Qty</TableHead>
@@ -1030,6 +1049,14 @@ export default function BatchQC() {
                               <TableCell className="align-top">
                                 <span className="block whitespace-normal wrap-break-word text-xs font-medium" title={item.itemName}>
                                   {item.itemName}
+                                </span>
+                              </TableCell>
+                              <TableCell className="align-top">
+                                <span
+                                  className="block whitespace-normal wrap-break-word text-xs text-muted-foreground"
+                                  title={formatBatchItemSkuLabel(item)}
+                                >
+                                  {formatBatchItemSkuLabel(item)}
                                 </span>
                               </TableCell>
                               <TableCell className="whitespace-nowrap align-top text-xs">

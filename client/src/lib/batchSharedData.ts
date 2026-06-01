@@ -1,14 +1,8 @@
 // ============================================================================
-// SHARED BATCH TRACKING DATA
-// ============================================================================
-// This file contains shared data and types for Batch Tracking used by both:
-// - Production module (Batch Tracking)
-// - Quality Check module (Batch QC)
+// SHARED BATCH TRACKING DATA (GSV7 battery manufacturing demo)
 // ============================================================================
 
-// ============================================================================
-// TYPE DEFINITIONS
-// ============================================================================
+import { GSV7_ITEMS } from "@/lib/gsv7OperationsMockData";
 
 export type BatchStatus = "Batch Created" | "Sent for QC" | "Verified QC" | "Batch Closed";
 
@@ -18,9 +12,11 @@ export interface BatchItem {
     item: string;
     itemCode?: string;
     itemName?: string;
+    skuCode?: string;
+    skuName?: string;
     uom: string;
-    qtySupplied: number | string; // Required for tracking consumption
-    qtyProduced: number | string; // Required for tracking output
+    qtySupplied: number | string;
+    qtyProduced: number | string;
     verifiedQty?: number | string;
     availableQty?: number;
     qcRequired?: boolean;
@@ -35,7 +31,7 @@ export interface QCParameter {
 export interface BatchRecord {
     id: number;
     batchNo: string;
-    date: string; // Used as batchDate in QC
+    date: string;
     mrNo: string;
     operation: string;
     workCenter: string;
@@ -59,113 +55,201 @@ export interface BatchRecord {
 }
 
 export const OPERATION_QC_REQUIRED: Record<string, boolean> = {
-    "Lead Generation & Purification": true,
-    "Case Creation": false,
-    "Grid Creation & Oxidization": true,
-    "Assembly line & Packaging": true
+    "Scrap Sorting": false,
+    "Lead Purification": true,
+    "Grid Casting": false,
+    "Grid Positive / Negative Formation": false,
+    "Grid Drying": false,
+    "Connector Creation": false,
+    "Terminal Creation": true,
+    "Plastic Case Moulding": false,
+    "GSV7 Assembly": true,
 };
-
-// ============================================================================
-// MOCK DATA
-// ============================================================================
 
 export let mockBatchRecords: BatchRecord[] = [
     {
         id: 1,
-        batchNo: "BATCH-2024-001",
-        date: "2024-01-15",
-        mrNo: "MR-2024-001",
-        operation: "Lead Generation & Purification",
+        batchNo: "BATCH-GSV7-001",
+        date: "2026-05-28",
+        mrNo: "MR-GSV7-001",
+        operation: "Lead Purification",
         workCenter: "Lead Furnace Center",
-        warehouse: "Jinja WH",
+        warehouse: "Jinja Main WH",
         shift: "Morning",
         totalInputItems: 1,
         totalOutputItems: 1,
         status: "Batch Closed",
         createdType: "SINGLE",
-        startTime: "2024-01-15T08:00:00",
-        endTime: "2024-01-15T16:00:00",
         inputItems: [
-            { id: 1, item: "Scrap Battery", uom: "KG", qtySupplied: 1000, qtyProduced: 0, availableQty: 2000 },
+            {
+                id: 1,
+                item: GSV7_ITEMS.RM_SCRAP_LEAD.name,
+                itemCode: GSV7_ITEMS.RM_SCRAP_LEAD.code,
+                itemName: GSV7_ITEMS.RM_SCRAP_LEAD.name,
+                uom: "KG",
+                qtySupplied: 2500,
+                qtyProduced: 0,
+                availableQty: 3000,
+            },
         ],
         outputItems: [
-            { id: 1, item: "Purified Lead", itemCode: "sfg-1", itemName: "Purified Lead", uom: "KG", qtyProduced: 950, qtySupplied: 0, verifiedQty: 950 },
+            {
+                id: 1,
+                item: GSV7_ITEMS.SFG_LEAD_INGOT.name,
+                itemCode: GSV7_ITEMS.SFG_LEAD_INGOT.code,
+                itemName: GSV7_ITEMS.SFG_LEAD_INGOT.name,
+                uom: "KG",
+                qtyProduced: 2280,
+                qtySupplied: 0,
+                verifiedQty: 2275,
+            },
         ],
         qcStatus: "Verified",
-        qcVerifiedBy: "QC Inspector - John Smith",
-        qcVerifiedOn: "2024-01-16T10:30:00",
+        qcVerifiedBy: "QC — Daniel Kato",
+        qcVerifiedOn: "2026-05-29T10:30:00",
+        qcRequired: true,
     },
     {
         id: 2,
-        batchNo: "BATCH-2024-002",
-        date: "2024-01-16",
-        mrNo: "MR-2024-002",
-        operation: "Assembly line & Packaging",
+        batchNo: "BATCH-GSV7-002",
+        date: "2026-05-30",
+        mrNo: "MR-GSV7-002",
+        operation: "GSV7 Assembly",
         workCenter: "Assembly Line",
-        warehouse: "Jinja WH",
-        shift: "Night",
+        warehouse: "Jinja Main WH",
+        shift: "Morning",
         totalInputItems: 3,
         totalOutputItems: 1,
-        status: "Verified QC",
+        status: "Sent for QC",
         createdType: "SINGLE",
-        startTime: "2024-01-16T20:00:00",
-        endTime: "2024-01-17T04:00:00",
-        qcStatus: "Verified",
-        qcVerifiedBy: "QC Inspector - John Smith",
-        qcVerifiedOn: "2024-01-17T10:30:00",
         inputItems: [
-            { id: 1, item: "Battery Cases", uom: "NOS", qtySupplied: 50, qtyProduced: 0, availableQty: 150 },
-            { id: 2, item: "Battery Lids", uom: "NOS", qtySupplied: 50, qtyProduced: 0, availableQty: 150 },
-            { id: 3, item: "Acid Type A", uom: "LTR", qtySupplied: 50, qtyProduced: 0, availableQty: 150 },
+            {
+                id: 1,
+                item: GSV7_ITEMS.SFG_GRID_POS_DRY.name,
+                itemCode: GSV7_ITEMS.SFG_GRID_POS_DRY.code,
+                uom: "NOS",
+                qtySupplied: 100,
+                qtyProduced: 0,
+            },
+            {
+                id: 2,
+                item: GSV7_ITEMS.SFG_GRID_NEG_DRY.name,
+                itemCode: GSV7_ITEMS.SFG_GRID_NEG_DRY.code,
+                uom: "NOS",
+                qtySupplied: 100,
+                qtyProduced: 0,
+            },
+            {
+                id: 3,
+                item: GSV7_ITEMS.RM_ACID.name,
+                itemCode: GSV7_ITEMS.RM_ACID.code,
+                uom: "LTR",
+                qtySupplied: 120,
+                qtyProduced: 0,
+            },
         ],
         outputItems: [
-            { id: 1, item: "GSV 7", itemCode: "fg-1", itemName: "GSV 7", uom: "NOS", qtyProduced: 50, qtySupplied: 0, verifiedQty: 49 },
+            {
+                id: 1,
+                item: GSV7_ITEMS.FG_GSV7.name,
+                itemCode: GSV7_ITEMS.FG_GSV7.code,
+                itemName: GSV7_ITEMS.FG_GSV7.name,
+                skuCode: "SKU-GSV7-12V",
+                skuName: "GSV7 Battery 12V Standard",
+                uom: "NOS",
+                qtyProduced: 98,
+                qtySupplied: 0,
+            },
         ],
-        qcRequired: true
+        qcRequired: true,
     },
     {
         id: 3,
-        batchNo: "BATCH-2024-003",
-        date: "2024-01-17",
-        mrNo: "MR-2024-004",
-        operation: "Case Creation",
-        workCenter: "Plastic Casing Center",
-        warehouse: "Jinja WH",
-        shift: "Morning",
+        batchNo: "BATCH-GSV7-003",
+        date: "2026-05-30",
+        mrNo: "MR-GSV7-001",
+        operation: "Grid Casting",
+        workCenter: "Grid Casting Center",
+        warehouse: "Jinja Main WH",
+        shift: "Night",
         totalInputItems: 1,
-        totalOutputItems: 2,
-        status: "Batch Closed",
+        totalOutputItems: 1,
+        status: "Verified QC",
         createdType: "SINGLE",
-        startTime: "2024-01-17T09:00:00",
-        endTime: "2024-01-17T17:00:00",
         inputItems: [
-            { id: 1, item: "Plastic Pallets", uom: "KG", qtySupplied: 100, qtyProduced: 0, availableQty: 500 },
+            {
+                id: 1,
+                item: GSV7_ITEMS.SFG_LEAD_INGOT.name,
+                itemCode: GSV7_ITEMS.SFG_LEAD_INGOT.code,
+                uom: "KG",
+                qtySupplied: 720,
+                qtyProduced: 0,
+            },
         ],
         outputItems: [
-            { id: 1, item: "Battery Cases", itemCode: "sfg-2", itemName: "Battery Cases", uom: "NOS", qtyProduced: 50, qtySupplied: 0 },
-            { id: 2, item: "Battery Lids", itemCode: "sfg-3", itemName: "Battery Lids", uom: "NOS", qtyProduced: 50, qtySupplied: 0 },
+            {
+                id: 1,
+                item: GSV7_ITEMS.SFG_GRID_CAST.name,
+                itemCode: GSV7_ITEMS.SFG_GRID_CAST.code,
+                uom: "NOS",
+                qtyProduced: 778,
+                qtySupplied: 0,
+                verifiedQty: 778,
+            },
         ],
-        qcRequired: false
-    }
+        qcStatus: "Verified",
+        qcVerifiedBy: "QC — Daniel Kato",
+        qcVerifiedOn: "2026-05-30T09:15:00",
+    },
+    {
+        id: 4,
+        batchNo: "BATCH-GSV7-004",
+        date: "2026-05-30",
+        mrNo: "MR-GSV7-003",
+        operation: "Grid Drying",
+        workCenter: "Grid Formation Center",
+        warehouse: "Jinja Main WH",
+        shift: "Night",
+        totalInputItems: 2,
+        totalOutputItems: 2,
+        status: "Batch Created",
+        createdType: "SINGLE",
+        inputItems: [
+            {
+                id: 1,
+                item: GSV7_ITEMS.SFG_GRID_POS.name,
+                itemCode: GSV7_ITEMS.SFG_GRID_POS.code,
+                uom: "NOS",
+                qtySupplied: 500,
+                qtyProduced: 0,
+            },
+            {
+                id: 2,
+                item: GSV7_ITEMS.SFG_GRID_NEG.name,
+                itemCode: GSV7_ITEMS.SFG_GRID_NEG.code,
+                uom: "NOS",
+                qtySupplied: 500,
+                qtyProduced: 0,
+            },
+        ],
+        outputItems: [
+            {
+                id: 1,
+                item: GSV7_ITEMS.SFG_GRID_POS_DRY.name,
+                itemCode: GSV7_ITEMS.SFG_GRID_POS_DRY.code,
+                uom: "NOS",
+                qtyProduced: 0,
+                qtySupplied: 0,
+            },
+            {
+                id: 2,
+                item: GSV7_ITEMS.SFG_GRID_NEG_DRY.name,
+                itemCode: GSV7_ITEMS.SFG_GRID_NEG_DRY.code,
+                uom: "NOS",
+                qtyProduced: 0,
+                qtySupplied: 0,
+            },
+        ],
+        qcRequired: false,
+    },
 ];
-
-// ============================================================================
-// HELPER FUNCTIONS
-// ============================================================================
-
-export const addBatchRecord = (record: BatchRecord): BatchRecord[] => {
-    mockBatchRecords.unshift(record);
-    return [...mockBatchRecords];
-};
-
-export const updateBatchRecord = (id: number, updates: Partial<BatchRecord>): BatchRecord[] => {
-    const index = mockBatchRecords.findIndex(req => req.id === id);
-    if (index !== -1) {
-        mockBatchRecords[index] = { ...mockBatchRecords[index], ...updates };
-    }
-    return [...mockBatchRecords];
-};
-
-export const getBatchRecordById = (id: number): BatchRecord | undefined => {
-    return mockBatchRecords.find(req => req.id === id);
-};

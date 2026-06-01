@@ -7,7 +7,7 @@
 // - Production My Request module (for linking MRs to Production Plans)
 // ============================================================================
 
-import { mockSemiFinishedGoods, mockFinishedGoods } from "./masterMockData";
+import { GSV7_ITEMS } from "@/lib/gsv7OperationsMockData";
 
 // ============================================================================
 // TYPE DEFINITIONS
@@ -21,6 +21,8 @@ export interface MRItem {
     itemCode: string;
     itemName: string;
     uom: string;
+    skuCode?: string;
+    skuName?: string;
     availableQty: number;
     requiredQty: number;
     issuedQty?: number;
@@ -81,22 +83,22 @@ export const mockDepartments = [
 ];
 
 // Combine SFG and FG items with additional properties for MR
-export const MOCK_MR_ITEMS: MasterItem[] = [
-    ...mockSemiFinishedGoods.map(item => ({
-        id: item.id,
-        name: item.name,
-        type: "SFG" as const,
-        uom: "PCS",
-        availableStock: Math.floor(Math.random() * 500) + 50
-    })),
-    ...mockFinishedGoods.map(item => ({
-        id: item.id,
-        name: item.name,
-        type: "FG" as const,
-        uom: "PCS",
-        availableStock: Math.floor(Math.random() * 300) + 20
-    }))
+const GSV7_MR_CATALOG: Array<{ code: string; name: string; type: "SFG" | "FG"; uom: string; stock: number }> = [
+    { code: GSV7_ITEMS.SFG_LEAD_INGOT.code, name: GSV7_ITEMS.SFG_LEAD_INGOT.name, type: "SFG", uom: "KG", stock: 2200 },
+    { code: GSV7_ITEMS.SFG_GRID_CAST.code, name: GSV7_ITEMS.SFG_GRID_CAST.name, type: "SFG", uom: "NOS", stock: 800 },
+    { code: GSV7_ITEMS.SFG_GRID_POS_DRY.code, name: GSV7_ITEMS.SFG_GRID_POS_DRY.name, type: "SFG", uom: "NOS", stock: 450 },
+    { code: GSV7_ITEMS.SFG_GRID_NEG_DRY.code, name: GSV7_ITEMS.SFG_GRID_NEG_DRY.name, type: "SFG", uom: "NOS", stock: 450 },
+    { code: GSV7_ITEMS.SFG_PLASTIC_CASE.code, name: GSV7_ITEMS.SFG_PLASTIC_CASE.name, type: "SFG", uom: "NOS", stock: 120 },
+    { code: GSV7_ITEMS.FG_GSV7.code, name: GSV7_ITEMS.FG_GSV7.name, type: "FG", uom: "NOS", stock: 98 },
 ];
+
+export const MOCK_MR_ITEMS: MasterItem[] = GSV7_MR_CATALOG.map((row, index) => ({
+    id: row.code,
+    name: row.name,
+    type: row.type,
+    uom: row.uom,
+    availableStock: row.stock,
+}));
 
 // ============================================================================
 // SHARED MR REQUESTS DATA
@@ -108,52 +110,120 @@ export const MOCK_MR_ITEMS: MasterItem[] = [
 export let mockMRRequests: MRRequest[] = [
     {
         id: 1,
-        mrNo: "MR-2024-001",
-        date: "2024-02-15",
-        requiredByDate: "2024-02-20",
-        operation: "Lead Generation & Purification",
+        mrNo: "MR-GSV7-001",
+        date: "2026-05-30",
+        requiredByDate: "2026-05-30",
+        operation: "Lead Purification",
         workCenter: "Lead Furnace Center",
-        warehouse: "Jinja WH",
+        warehouse: "Jinja Main WH",
         shift: "Morning",
-        requestedBy: "John Doe",
-        status: "Requested to Warehouse",
+        requestedBy: "James Okello",
+        status: "Received by Production",
+        productionPlanId: 3,
+        receivedDate: "2026-05-30",
+        receivedBy: "James Okello",
         items: [
-            { id: 1, itemCode: "RM-001", itemName: "Scrap Battery", uom: "KG", availableQty: 500, requiredQty: 100, issuedQty: 0 },
-            { id: 2, itemCode: "RM-002", itemName: "Plastic Pallets", uom: "PCS", availableQty: 200, requiredQty: 50, issuedQty: 0 },
-        ]
+            {
+                id: 1,
+                itemCode: GSV7_ITEMS.RM_SCRAP_LEAD.code,
+                itemName: GSV7_ITEMS.RM_SCRAP_LEAD.name,
+                uom: "KG",
+                availableQty: 3000,
+                requiredQty: 2500,
+                issuedQty: 2500,
+                receivedQty: 2500,
+            },
+        ],
     },
     {
         id: 2,
-        mrNo: "MR-2024-002",
-        date: "2024-02-16",
-        requiredByDate: "2024-02-21",
-        operation: "Grid Creation & Oxidization",
-        workCenter: "Grid Generation Center",
-        warehouse: "Jinja WH",
-        shift: "Night",
-        requestedBy: "Jane Smith",
-        status: "Requested to Warehouse",
+        mrNo: "MR-GSV7-002",
+        date: "2026-05-30",
+        requiredByDate: "2026-05-30",
+        operation: "GSV7 Assembly",
+        workCenter: "Assembly Line",
+        warehouse: "Jinja Main WH",
+        shift: "Morning",
+        requestedBy: "Sarah Nambi",
+        status: "Received by Production",
+        productionPlanId: 1,
+        receivedDate: "2026-05-30",
+        receivedBy: "Sarah Nambi",
         items: [
-            { id: 3, itemCode: "RM-003", itemName: "Acid Type A", uom: "LTR", availableQty: 150, requiredQty: 30, issuedQty: 0 },
-        ]
+            {
+                id: 1,
+                itemCode: GSV7_ITEMS.SFG_GRID_POS_DRY.code,
+                itemName: GSV7_ITEMS.SFG_GRID_POS_DRY.name,
+                uom: "NOS",
+                availableQty: 500,
+                requiredQty: 100,
+                issuedQty: 100,
+                receivedQty: 100,
+            },
+            {
+                id: 2,
+                itemCode: GSV7_ITEMS.RM_ACID.code,
+                itemName: GSV7_ITEMS.RM_ACID.name,
+                uom: "LTR",
+                availableQty: 200,
+                requiredQty: 120,
+                issuedQty: 120,
+                receivedQty: 120,
+            },
+        ],
     },
     {
         id: 3,
-        mrNo: "MR-2024-003",
-        date: "2024-02-14",
-        requiredByDate: "2024-02-19",
-        operation: "Assembly line & Packaging",
-        workCenter: "Assembly Line",
-        warehouse: "Jinja WH",
-        shift: "Morning",
-        requestedBy: "Mike Ross",
+        mrNo: "MR-GSV7-003",
+        date: "2026-05-30",
+        requiredByDate: "2026-05-31",
+        operation: "Grid Drying",
+        workCenter: "Grid Formation Center",
+        warehouse: "Jinja Main WH",
+        shift: "Night",
+        requestedBy: "Peter Musoke",
         status: "Issued by Warehouse",
-        issuedDate: "2024-02-15",
-        issuedBy: "Warehouse Manager",
+        productionPlanId: 2,
+        issuedDate: "2026-05-30",
+        issuedBy: "Warehouse — Jinja",
         items: [
-            { id: 4, itemCode: "SFG-005", itemName: "Terminals", uom: "NOS", availableQty: 1000, requiredQty: 500, issuedQty: 500 },
-        ]
-    }
+            {
+                id: 1,
+                itemCode: GSV7_ITEMS.SFG_GRID_POS.code,
+                itemName: GSV7_ITEMS.SFG_GRID_POS.name,
+                uom: "NOS",
+                availableQty: 600,
+                requiredQty: 500,
+                issuedQty: 500,
+                receivedQty: 0,
+            },
+        ],
+    },
+    {
+        id: 4,
+        mrNo: "MR-GSV7-004",
+        date: "2026-05-30",
+        requiredByDate: "2026-06-02",
+        operation: "Grid Casting",
+        workCenter: "Grid Casting Center",
+        warehouse: "Jinja Main WH",
+        shift: "Morning",
+        requestedBy: "Grace Achieng",
+        status: "Requested to Warehouse",
+        productionPlanId: 4,
+        items: [
+            {
+                id: 1,
+                itemCode: GSV7_ITEMS.SFG_LEAD_INGOT.code,
+                itemName: GSV7_ITEMS.SFG_LEAD_INGOT.name,
+                uom: "KG",
+                availableQty: 2200,
+                requiredQty: 900,
+                issuedQty: 0,
+                receivedQty: 0,
+            },
+        ],
+    },
 ];
 
 // ============================================================================

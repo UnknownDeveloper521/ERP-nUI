@@ -1,4 +1,5 @@
-import { mockCustomers, mockFinishedGoods } from "./masterMockData";
+import { mockCustomers } from "./masterMockData";
+import { GSV7_ITEMS } from "./gsv7OperationsMockData";
 import { SOData } from "./mockSalesOrders";
 
 // Invoice Status: Invoice Pending → Invoiced → Paid
@@ -8,10 +9,34 @@ export interface InvoiceItem {
     id: number;
     itemCode: string;
     itemName: string;
+    skuCode?: string;
+    skuName?: string;
     uom: string;
     orderedQty: number;
     rate: number;
     price: number;
+}
+
+const FG = GSV7_ITEMS.FG_GSV7;
+
+function invoiceLine(
+    id: number,
+    orderedQty: number,
+    rate: number,
+    skuCode?: string,
+    skuName?: string,
+): InvoiceItem {
+    return {
+        id,
+        itemCode: FG.code,
+        itemName: FG.name,
+        skuCode,
+        skuName,
+        uom: "NOS",
+        orderedQty,
+        rate,
+        price: orderedQty * rate,
+    };
 }
 
 export interface InvoiceTerm {
@@ -92,8 +117,8 @@ const DEFAULT_INVOICES: InvoiceData[] = [
             { id: 2, percentage: 70, termType: "Delivery", date: "", note: "70% on delivery" }
         ],
         items: [
-            { id: 1, itemCode: mockFinishedGoods[0].id, itemName: mockFinishedGoods[0].name, uom: "PCS", orderedQty: 10, rate: 1200.00, price: 12000.00 },
-            { id: 2, itemCode: mockFinishedGoods[1].id, itemName: mockFinishedGoods[1].name, uom: "PCS", orderedQty: 20, rate: 450.00, price: 9000.00 }
+            invoiceLine(1, 120, 185000, "SKU-GSV7-12V", "GSV7 Battery 12V Standard"),
+            invoiceLine(2, 40, 195000, "SKU-GSV7-EXP", "GSV7 Battery Export Grade"),
         ],
         subtotal: 21000.00,
         discountValue: 5,
@@ -127,7 +152,7 @@ const DEFAULT_INVOICES: InvoiceData[] = [
             { id: 2, percentage: 50, termType: "Delivery", date: "", note: "50% on delivery" }
         ],
         items: [
-            { id: 1, itemCode: mockFinishedGoods[3]?.id || "FG004", itemName: mockFinishedGoods[3]?.name || "Product D", uom: "PCS", orderedQty: 8, rate: 750.00, price: 6000.00 }
+            invoiceLine(1, 60, 185000, "SKU-GSV7-12V", "GSV7 Battery 12V Standard"),
         ],
         subtotal: 6000.00,
         discountValue: 2,
@@ -163,8 +188,8 @@ const DEFAULT_INVOICES: InvoiceData[] = [
             { id: 3, percentage: 30, termType: "Delivery", date: "", note: "30% on delivery" }
         ],
         items: [
-            { id: 1, itemCode: mockFinishedGoods[2].id, itemName: mockFinishedGoods[2].name, uom: "PCS", orderedQty: 15, rate: 850.00, price: 12750.00 },
-            { id: 2, itemCode: mockFinishedGoods[3].id, itemName: mockFinishedGoods[3].name, uom: "PCS", orderedQty: 30, rate: 125.00, price: 3750.00 }
+            invoiceLine(1, 80, 185000, "SKU-GSV7-12V", "GSV7 Battery 12V Standard"),
+            invoiceLine(2, 25, 195000, "SKU-GSV7-EXP", "GSV7 Battery Export Grade"),
         ],
         subtotal: 16500.00,
         discountValue: 500,
@@ -198,7 +223,7 @@ const DEFAULT_INVOICES: InvoiceData[] = [
             { id: 2, percentage: 50, termType: "Delivery", date: "", note: "50% on delivery" }
         ],
         items: [
-            { id: 1, itemCode: mockFinishedGoods[0]?.id || "FG001", itemName: mockFinishedGoods[0]?.name || "Product A", uom: "PCS", orderedQty: 5, rate: 1000.00, price: 5000.00 }
+            invoiceLine(1, 50, 185000, "SKU-GSV7-12V", "GSV7 Battery 12V Standard"),
         ],
         subtotal: 5000.00,
         discountValue: 0,
@@ -231,7 +256,7 @@ const DEFAULT_INVOICES: InvoiceData[] = [
             { id: 1, percentage: 100, termType: "Advance", date: "2026-01-15", note: "100% advance" }
         ],
         items: [
-            { id: 1, itemCode: mockFinishedGoods[1]?.id || "FG002", itemName: mockFinishedGoods[1]?.name || "Product B", uom: "PCS", orderedQty: 2, rate: 2000.00, price: 4000.00 }
+            invoiceLine(1, 20, 195000, "SKU-GSV7-EXP", "GSV7 Battery Export Grade"),
         ],
         subtotal: 4000.00,
         discountValue: 0,
@@ -264,7 +289,7 @@ const DEFAULT_INVOICES: InvoiceData[] = [
             { id: 1, percentage: 100, termType: "Days", date: "", days: 30, note: "30 days" }
         ],
         items: [
-            { id: 1, itemCode: mockFinishedGoods[2]?.id || "FG003", itemName: mockFinishedGoods[2]?.name || "Product C", uom: "PCS", orderedQty: 10, rate: 500.00, price: 5000.00 }
+            invoiceLine(1, 30, 188000, "SKU-GSV7-12V", "GSV7 Battery 12V Standard"),
         ],
         subtotal: 5000.00,
         discountValue: 0,
@@ -297,7 +322,7 @@ const DEFAULT_INVOICES: InvoiceData[] = [
             { id: 1, percentage: 100, termType: "Delivery", date: "", note: "100% on delivery" }
         ],
         items: [
-            { id: 1, itemCode: mockFinishedGoods[0]?.id || "FG001", itemName: mockFinishedGoods[0]?.name || "Product A", uom: "PCS", orderedQty: 1, rate: 100.00, price: 100.00 }
+            invoiceLine(1, 1, 185000, "SKU-GSV7-12V", "GSV7 Battery 12V Standard"),
         ],
         subtotal: 100.00,
         discountValue: 0,
@@ -330,7 +355,7 @@ const DEFAULT_INVOICES: InvoiceData[] = [
             { id: 1, percentage: 100, termType: "Advance", date: "2026-03-05", note: "Full advance" }
         ],
         items: [
-            { id: 1, itemCode: mockFinishedGoods[4]?.id || "FG005", itemName: mockFinishedGoods[4]?.name || "Product E", uom: "PCS", orderedQty: 50, rate: 200.00, price: 10000.00 }
+            invoiceLine(1, 50, 185000, "SKU-GSV7-12V", "GSV7 Battery 12V Standard"),
         ],
         subtotal: 10000.00,
         discountValue: 10,
@@ -363,7 +388,7 @@ const DEFAULT_INVOICES: InvoiceData[] = [
             { id: 2, percentage: 50, termType: "Days", date: "2026-03-15", days: 30, note: "Second half" }
         ],
         items: [
-            { id: 1, itemCode: mockFinishedGoods[0].id, itemName: mockFinishedGoods[0].name, uom: "PCS", orderedQty: 5, rate: 1500.00, price: 7500.00 }
+            invoiceLine(1, 5, 185000, "SKU-GSV7-12V", "GSV7 Battery 12V Standard"),
         ],
         subtotal: 7500.00,
         discountValue: 0,
@@ -395,7 +420,7 @@ const DEFAULT_INVOICES: InvoiceData[] = [
             { id: 1, percentage: 100, termType: "Delivery", date: "2025-12-31", note: "100% on delivery" }
         ],
         items: [
-            { id: 1, itemCode: mockFinishedGoods[1].id, itemName: mockFinishedGoods[1].name, uom: "PCS", orderedQty: 100, rate: 50.00, price: 5000.00 }
+            invoiceLine(1, 100, 188000, "SKU-GSV7-12V", "GSV7 Battery 12V Standard"),
         ],
         subtotal: 5000.00,
         discountValue: 0,
@@ -427,7 +452,7 @@ const DEFAULT_INVOICES: InvoiceData[] = [
             { id: 1, percentage: 100, termType: "Advance", date: "", note: "Pay in full" }
         ],
         items: [
-            { id: 1, itemCode: mockFinishedGoods[0].id, itemName: mockFinishedGoods[0].name, uom: "PCS", orderedQty: 25, rate: 1000.00, price: 25000.00 }
+            invoiceLine(1, 25, 185000, "SKU-GSV7-12V", "GSV7 Battery 12V Standard"),
         ],
         subtotal: 25000.00,
         discountValue: 0,
@@ -552,6 +577,8 @@ export const createInvoiceFromSO = (so: SOData): InvoiceData => {
             id: i.id,
             itemCode: i.itemCode,
             itemName: i.itemName,
+            skuCode: i.skuCode,
+            skuName: i.skuName,
             uom: i.uom,
             orderedQty: i.orderedQty,
             rate: i.rate,

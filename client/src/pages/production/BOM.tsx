@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useCallback, useRef, startTransition, type ReactNode } from "react";
+import { useState, useEffect, useMemo, useCallback, useRef, type ReactNode } from "react";
 import { useDebounce } from "@/hooks/useDebounce";
 import { format, parse, isValid } from "date-fns";
 import { useLocation, useRoute } from "wouter";
@@ -53,35 +53,25 @@ import {
     AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { AppListToolbar } from "@/components/shared/AppListToolbar";
+import { SearchableSelect as SharedSearchableSelect } from "@/components/shared/SearchableSelect";
 import { DatePicker as SharedDatePicker } from "@/components/shared/DatePicker";
 import {
     productionApi,
     BOMListRecord,
     commonApi,
     operationsApi,
+    getBomComponentOptionValue,
+    parseBomComponentsRecords,
     parseSkuDropdownRecords,
+    type BOMComponentRecord,
     type SkuDropdownRecord,
 } from "@/lib/api";
-import {
-    BOM_SFG_FG_MOCK_DROPDOWN_ONLY,
-    applyGsv7BomQuantityMap,
-    buildGsv7NestedBomTree,
-    collectGsv7TreeQuantities,
-    getAllGsv7BomComponentRecords,
-    getGsv7ItemIdByCode,
-    gsv7TreeToTopLevelComponents,
-    isGsv7CatalogItemCode,
-    loadGsv7BomQuantities,
-    saveGsv7BomQuantities,
-    type Gsv7BomQuantityMap,
-} from "@/lib/gsv7BomTreeBuilder";
-import { mergeSkuDropdownWithMock, getBomMockSkusForItem } from "@/lib/bomSkuMockData";
 import { useCommonStore } from "@/store/commonStore";
 import { useHasPermission } from "@/hooks/usePermissions";
 import Unauthorized from "@/pages/Unauthorized";
 
 // ============================================================================
-// HELPERS & MOCK DATA
+// HELPERS
 // ============================================================================
 
 const formatDate = (date: Date | string): string => {
@@ -109,10 +99,6 @@ const parseDateString = (dateStr: string): Date => {
 const BOM_NAME_MIN_LEN = 2;
 const BOM_NAME_MAX_LEN = 150;
 const BOM_DESC_MAX_LEN = 200;
-
-/** Unique option value per getbomcomponents row (same item name can appear multiple times). */
-const getBomComponentOptionValue = (record: any, index: number): string =>
-    String(record.id ?? record.bom_component_id ?? `${record.output_component?.id ?? "item"}-${index}`);
 
 const buildUomMap = (uoms: any[]): Record<number, string> => {
     const map: Record<number, string> = {};
@@ -157,8 +143,66 @@ const mapBomDetailComponent = (comp: any, uomMap: Record<number, string>) => ({
     },
 });
 
-const findBomComponentRecordByOptionValue = (records: any[], optionValue: string) =>
-    records.find((r, idx) => getBomComponentOptionValue(r, idx) === String(optionValue));
+const findBomComponentRecordByOptionValue = (records: BOMComponentRecord[], optionValue: string) =>
+    records.find((r) => getBomComponentOptionValue(r) === String(optionValue));
+
+const mapBomInputComponentsToForm = (
+    inputs: BOMComponentRecord["input_components"],
+    uomMap: Record<number, string>,
+): BOMComponent[] => {
+    if (!inputs?.length) return [];
+    return inputs.map((input) => ({
+        item_id: String(input.item_id),
+        type: input.item_type,
+        quantity: input.quantity ?? 1,
+        uom_id: input.uom_id,
+        item: {
+            id: String(input.item_id),
+            code: input.item_code,
+            name: input.item_name,
+            type: input.item_type,
+            uom: resolveUomLabel(uomMap, input.uom_id, input.uom, input.uom_name),
+        },
+    }));
+};
+
+const buildBomTreeFromComponentRecord = (
+    record: BOMComponentRecord,
+    quantityByItemId: Record<string, number | string> = {},
+): BomOperationTree => {
+    const oc = record.output_component;
+    const code = String(oc.code ?? oc.item_code ?? "").trim();
+    const name = String(oc.name ?? oc.item_name ?? "Unknown").trim();
+    const outputLine: BomStructureLine = {
+        item_id: Number(oc.id),
+        item_code: code,
+        item_name: name,
+        type: oc.item_type || "",
+        uom: String(oc.uom ?? oc.uom_name ?? "").trim(),
+        quantity: quantityByItemId[String(oc.id)] ?? 1,
+    };
+    const inputs: BomStructureLine[] = (record.input_components ?? []).map((input) => ({
+        item_id: Number(input.item_id),
+        item_code: input.item_code,
+        item_name: input.item_name,
+        type: input.item_type,
+        uom: String(input.uom ?? input.uom_name ?? "").trim(),
+        quantity: quantityByItemId[String(input.item_id)] ?? input.quantity ?? 1,
+    }));
+
+    return {
+        selectedItemCode: code,
+        selectedItemName: name,
+        mainOperation: {
+            id: 0,
+            code: "BOM",
+            name: "Bill of Materials",
+            outputs: [outputLine],
+            inputs,
+        },
+        childOperations: [],
+    };
+};
 
 const formatBomSfgFgLabel = (code: string, name: string): string => {
     const trimmedCode = code.trim();
@@ -172,21 +216,40 @@ const normalizeBomItemCode = (code: string) =>
         .toUpperCase()
         .replace(/\s+/g, "");
 
-const isGsv7MockItemId = (id: number) =>
-    Number.isFinite(id) && id >= GSV7_ITEM_ID_BASE && id < GSV7_ITEM_ID_BASE + 200;
-
 const formatBomListSkuLabel = (record: {
     skuCode?: string;
     skuName?: string;
+    sku_code?: string;
+    sku_name?: string;
     itemCode?: string;
 }): string => {
-    if (record.skuCode) {
-        return record.skuName ? `${record.skuCode} — ${record.skuName}` : record.skuCode;
-    }
-    if (record.skuName) return record.skuName;
-    const mock = getBomMockSkusForItem(record.itemCode)[0];
-    if (mock) return mock.name ? `${mock.code} — ${mock.name}` : mock.code;
+    const code = String(record.skuCode ?? record.sku_code ?? "").trim();
+    const name = String(record.skuName ?? record.sku_name ?? "").trim();
+    if (code) return name ? `${code} — ${name}` : code;
+    if (name) return name;
     return "—";
+};
+
+/** Map GET /production/bom/getbomlist record → list row model */
+const mapBomListApiRecord = (rec: BOMListRecord): BOM2Record => {
+    const itemTypeRaw = String(rec.item_type ?? "").trim().toUpperCase();
+    const itemType: "FG" | "SFG" = itemTypeRaw === "SFG" ? "SFG" : "FG";
+    const createdAt = rec.created_at ?? rec.creaed_at ?? "";
+
+    return {
+        id: Number(rec.id),
+        bomCode: rec.bom_code || "—",
+        bomName: rec.bom_name || "—",
+        itemType,
+        itemName: rec.item_name || "—",
+        itemCode: rec.item_code || "",
+        itemId: rec.item_id,
+        skuCode: rec.sku_code != null ? String(rec.sku_code) : "",
+        skuName: rec.sku_name != null ? String(rec.sku_name) : "",
+        createdAt,
+        status: "Active",
+        components: [],
+    };
 };
 
 const getBomComponentOptionLabel = (record: any, _index: number): string => {
@@ -249,6 +312,9 @@ interface BomSkuRowProps {
     skuLoadingItemIds: Set<number>;
     loadSkuOptionsForItem: (itemId: number, itemCode?: string) => void;
     onSkuChange?: (ref: BomLineRef, skuId: string) => void;
+    popoverCollisionBoundary?: HTMLElement | null;
+    /** Show SKU * and enforce selection on structure rows when SKU options exist */
+    structureSkuRequired?: boolean;
 }
 
 interface BomStructureOperation {
@@ -479,60 +545,38 @@ function collectAllItemIdsFromTree(tree: BomOperationTree): number[] {
     return [...ids];
 }
 
-function patchOperationTreeQuantities(
-    tree: BomOperationTree,
-    qtyByItemId: Record<string, number | string>,
-): BomOperationTree | null {
-    const patchOperation = (
-        op: BomStructureOperation,
-    ): { operation: BomStructureOperation; changed: boolean } => {
-        const patchLines = (lines: BomStructureLine[]): { lines: BomStructureLine[]; changed: boolean } => {
-            let changed = false;
-            const next = lines.map((line) => {
-                let updated = line;
-                const q = qtyByItemId[String(line.item_id)];
-                if (q !== undefined && line.quantity !== q) {
-                    updated = { ...line, quantity: q };
-                    changed = true;
-                }
-                if (line.nestedOperation) {
-                    const nested = patchOperation(line.nestedOperation);
-                    if (nested.changed) {
-                        updated = { ...updated, nestedOperation: nested.operation };
-                        changed = true;
-                    }
-                }
-                return updated;
-            });
-            return { lines: next, changed };
-        };
+function bomTreeHasMissingRequiredSku(
+    tree: BomOperationTree | null,
+    skuOptionsByItemId: Record<number, SkuDropdownRecord[]>,
+    opts?: { headerOutputItemId?: number; headerSkuId?: string },
+): boolean {
+    if (!tree) return false;
 
-        const outputs = patchLines(op.outputs);
-        const inputs = patchLines(op.inputs);
-        if (!outputs.changed && !inputs.changed) {
-            return { operation: op, changed: false };
-        }
-        return {
-            operation: { ...op, outputs: outputs.lines, inputs: inputs.lines },
-            changed: true,
+    const visitOp = (op: BomStructureOperation): boolean => {
+        const checkLines = (lines: BomStructureLine[]) => {
+            for (const line of lines) {
+                const options = skuOptionsByItemId[line.item_id] ?? [];
+                const headerCoversOutput =
+                    opts?.headerOutputItemId != null &&
+                    line.item_id === opts.headerOutputItemId &&
+                    Boolean(opts.headerSkuId);
+                if (
+                    line.item_id > 0 &&
+                    options.length > 0 &&
+                    !line.sku_id &&
+                    !headerCoversOutput
+                ) {
+                    return true;
+                }
+                if (line.nestedOperation && visitOp(line.nestedOperation)) return true;
+            }
+            return false;
         };
+        return checkLines(op.outputs) || checkLines(op.inputs);
     };
 
-    const main = patchOperation(tree.mainOperation);
-    let changed = main.changed;
-    const childOperations = tree.childOperations.map((child) => {
-        const patched = patchOperation(child);
-        if (patched.changed) changed = true;
-        return patched.operation;
-    });
-
-    if (!changed) return null;
-
-    return {
-        ...tree,
-        mainOperation: main.operation,
-        childOperations,
-    };
+    if (visitOp(tree.mainOperation)) return true;
+    return tree.childOperations.some(visitOp);
 }
 
 function patchBomOperationSku(
@@ -663,87 +707,6 @@ function BomNestedOperationPanel({
     );
 }
 
-function BomNativeFieldSelect({
-    label,
-    required,
-    value,
-    options,
-    placeholder,
-    disabled,
-    onChange,
-}: {
-    label: string;
-    required?: boolean;
-    value: string;
-    options: { value: string; label: string; disabled?: boolean }[];
-    placeholder: string;
-    disabled?: boolean;
-    onChange: (value: string) => void;
-}) {
-    return (
-        <div className="w-full space-y-2">
-            <Label className="mb-1.5 block text-[10px] font-bold uppercase tracking-wider text-muted-foreground">
-                {label} {required && <span className="text-red-500">*</span>}
-            </Label>
-            <select
-                className="flex h-10 w-full rounded-md border border-input bg-background px-3 text-sm shadow-sm focus:outline-none focus:ring-1 focus:ring-ring disabled:cursor-not-allowed disabled:opacity-50"
-                value={value}
-                disabled={disabled}
-                onChange={(e) => onChange(e.target.value)}
-            >
-                <option value="">{placeholder}</option>
-                {options.map((opt) => (
-                    <option key={opt.value} value={opt.value} disabled={opt.disabled}>
-                        {opt.label}
-                    </option>
-                ))}
-            </select>
-        </div>
-    );
-}
-
-function BomLineSkuSelect({
-    value,
-    options,
-    placeholder,
-    disabled,
-    isLoading,
-    onChange,
-    onFocusLoad,
-}: {
-    value?: string;
-    options: { value: string; label: string }[];
-    placeholder: string;
-    disabled?: boolean;
-    isLoading?: boolean;
-    onChange: (value: string) => void;
-    onFocusLoad?: () => void;
-}) {
-    if (disabled) {
-        const label = value ? options.find((o) => o.value === value)?.label ?? value : "—";
-        return <p className="text-xs text-muted-foreground truncate">{label}</p>;
-    }
-
-    return (
-        <select
-            className="flex h-8 w-full min-w-[220px] rounded-md border border-input bg-background px-2 text-sm shadow-sm focus:outline-none focus:ring-1 focus:ring-ring disabled:cursor-not-allowed disabled:opacity-50"
-            value={value ?? ""}
-            disabled={isLoading || options.length === 0}
-            onFocus={onFocusLoad}
-            onChange={(e) => onChange(e.target.value)}
-        >
-            <option value="">
-                {isLoading ? "Loading SKUs..." : options.length === 0 ? placeholder : placeholder}
-            </option>
-            {options.map((opt) => (
-                <option key={opt.value} value={opt.value}>
-                    {opt.label}
-                </option>
-            ))}
-        </select>
-    );
-}
-
 function BomMaterialRow({
     line,
     operationId,
@@ -774,6 +737,18 @@ function BomMaterialRow({
             })),
         [skuOptions],
     );
+    const structureSkuMustSelect = Boolean(
+        skuProps?.structureSkuRequired &&
+            skuProps.onSkuChange &&
+            !isSkuLoading &&
+            skuSelectOptions.length > 0,
+    );
+    const lineSkuError =
+        structureSkuMustSelect && !line.sku_id ? "SKU is required" : undefined;
+
+    useEffect(() => {
+        if (line.item_id > 0) skuProps?.loadSkuOptionsForItem(line.item_id, line.item_code);
+    }, [line.item_id, line.item_code, skuProps?.loadSkuOptionsForItem]);
 
     return (
         <div
@@ -794,26 +769,38 @@ function BomMaterialRow({
                 )}
             </div>
             <div className="min-w-0 sm:min-w-[220px]">
-                <span className="text-[10px] font-semibold uppercase text-muted-foreground sm:hidden">SKU</span>
+                <span className="text-[10px] font-semibold uppercase text-muted-foreground sm:hidden">
+                    {skuProps?.structureSkuRequired ? "SKU *" : "SKU"}
+                </span>
                 {skuProps?.onSkuChange ? (
-                    <BomLineSkuSelect
+                    <SharedSearchableSelect
+                        label={skuProps.structureSkuRequired ? "SKU *" : undefined}
+                        className={cn(
+                            "w-full min-w-[220px]",
+                            lineSkuError && "[&_button]:border-red-500",
+                        )}
+                        error={lineSkuError}
                         value={line.sku_id ? String(line.sku_id) : undefined}
                         options={skuSelectOptions}
                         placeholder={
-                            skuSelectOptions.length === 0 ? "No SKUs for this item" : "Select SKU"
+                            isSkuLoading
+                                ? "Loading SKUs..."
+                                : skuSelectOptions.length === 0
+                                  ? "No SKUs for this item"
+                                  : skuProps.structureSkuRequired
+                                    ? "Select SKU *"
+                                    : "Select SKU"
                         }
-                        isLoading={isSkuLoading}
-                        onFocusLoad={() => {
-                            if (line.item_id > 0) {
-                                skuProps?.loadSkuOptionsForItem(line.item_id, line.item_code);
-                            }
-                        }}
                         onChange={(val) =>
                             skuProps.onSkuChange?.(
                                 { operationId, section, itemId: line.item_id },
-                                val,
+                                String(val ?? ""),
                             )
                         }
+                        selectedTruncate="end"
+                        popoverCollisionBoundary={skuProps.popoverCollisionBoundary}
+                        popoverCollisionPadding={8}
+                        listClassName="max-h-[200px]"
                     />
                 ) : (
                     <p className="text-xs text-muted-foreground truncate">
@@ -978,7 +965,6 @@ function BomMainOperationCard({
                         {operation.name}
                     </p>
                 </div>
-                <Badge className="bg-blue-600 hover:bg-blue-600 text-white text-[10px] shrink-0">Main assembly</Badge>
             </div>
             <BomOperationCardBody
                 operation={operation}
@@ -1171,6 +1157,10 @@ export default function BOM() {
     const { isMenuVisible, canCreate, canEdit, canDelete, canView } = useHasPermission();
     const permissionModule = "PRODUCTION/BOM";
 
+    if (!isMenuVisible(permissionModule)) {
+        return <Unauthorized />;
+    }
+
     const { toast } = useToast();
 
     // Listing State
@@ -1184,17 +1174,11 @@ export default function BOM() {
 
     const [bomRecords, setBomRecords] = useState<BOM2Record[]>([]);
     const [isListLoading, setIsListLoading] = useState(false);
-    const [bomComponentRecords, setBomComponentRecords] = useState<any[]>(() =>
-        BOM_SFG_FG_MOCK_DROPDOWN_ONLY ? getAllGsv7BomComponentRecords() : [],
-    );
+    const [bomComponentRecords, setBomComponentRecords] = useState<BOMComponentRecord[]>([]);
+    const [isBomComponentsLoading, setIsBomComponentsLoading] = useState(false);
 
-    /** Records used for SFG/FG dropdown and BOM create resolution (mock catalog when enabled). */
-    const sfgFgDropdownRecords = useMemo(() => {
-        if (BOM_SFG_FG_MOCK_DROPDOWN_ONLY) {
-            return getAllGsv7BomComponentRecords();
-        }
-        return bomComponentRecords;
-    }, [bomComponentRecords]);
+    /** SFG/FG options from GET /common/getbomcomponents (API already returns BOM outputs) */
+    const sfgFgDropdownRecords = useMemo(() => bomComponentRecords, [bomComponentRecords]);
     const [totalRecords, setTotalRecords] = useState(0);
     
     // Master Data from Global Store (Loaded at login)
@@ -1233,72 +1217,22 @@ export default function BOM() {
     const [skuOptionsByItemId, setSkuOptionsByItemId] = useState<Record<number, SkuDropdownRecord[]>>({});
     const [skuLoadingItemIds, setSkuLoadingItemIds] = useState<Set<number>>(() => new Set());
     const loadedSkuItemIdsRef = useRef<Set<number>>(new Set());
+    /** Prevents repeated GET /common/getbomcomponents?item_id= when tree effect updates form state */
+    const bomTreeFetchItemIdRef = useRef<number | null>(null);
     const skuLoadingRef = useRef<Set<number>>(new Set());
-    const realItemIdByCodeRef = useRef<Record<string, number>>({});
-    const itemsDropdownCacheRef = useRef<{ id: number; code: string }[] | null>(null);
-    const operationTreeLoadKeyRef = useRef("");
 
-    const ensureItemsDropdownCache = useCallback(async () => {
-        if (itemsDropdownCacheRef.current) return itemsDropdownCacheRef.current;
+    /** GET /common/sku-dropdown?item_id= — shared by header SKU and structure line SKUs */
+    const fetchSkuDropdownForItem = useCallback(async (itemId: number): Promise<SkuDropdownRecord[]> => {
+        if (!itemId || itemId <= 0) return [];
         try {
-            const res = await commonApi.getItemsDropdown({ status: 1 });
-            if (!res.isSuccessful) return [];
-            const raw = res.data?.records ?? res.data;
-            const records = Array.isArray(raw) ? raw : [];
-            const mapped = records
-                .map((row: Record<string, unknown>) => ({
-                    id: Number(row.id ?? row.item_id),
-                    code: String(row.code ?? row.item_code ?? "").trim(),
-                }))
-                .filter((row) => Number.isFinite(row.id) && row.id > 0 && row.code);
-            itemsDropdownCacheRef.current = mapped;
-            return mapped;
+            const res = await commonApi.getSkuDropdown({ item_id: itemId });
+            if (!res.isSuccessful || res.data == null) return [];
+            return parseSkuDropdownRecords(res.data);
         } catch (err) {
-            console.error("Failed to load items for SKU resolution:", err);
+            console.error("GET /common/sku-dropdown failed for item", itemId, err);
             return [];
         }
     }, []);
-
-    const resolveRealItemId = useCallback(
-        async (itemId: number, itemCode?: string): Promise<number> => {
-            if (!isGsv7MockItemId(itemId)) return itemId;
-
-            const code = String(itemCode ?? "").trim();
-            if (!code) return itemId;
-
-            const key = normalizeBomItemCode(code);
-            const cached = realItemIdByCodeRef.current[key];
-            if (cached) return cached;
-
-            const mapItemRow = (row: Record<string, unknown>) => ({
-                id: Number(row.id ?? row.item_id),
-                code: String(row.code ?? row.item_code ?? "").trim(),
-            });
-
-            const items = await ensureItemsDropdownCache();
-            let match = items.find((row) => normalizeBomItemCode(row.code) === key);
-
-            if (!match) {
-                try {
-                    const res = await commonApi.getItemsDropdown({ status: 1, search: code });
-                    const raw = res.data?.records ?? res.data;
-                    const searchRows = Array.isArray(raw) ? raw : [];
-                    match = searchRows
-                        .map(mapItemRow)
-                        .find((row) => Number.isFinite(row.id) && row.id > 0 && normalizeBomItemCode(row.code) === key);
-                } catch (err) {
-                    console.error("Failed to search item by code for SKU:", code, err);
-                }
-            }
-
-            if (match) {
-                realItemIdByCodeRef.current[key] = match.id;
-                return match.id;
-            }
-            return itemId;
-        },
-        [ensureItemsDropdownCache],
-    );
 
     const loadSkuOptionsForItem = useCallback(
         (itemId: number, itemCode?: string) => {
@@ -1310,20 +1244,13 @@ export default function BOM() {
 
             void (async () => {
                 try {
-                    const resolvedId = await resolveRealItemId(itemId, itemCode);
-                    const res = await commonApi.getSkuDropdown({ item_id: resolvedId });
-                    const apiRecords =
-                        res.isSuccessful && res.data != null ? parseSkuDropdownRecords(res.data) : [];
-                    const records = mergeSkuDropdownWithMock(apiRecords, itemCode);
+                    const records = await fetchSkuDropdownForItem(itemId);
                     loadedSkuItemIdsRef.current.add(itemId);
                     setSkuOptionsByItemId((prev) => ({ ...prev, [itemId]: records }));
                 } catch (err) {
                     console.error("Failed to load SKUs for item", itemId, err);
                     loadedSkuItemIdsRef.current.add(itemId);
-                    setSkuOptionsByItemId((prev) => ({
-                        ...prev,
-                        [itemId]: mergeSkuDropdownWithMock([], itemCode),
-                    }));
+                    setSkuOptionsByItemId((prev) => ({ ...prev, [itemId]: [] }));
                 } finally {
                     skuLoadingRef.current.delete(itemId);
                     setSkuLoadingItemIds((prev) => {
@@ -1334,172 +1261,7 @@ export default function BOM() {
                 }
             })();
         },
-        [resolveRealItemId],
-    );
-
-    const resetSkuCache = useCallback(() => {
-        loadedSkuItemIdsRef.current.clear();
-        skuLoadingRef.current.clear();
-        setSkuOptionsByItemId({});
-        setSkuLoadingItemIds(new Set());
-    }, []);
-
-    const mapInputComponentsFromRecord = useCallback(
-        (outputRecord: { input_components?: any[] } | undefined): BOMComponent[] => {
-            if (!outputRecord?.input_components) return [];
-            return outputRecord.input_components.map((input: any) => ({
-                item_id: String(input.item_id),
-                type: input.item_type,
-                quantity: 1,
-                uom_id: input.uom_id,
-                item: {
-                    id: String(input.item_id),
-                    code: input.item_code,
-                    name: input.item_name,
-                    type: input.item_type,
-                    uom: resolveUomLabel(uomMap, input.uom_id, input.uom, input.uom_name),
-                },
-            }));
-        },
-        [uomMap],
-    );
-
-    const loadOperationTreeForSelection = useCallback(
-        async (
-            output: { id: number; code: string; name: string },
-            optionValue: string,
-            components: BOMComponent[],
-        ) => {
-            try {
-                const itemCode = output.code;
-
-                if (isGsv7CatalogItemCode(itemCode)) {
-                    const rootItemId = getGsv7ItemIdByCode(itemCode);
-                    const savedQty = loadGsv7BomQuantities(itemCode);
-                    const rootQty = Number(savedQty[String(rootItemId)]) || 1;
-                    let gsv7Tree = buildGsv7NestedBomTree(itemCode, rootQty);
-                    if (gsv7Tree && Object.keys(savedQty).length > 0) {
-                        gsv7Tree = applyGsv7BomQuantityMap(gsv7Tree, savedQty);
-                    }
-                    if (gsv7Tree) {
-                        setOperationTree({
-                            ...gsv7Tree,
-                            isGsv7Nested: true,
-                            rootOutputQuantity: rootQty,
-                        });
-                        setFormData((prev) => ({
-                            ...prev,
-                            selectedItemId: optionValue,
-                            selectedSkuId: "",
-                            components: gsv7TreeToTopLevelComponents(gsv7Tree),
-                        }));
-                    } else {
-                        setOperationTree(null);
-                        setFormData((prev) => ({
-                            ...prev,
-                            selectedItemId: optionValue,
-                            selectedSkuId: "",
-                            components,
-                        }));
-                    }
-                    setIsOperationTreeLoading(false);
-                    if (rootItemId > 0) loadSkuOptionsForItem(rootItemId, itemCode);
-                    return;
-                }
-
-                setFormData((prev) => ({
-                    ...prev,
-                    selectedItemId: optionValue,
-                    selectedSkuId: "",
-                    components,
-                }));
-
-                if (!output.id || output.id <= 0) {
-                    setOperationTree(null);
-                    setIsOperationTreeLoading(false);
-                    return;
-                }
-
-                setIsOperationTreeLoading(true);
-                loadSkuOptionsForItem(output.id, output.code);
-                const qtyMap: Record<string, number | string> = {};
-                components.forEach((c) => {
-                    qtyMap[String(c.item_id)] = c.quantity;
-                });
-                const tree = await buildBomOperationTree({
-                    outputItemId: output.id,
-                    selectedItemCode: output.code,
-                    selectedItemName: output.name,
-                    quantityByItemId: qtyMap,
-                });
-                setOperationTree(tree);
-            } catch (err) {
-                console.error("Failed to load BOM operation tree:", err);
-                setOperationTree(null);
-            } finally {
-                setIsOperationTreeLoading(false);
-            }
-        },
-        [loadSkuOptionsForItem],
-    );
-
-    const handleOutputItemChange = useCallback(
-        (optionValue: string) => {
-            startTransition(() => {
-                resetSkuCache();
-                setOperationTree(null);
-                operationTreeLoadKeyRef.current = "";
-
-                if (!optionValue) {
-                    setFormData((prev) => ({
-                        ...prev,
-                        selectedItemId: "",
-                        selectedSkuId: "",
-                        components: [],
-                    }));
-                    setIsOperationTreeLoading(false);
-                    return;
-                }
-
-                setIsOperationTreeLoading(true);
-                const outputRecord = findBomComponentRecordByOptionValue(
-                    sfgFgDropdownRecords,
-                    optionValue,
-                );
-                const outputCode = String(
-                    outputRecord?.output_component?.code ??
-                        outputRecord?.output_component?.item_code ??
-                        "",
-                ).trim();
-                const components =
-                    outputCode && isGsv7CatalogItemCode(outputCode)
-                        ? []
-                        : mapInputComponentsFromRecord(outputRecord);
-
-                if (outputRecord?.output_component) {
-                    const oc = outputRecord.output_component;
-                    void loadOperationTreeForSelection(
-                        {
-                            id: Number(oc.id),
-                            code: outputCode || String(oc.code ?? oc.item_code ?? "").trim(),
-                            name: String(oc.name ?? oc.item_name ?? "Unknown").trim(),
-                        },
-                        optionValue,
-                        components,
-                    ).catch((err) => console.error("BOM item selection failed:", err));
-                    return;
-                }
-
-                setIsOperationTreeLoading(false);
-                setFormData((prev) => ({
-                    ...prev,
-                    selectedItemId: optionValue,
-                    selectedSkuId: "",
-                    components,
-                }));
-            });
-        },
-        [resetSkuCache, sfgFgDropdownRecords, mapInputComponentsFromRecord, loadOperationTreeForSelection],
+        [fetchSkuDropdownForItem],
     );
 
     const [isSaving, setIsSaving] = useState(false);
@@ -1507,6 +1269,7 @@ export default function BOM() {
     const [openingBOMId, setOpeningBOMId] = useState<number | null>(null);
     const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false);
     const [bomNameError, setBomNameError] = useState("");
+    const [dialogEl, setDialogEl] = useState<HTMLDivElement | null>(null);
     const [operationTree, setOperationTree] = useState<BomOperationTree | null>(null);
     const [isOperationTreeLoading, setIsOperationTreeLoading] = useState(false);
 
@@ -1523,10 +1286,8 @@ export default function BOM() {
             components: []
         });
         setOperationTree(null);
-        operationTreeLoadKeyRef.current = "";
         loadedSkuItemIdsRef.current.clear();
-        realItemIdByCodeRef.current = {};
-        itemsDropdownCacheRef.current = null;
+        bomTreeFetchItemIdRef.current = null;
         setSkuOptionsByItemId({});
         setSkuLoadingItemIds(new Set());
         fetchBOMComponents();
@@ -1539,8 +1300,6 @@ export default function BOM() {
         setOpeningBOMId(record.id);
         setDialogMode("edit");
         setBomNameError("");
-        setOperationTree(null);
-        operationTreeLoadKeyRef.current = "";
         setDialogOpen(true);
         setIsDetailLoading(true);
         void fetchBOMComponents();
@@ -1574,8 +1333,6 @@ export default function BOM() {
         setOpeningBOMId(record.id);
         setDialogMode("view");
         setBomNameError("");
-        setOperationTree(null);
-        operationTreeLoadKeyRef.current = "";
         setDialogOpen(true);
         setIsDetailLoading(true);
         void fetchBOMComponents();
@@ -1650,33 +1407,10 @@ export default function BOM() {
         return list.map((s) => ({
             value: String(s.id),
             label: `${s.code} — ${s.name}`,
+            primaryText: s.name,
+            secondaryText: s.code,
         }));
     }, [skuOptionsByItemId, resolveSelectedOutputItem?.id]);
-
-    const sfgFgSelectOptions = useMemo(
-        () =>
-            (sfgFgDropdownRecords || []).map((r, index) => {
-                const oc = r.output_component || {};
-                const code = String(
-                    oc.code || oc.item_code || oc.output_component_code || oc.component_code || "",
-                ).trim();
-                const name = String(
-                    oc.name || oc.item_name || oc.output_component_name || oc.component_name || "Unknown",
-                ).trim();
-                const outputId = r.output_component?.id;
-                const isAlreadyCreated =
-                    !BOM_SFG_FG_MOCK_DROPDOWN_ONLY &&
-                    dialogMode === "create" &&
-                    bomRecords.some((bom) => Number(bom.itemId) === Number(outputId));
-
-                return {
-                    value: getBomComponentOptionValue(r, index),
-                    label: formatBomSfgFgLabel(code, name),
-                    disabled: isAlreadyCreated,
-                };
-            }),
-        [sfgFgDropdownRecords, dialogMode, bomRecords],
-    );
 
     const headerSkuItemId = resolveSelectedOutputItem?.id;
     const isHeaderSkuLoading = Boolean(
@@ -1685,82 +1419,189 @@ export default function BOM() {
 
     useEffect(() => {
         const itemId = resolveSelectedOutputItem?.id;
-        if (dialogOpen && itemId && itemId > 0) {
-            loadSkuOptionsForItem(itemId, resolveSelectedOutputItem?.code);
-        }
+        if (!dialogOpen || !itemId || itemId <= 0) return;
+        loadSkuOptionsForItem(itemId, resolveSelectedOutputItem?.code);
     }, [dialogOpen, resolveSelectedOutputItem?.id, resolveSelectedOutputItem?.code, loadSkuOptionsForItem]);
 
+    /** Auto-select when /common/sku-dropdown returns a single SKU */
     useEffect(() => {
-        if (!dialogOpen) return;
-        void ensureItemsDropdownCache();
-    }, [dialogOpen, ensureItemsDropdownCache]);
+        if (!dialogOpen || dialogMode !== "create") return;
+        const itemId = resolveSelectedOutputItem?.id;
+        if (!itemId || isHeaderSkuLoading) return;
 
-    useEffect(() => {
-        if (!dialogOpen) {
-            operationTreeLoadKeyRef.current = "";
-            setOperationTree(null);
-            return;
+        const options = skuOptionsByItemId[itemId] ?? [];
+        if (options.length === 1 && !formData.selectedSkuId) {
+            setFormData((prev) => ({ ...prev, selectedSkuId: String(options[0].id) }));
         }
-        if (dialogMode === "create") return;
-        if (isDetailLoading || !resolveSelectedOutputItem?.code) return;
-        if (operationTree) return;
-
-        const loadKey = `${dialogMode}:${formData.selectedItemId}:${resolveSelectedOutputItem.code}`;
-        if (operationTreeLoadKeyRef.current === loadKey) return;
-        operationTreeLoadKeyRef.current = loadKey;
-
-        void loadOperationTreeForSelection(
-            resolveSelectedOutputItem,
-            formData.selectedItemId,
-            formData.components,
-        ).catch((err) => console.error("Failed to load BOM tree for edit/view:", err));
     }, [
         dialogOpen,
         dialogMode,
-        isDetailLoading,
-        resolveSelectedOutputItem,
-        formData.selectedItemId,
-        formData.components,
+        resolveSelectedOutputItem?.id,
+        skuOptionsByItemId,
+        isHeaderSkuLoading,
+        formData.selectedSkuId,
+    ]);
+
+    /** Keep OUTPUT row SKU in sync with header SKU selection */
+    useEffect(() => {
+        const outputItemId = resolveSelectedOutputItem?.id;
+        const skuId = formData.selectedSkuId;
+        if (!dialogOpen || dialogMode === "view" || !outputItemId || !skuId || !operationTree) return;
+
+        const picked = (skuOptionsByItemId[outputItemId] ?? []).find((s) => String(s.id) === skuId);
+        if (!picked) return;
+
+        const outputLine = operationTree.mainOperation.outputs.find(
+            (line) => line.item_id === outputItemId,
+        );
+        if (outputLine?.sku_id === picked.id) return;
+
+        setOperationTree((prev) =>
+            prev
+                ? patchBomTreeSku(
+                      prev,
+                      {
+                          operationId: prev.mainOperation.id,
+                          section: "outputs",
+                          itemId: outputItemId,
+                      },
+                      { id: picked.id, code: picked.code, name: picked.name },
+                  )
+                : prev,
+        );
+    }, [
+        dialogOpen,
+        dialogMode,
+        formData.selectedSkuId,
+        resolveSelectedOutputItem?.id,
         operationTree,
-        loadOperationTreeForSelection,
+        skuOptionsByItemId,
     ]);
 
     useEffect(() => {
-        if (formData.components.length === 0) return;
-        setOperationTree((prev) => {
-            if (!prev || prev.isGsv7Nested) return prev;
-            const patched = patchOperationTreeQuantities(prev, quantityByItemId);
-            return patched ?? prev;
-        });
-    }, [quantityByItemId, formData.components.length, formData.selectedItemId]);
+        if (!dialogOpen || !operationTree) return;
+        const loadLineSkus = (op: BomStructureOperation) => {
+            for (const line of [...op.outputs, ...op.inputs]) {
+                if (line.item_id > 0) loadSkuOptionsForItem(line.item_id, line.item_code);
+                if (line.nestedOperation) loadLineSkus(line.nestedOperation);
+            }
+        };
+        loadLineSkus(operationTree.mainOperation);
+        operationTree.childOperations.forEach(loadLineSkus);
+    }, [dialogOpen, operationTree, loadSkuOptionsForItem]);
 
-    const handleStructureQuantityChange = (itemId: number, qty: string) => {
+    useEffect(() => {
+        const itemId = resolveSelectedOutputItem?.id;
         const itemCode = resolveSelectedOutputItem?.code;
-        if (itemCode && isGsv7CatalogItemCode(itemCode) && operationTree?.isGsv7Nested) {
-            const rootItemId = getGsv7ItemIdByCode(itemCode);
-            const qtyMap: Gsv7BomQuantityMap = {
-                ...loadGsv7BomQuantities(itemCode),
-                ...collectGsv7TreeQuantities(operationTree),
-                [String(itemId)]: qty,
-            };
-            const rootQty = Number(qtyMap[String(rootItemId)]) || 1;
-            let gsv7Tree = buildGsv7NestedBomTree(itemCode, rootQty);
-            if (!gsv7Tree) return;
-            gsv7Tree = applyGsv7BomQuantityMap(gsv7Tree, qtyMap);
 
-            setOperationTree({
-                ...gsv7Tree,
-                isGsv7Nested: true,
-                rootOutputQuantity: rootQty,
-            });
-            setFormData((prev) => ({
-                ...prev,
-                components: gsv7TreeToTopLevelComponents(gsv7Tree),
-            }));
-            saveGsv7BomQuantities(itemCode, qtyMap);
+        if (!dialogOpen || !itemCode || !itemId || itemId <= 0) {
+            setOperationTree(null);
+            setIsOperationTreeLoading(false);
+            bomTreeFetchItemIdRef.current = null;
             return;
         }
 
+        if (bomTreeFetchItemIdRef.current === itemId) return;
+        bomTreeFetchItemIdRef.current = itemId;
+
+        let cancelled = false;
+        setIsOperationTreeLoading(true);
+
+        const loadTree = async () => {
+            const selectedOptionId = formData.selectedItemId;
+            const cachedRecord = findBomComponentRecordByOptionValue(
+                sfgFgDropdownRecords,
+                selectedOptionId,
+            );
+
+            try {
+                const res = await commonApi.getBOMComponents({ item_id: itemId });
+                const records = parseBomComponentsRecords(res);
+                const apiRecord = records[0] ?? cachedRecord;
+                if (apiRecord?.input_components?.length) {
+                    if (!cancelled) {
+                        setFormData((prev) => ({
+                            ...prev,
+                            components: mapBomInputComponentsToForm(
+                                apiRecord.input_components,
+                                uomMap,
+                            ),
+                        }));
+                        setOperationTree(buildBomTreeFromComponentRecord(apiRecord, {}));
+                    }
+                    return;
+                }
+            } catch (err) {
+                console.error("getbomcomponents by item_id failed:", err);
+            }
+
+            if (cachedRecord?.input_components?.length) {
+                if (!cancelled) {
+                    setFormData((prev) => ({
+                        ...prev,
+                        components: mapBomInputComponentsToForm(
+                            cachedRecord.input_components,
+                            uomMap,
+                        ),
+                    }));
+                    setOperationTree(buildBomTreeFromComponentRecord(cachedRecord, {}));
+                }
+                return;
+            }
+
+            try {
+                const tree = await buildBomOperationTree({
+                    outputItemId: itemId,
+                    selectedItemCode: itemCode,
+                    selectedItemName: resolveSelectedOutputItem?.name ?? "",
+                    quantityByItemId: {},
+                });
+                if (!cancelled) setOperationTree(tree);
+            } catch (err) {
+                console.error("Failed to build BOM operation tree:", err);
+                if (!cancelled) setOperationTree(null);
+            }
+        };
+
+        void loadTree().finally(() => {
+            if (!cancelled) setIsOperationTreeLoading(false);
+        });
+
+        return () => {
+            cancelled = true;
+            if (bomTreeFetchItemIdRef.current === itemId) {
+                bomTreeFetchItemIdRef.current = null;
+            }
+        };
+        // Only re-fetch when dialog opens or SFG/FG item changes — not when components/qty update
+    }, [dialogOpen, resolveSelectedOutputItem?.id, resolveSelectedOutputItem?.code]);
+
+    useEffect(() => {
+        if (!operationTree || formData.components.length === 0) return;
+        setOperationTree((prev) => {
+            if (!prev) return prev;
+            const applyQty = (lines: typeof prev.mainOperation.inputs) =>
+                lines.map((line) => {
+                    const q = quantityByItemId[String(line.item_id)];
+                    return q !== undefined ? { ...line, quantity: q } : line;
+                });
+            return {
+                ...prev,
+                mainOperation: {
+                    ...prev.mainOperation,
+                    outputs: applyQty(prev.mainOperation.outputs),
+                    inputs: applyQty(prev.mainOperation.inputs),
+                },
+                childOperations: prev.childOperations.map((child) => ({
+                    ...child,
+                    outputs: applyQty(child.outputs),
+                    inputs: applyQty(child.inputs),
+                })),
+            };
+        });
+    }, [formData.components.length, formData.selectedItemId]);
+
+    const handleStructureQuantityChange = (itemId: number, qty: string) => {
         setFormData((prev) => {
             const idx = prev.components.findIndex((c) => Number(c.item_id) === itemId);
             if (idx < 0) return prev;
@@ -1819,8 +1660,10 @@ export default function BOM() {
             skuLoadingItemIds,
             loadSkuOptionsForItem,
             onSkuChange: dialogMode === "view" ? undefined : handleStructureSkuChange,
+            popoverCollisionBoundary: dialogEl,
+            structureSkuRequired: dialogMode !== "view",
         }),
-        [skuOptionsByItemId, skuLoadingItemIds, loadSkuOptionsForItem, handleStructureSkuChange, dialogMode],
+        [skuOptionsByItemId, skuLoadingItemIds, loadSkuOptionsForItem, handleStructureSkuChange, dialogMode, dialogEl],
     );
 
     // Re-resolve UOM labels when master UOM data loads after BOM detail fetch
@@ -1866,6 +1709,38 @@ export default function BOM() {
             return;
         }
 
+        const headerSkuOptionsForSave =
+            resolveSelectedOutputItem?.id != null
+                ? skuOptionsByItemId[resolveSelectedOutputItem.id] ?? []
+                : [];
+        if (
+            dialogMode !== "view" &&
+            resolveSelectedOutputItem &&
+            headerSkuOptionsForSave.length > 0 &&
+            !formData.selectedSkuId
+        ) {
+            toast({
+                title: "SKU Required",
+                description: "Please select a SKU for the finished / semi-finished item.",
+                variant: "destructive",
+            });
+            return;
+        }
+        if (
+            dialogMode !== "view" &&
+            operationTree &&
+            bomTreeHasMissingRequiredSku(operationTree, skuOptionsByItemId, {
+                headerOutputItemId: resolveSelectedOutputItem?.id,
+                headerSkuId: formData.selectedSkuId,
+            })
+        ) {
+            toast({
+                title: "SKU Required",
+                description: "Please select SKU for all BOM lines that have SKU options.",
+                variant: "destructive",
+            });
+            return;
+        }
         if (dialogMode === "create") {
             setIsSaving(true);
             try {
@@ -1874,19 +1749,25 @@ export default function BOM() {
                     formData.selectedItemId
                 );
 
-                // Dynamically resolve item_type_id using master data from store
-                // We determine if it's SFG or FG based on the item name or record data
-                const isSFG = outputRecord?.output_component?.name?.toLowerCase().includes("sfg") || 
-                              outputRecord?.output_component?.name?.toLowerCase().includes("semi");
-                
-                const itemTypeId = isSFG ? (sfgTypeId || 2) : (fgTypeId || 1);
+                const outputType = String(
+                    outputRecord?.output_component?.item_type ?? "",
+                ).toUpperCase();
+                const itemTypeId =
+                    outputType === "SFG"
+                        ? sfgTypeId
+                        : outputType === "FG"
+                          ? fgTypeId
+                          : sfgTypeId ?? fgTypeId;
 
                 const itemId = Number(outputRecord?.output_component?.id);
                 const response = await productionApi.createBOM({
                     bom_name: nameTrimmed,
                     item_id: itemId,
-                    item_type_id: itemTypeId,
+                    item_type_id: itemTypeId!,
                     description: formData.bomDescription,
+                    ...(formData.selectedSkuId
+                        ? { sku_id: Number(formData.selectedSkuId) }
+                        : {}),
                     components: formData.components.map((c: any) => ({
                         input_component_id: Number(c.item_id),
                         quantity: Number(c.quantity),
@@ -1990,22 +1871,14 @@ export default function BOM() {
 
             if (response.isSuccessful && response.data) {
                 const records = response.data.records || [];
-                const mappedRecords: BOM2Record[] = records.map((rec: any) => ({
-                    id: rec.id,
-                    bomCode: rec.bom_code || "N/A",
-                    bomName: rec.bom_name || "N/A",
-                    itemType: (rec.item_type || "FG") as "FG" | "SFG",
-                    itemName: rec.item_name || "N/A",
-                    itemCode: rec.item_code || rec.output_item_code || "",
-                    skuCode: rec.sku_code || "",
-                    skuName: rec.sku_name || "",
-                    itemId: rec.item_id,
-                    createdAt: rec.creaed_at || rec.created_at || "", 
-                    status: "Active",
-                    components: []
-                }));
+                const mappedRecords = records.map((rec) => mapBomListApiRecord(rec));
                 setBomRecords(mappedRecords);
-                setTotalRecords(response.data.pagination?.totalRecords || 0);
+                const pagination = response.data.pagination;
+                setTotalRecords(
+                    pagination?.totalRecords ??
+                        pagination?.totalCount ??
+                        0
+                );
             }
         } catch (error: any) {
             toast({
@@ -2019,29 +1892,21 @@ export default function BOM() {
     };
 
     const fetchBOMComponents = async () => {
-        if (BOM_SFG_FG_MOCK_DROPDOWN_ONLY) {
-            setBomComponentRecords(getAllGsv7BomComponentRecords());
-            return;
-        }
+        setIsBomComponentsLoading(true);
         try {
             const response = await commonApi.getBOMComponents();
-            if (response.isSuccessful && response.data) {
-                const apiRecords = response.data.records || [];
-                const apiCodes = new Set(
-                    apiRecords.map((r: { output_component?: { code?: string } }) =>
-                        normalizeCode(String(r.output_component?.code ?? "")),
-                    ),
-                );
-                const gsv7Records = getAllGsv7BomComponentRecords().filter(
-                    (r) => !apiCodes.has(normalizeCode(r.output_component.code)),
-                );
-                setBomComponentRecords([...gsv7Records, ...apiRecords]);
-            } else {
-                setBomComponentRecords(getAllGsv7BomComponentRecords());
-            }
-        } catch (error: any) {
+            const apiRecords = parseBomComponentsRecords(response);
+            setBomComponentRecords(apiRecords);
+        } catch (error: unknown) {
             console.error("Failed to fetch BOM components:", error);
-            setBomComponentRecords(getAllGsv7BomComponentRecords());
+            setBomComponentRecords([]);
+            toast({
+                title: "Could not load SFG/FG list",
+                description: "Failed to load from /common/getbomcomponents.",
+                variant: "destructive",
+            });
+        } finally {
+            setIsBomComponentsLoading(false);
         }
     };
 
@@ -2056,6 +1921,28 @@ export default function BOM() {
 
     const totalPages = Math.ceil(totalRecords / itemsPerPage);
 
+    const headerSkuOptions =
+        resolveSelectedOutputItem?.id != null
+            ? skuOptionsByItemId[resolveSelectedOutputItem.id] ?? []
+            : [];
+    /** Label shows SKU * on create/edit (like BOM Name / SFG/FG); value required only after item is chosen */
+    const headerSkuLabel = dialogMode !== "view" ? "SKU *" : "SKU";
+    const headerSkuMustSelect =
+        dialogMode !== "view" &&
+        Boolean(formData.selectedItemId) &&
+        Boolean(resolveSelectedOutputItem) &&
+        !isHeaderSkuLoading &&
+        headerSkuOptions.length > 0;
+    const headerSkuValid = !headerSkuMustSelect || Boolean(formData.selectedSkuId);
+    const headerSkuError =
+        headerSkuMustSelect && !formData.selectedSkuId ? "SKU is required" : undefined;
+    const structureSkusValid =
+        dialogMode === "view" ||
+        !operationTree ||
+        !bomTreeHasMissingRequiredSku(operationTree, skuOptionsByItemId, {
+            headerOutputItemId: resolveSelectedOutputItem?.id,
+            headerSkuId: formData.selectedSkuId,
+        });
     const bomNameTrimLen = formData.bomName.trim().length;
     const canSaveBom =
         !isSaving &&
@@ -2063,14 +1950,12 @@ export default function BOM() {
         bomNameTrimLen >= BOM_NAME_MIN_LEN &&
         bomNameTrimLen <= BOM_NAME_MAX_LEN &&
         Boolean(formData.selectedItemId) &&
+        headerSkuValid &&
+        structureSkusValid &&
         formData.components.length > 0 &&
         !formData.components.some((c: any) => c.quantity < 0 || c.quantity > 1000000);
 
     const isRowActionBusy = openingBOMId !== null || isSaving;
-
-    if (!isMenuVisible(permissionModule)) {
-        return <Unauthorized />;
-    }
 
     return (
         <div className="h-full flex flex-col gap-6 animate-in fade-in duration-500">
@@ -2197,6 +2082,7 @@ export default function BOM() {
             {/* Dialog Form */}
             <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
                 <DialogContent
+                    ref={setDialogEl}
                     className="flex! min-h-0 w-[98%] max-h-[82vh] flex-col gap-0 overflow-hidden bg-white p-0 sm:max-w-5xl md:max-w-6xl lg:max-w-6xl xl:max-w-7xl"
                     onPointerDownOutside={(e) => e.preventDefault()}
                     onInteractOutside={(e) => e.preventDefault()}
@@ -2244,31 +2130,65 @@ export default function BOM() {
                                 )}
                             </div>
                             <div className="min-w-0 w-full">
-                            <BomNativeFieldSelect
-                                label="SFG / FG"
-                                required
+                            <SharedSearchableSelect
+                                label="SFG / FG *"
+                                className="w-full"
                                 value={formData.selectedItemId}
-                                placeholder="Select SFG / FG item"
-                                options={sfgFgSelectOptions}
+                                options={(sfgFgDropdownRecords || []).map((r) => {
+                                    const oc = r.output_component;
+                                    const code = String(oc.item_code ?? oc.code ?? "").trim();
+                                    const name = String(oc.item_name ?? oc.name ?? "Unknown").trim();
+                                    const outputId = oc.id;
+                                    const isAlreadyCreated =
+                                        dialogMode === "create" &&
+                                        bomRecords.some(
+                                            (bom) => Number(bom.itemId) === Number(outputId),
+                                        );
+                                    const displayLabel = formatBomSfgFgLabel(code, name);
+
+                                    return {
+                                        value: getBomComponentOptionValue(r),
+                                        label: displayLabel,
+                                        primaryText: name,
+                                        secondaryText: code || undefined,
+                                        disabled: isAlreadyCreated,
+                                    };
+                                })}
                                 onChange={(val) => {
-                                    if (dialogMode === "create") {
-                                        handleOutputItemChange(val);
-                                    } else {
-                                        setFormData((prev: BOMFormData) => ({
-                                            ...prev,
-                                            selectedItemId: val,
-                                            selectedSkuId: "",
-                                        }));
-                                    }
+                                    bomTreeFetchItemIdRef.current = null;
+                                    setFormData((prev: BOMFormData) => ({
+                                        ...prev,
+                                        selectedItemId: val,
+                                        selectedSkuId: "",
+                                        components: [],
+                                    }));
+                                    setOperationTree(null);
                                 }}
-                                disabled={dialogMode !== "create"}
+                                disabled={dialogMode !== "create" || isBomComponentsLoading}
+                                placeholder={
+                                    isBomComponentsLoading
+                                        ? "Loading SFG / FG..."
+                                        : sfgFgDropdownRecords.length === 0
+                                          ? "No SFG / FG available"
+                                          : "Select SFG / FG"
+                                }
+                                selectedTruncate="end"
+                                popoverCollisionBoundary={dialogEl}
+                                popoverCollisionPadding={8}
+                                listClassName="max-h-[200px]"
                             />
                             </div>
 
                             <div className="min-w-0 w-full">
-                                <BomNativeFieldSelect
-                                    label="SKU"
-                                    value={formData.selectedSkuId}
+                                <SharedSearchableSelect
+                                    label={headerSkuLabel}
+                                    className={cn(
+                                        "w-full",
+                                        headerSkuError && "[&_button]:border-red-500",
+                                    )}
+                                    error={headerSkuError}
+                                    value={formData.selectedSkuId || undefined}
+                                    options={filteredSkuDropdownOptions}
                                     placeholder={
                                         !resolveSelectedOutputItem
                                             ? "Select SFG / FG first"
@@ -2276,19 +2196,44 @@ export default function BOM() {
                                               ? "Loading SKUs..."
                                               : filteredSkuDropdownOptions.length === 0
                                                 ? "No SKUs for this item"
-                                                : "Select SKU"
+                                                : "Select SKU *"
                                     }
-                                    options={filteredSkuDropdownOptions}
-                                    onChange={(val) => setFormData((prev: BOMFormData) => ({
-                                        ...prev,
-                                        selectedSkuId: val,
-                                    }))}
+                                    onChange={(val) => {
+                                        const skuId = String(val ?? "");
+                                        setFormData((prev: BOMFormData) => ({
+                                            ...prev,
+                                            selectedSkuId: skuId,
+                                        }));
+                                        const outputItemId = resolveSelectedOutputItem?.id;
+                                        if (!skuId || !outputItemId || !operationTree) return;
+                                        const picked = (
+                                            skuOptionsByItemId[outputItemId] ?? []
+                                        ).find((s) => String(s.id) === skuId);
+                                        if (!picked) return;
+                                        setOperationTree((prev) =>
+                                            prev
+                                                ? patchBomTreeSku(prev, {
+                                                      operationId: prev.mainOperation.id,
+                                                      section: "outputs",
+                                                      itemId: outputItemId,
+                                                  }, {
+                                                      id: picked.id,
+                                                      code: picked.code,
+                                                      name: picked.name,
+                                                  })
+                                                : prev,
+                                        );
+                                    }}
                                     disabled={
                                         dialogMode === "view" ||
                                         !resolveSelectedOutputItem ||
                                         isHeaderSkuLoading ||
                                         filteredSkuDropdownOptions.length === 0
                                     }
+                                    selectedTruncate="end"
+                                    popoverCollisionBoundary={dialogEl}
+                                    popoverCollisionPadding={8}
+                                    listClassName="max-h-[200px]"
                                 />
                             </div>
 

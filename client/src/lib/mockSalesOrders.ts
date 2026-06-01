@@ -1,4 +1,6 @@
-import { mockCustomers, mockFinishedGoods, mockLocations, mockWarehouses } from "./masterMockData";
+import { mockCustomers, mockLocations, mockWarehouses } from "./masterMockData";
+import { GSV7_ITEMS } from "./gsv7OperationsMockData";
+import { MOCK_FG_ITEM_ID } from "./mockSalesShared";
 
 export type SOStatus = "Draft" | "Invoiced" | "Invoice Pending" | "Dispatch Pending" | "Dispatched" | "Close";
 
@@ -6,11 +8,37 @@ export interface SOItem {
     id: number;
     itemCode: string;
     itemName: string;
+    skuId?: number | string;
+    skuCode?: string;
+    skuName?: string;
     uom: string;
     orderedQty: number;
     dispatchedQty: number;
     rate: number;
     price: number;
+}
+
+const FG = GSV7_ITEMS.FG_GSV7;
+
+function soLine(
+    id: number,
+    orderedQty: number,
+    rate: number,
+    skuCode?: string,
+    skuName?: string,
+): SOItem {
+    return {
+        id,
+        itemCode: String(MOCK_FG_ITEM_ID),
+        itemName: FG.name,
+        skuCode,
+        skuName,
+        uom: "NOS",
+        orderedQty,
+        dispatchedQty: 0,
+        rate,
+        price: orderedQty * rate,
+    };
 }
 
 // Payment Term interface - valueType removed, only value field remains
@@ -29,8 +57,13 @@ export interface PaymentTerm {
 
 export interface DispatchEntry {
     id: number;
+    soItemId?: number;
     itemCode: string;
     itemName: string;
+    skuId?: number | string;
+    skuCode?: string;
+    skuName?: string;
+    uom?: string;
     dispatchQty: number;
     dispatchDate: string;
     note: string;
@@ -96,8 +129,8 @@ const DEFAULT_SALES_ORDERS: SOData[] = [
             { id: 2, value: 70, percentage: 70, termType: "Delivery", date: "", note: "70% balance on delivery" }
         ],
         items: [
-            { id: 1, itemCode: mockFinishedGoods[0].id, itemName: mockFinishedGoods[0].name, uom: "PCS", orderedQty: 10, dispatchedQty: 0, rate: 1200.00, price: 12000.00 },
-            { id: 2, itemCode: mockFinishedGoods[1].id, itemName: mockFinishedGoods[1].name, uom: "PCS", orderedQty: 20, dispatchedQty: 0, rate: 450.00, price: 9000.00 }
+            soLine(1, 120, 185000, "SKU-GSV7-12V", "GSV7 Battery 12V Standard"),
+            soLine(2, 40, 195000, "SKU-GSV7-EXP", "GSV7 Battery Export Grade"),
         ],
         dispatches: [],
         discountValue: 5,
@@ -132,8 +165,8 @@ const DEFAULT_SALES_ORDERS: SOData[] = [
             { id: 3, value: 30, percentage: 30, termType: "Delivery", date: "", note: "30% on delivery" }
         ],
         items: [
-            { id: 1, itemCode: mockFinishedGoods[2].id, itemName: mockFinishedGoods[2].name, uom: "PCS", orderedQty: 15, dispatchedQty: 0, rate: 850.00, price: 12750.00 },
-            { id: 2, itemCode: mockFinishedGoods[3].id, itemName: mockFinishedGoods[3].name, uom: "PCS", orderedQty: 30, dispatchedQty: 0, rate: 125.00, price: 3750.00 }
+            soLine(1, 80, 185000, "SKU-GSV7-12V", "GSV7 Battery 12V Standard"),
+            soLine(2, 25, 195000, "SKU-GSV7-EXP", "GSV7 Battery Export Grade"),
         ],
         dispatches: [],
         discountValue: 500,
@@ -167,9 +200,9 @@ const DEFAULT_SALES_ORDERS: SOData[] = [
             { id: 2, value: 50, percentage: 50, termType: "Delivery", date: "", note: "50% on delivery" }
         ],
         items: [
-            { id: 1, itemCode: mockFinishedGoods[0].id, itemName: mockFinishedGoods[0].name, uom: "PCS", orderedQty: 100, dispatchedQty: 0, rate: 1200.00, price: 120000.00 },
-            { id: 2, itemCode: mockFinishedGoods[1].id, itemName: mockFinishedGoods[1].name, uom: "PCS", orderedQty: 50, dispatchedQty: 0, rate: 450.00, price: 22500.00 },
-            { id: 3, itemCode: mockFinishedGoods[2].id, itemName: mockFinishedGoods[2].name, uom: "PCS", orderedQty: 75, dispatchedQty: 0, rate: 850.00, price: 63750.00 }
+            soLine(1, 100, 185000, "SKU-GSV7-12V", "GSV7 Battery 12V Standard"),
+            soLine(2, 50, 195000, "SKU-GSV7-EXP", "GSV7 Battery Export Grade"),
+            soLine(3, 30, 188000, "SKU-GSV7-12V", "GSV7 Battery 12V Standard"),
         ],
         dispatches: [],
         discountValue: 10,

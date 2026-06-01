@@ -74,7 +74,8 @@ import { useToast } from "@/hooks/use-toast";
 import { AppListToolbar } from "@/components/shared/AppListToolbar";
 import { SearchableSelect } from "@/components/shared/SearchableSelect";
 import { mockWarehouses, mockLocations } from "@/lib/masterMockData";
-import { commonApi, salesOrdersApi, salesApi, invoicingApi, inventoryApi } from "@/lib/api";
+import { commonApi, salesOrdersApi, salesApi, invoicingApi, inventoryApi, parseSkuDropdownRecords, type SkuDropdownRecord } from "@/lib/api";
+import { getBomMockSkusForItem, mergeSkuDropdownWithMock } from "@/lib/bomSkuMockData";
 import { useCommonStore } from "@/store/commonStore";
 // Updated: Import mock sales order service
 import {
@@ -172,6 +173,72 @@ const mockItems = mockFinishedGoods.map(fg => ({
 // ============================================================================
 // HELPER FUNCTIONS
 // ============================================================================
+
+const formatSoItemSkuLabel = (item: {
+    skuCode?: string;
+    skuName?: string;
+    itemCode?: string;
+}): string => {
+    if (item.skuCode) {
+        return item.skuName ? `${item.skuCode} — ${item.skuName}` : item.skuCode;
+    }
+    if (item.skuName) return item.skuName;
+    const mock = getBomMockSkusForItem(item.itemCode)[0];
+    if (mock) return mock.name ? `${mock.code} — ${mock.name}` : mock.code;
+    return "—";
+};
+
+const mapApiSOItemToForm = (apiItem: Record<string, unknown>, index: number): SOItem => ({
+    id: Number(apiItem.id ?? Date.now() + index),
+    itemCode: String(
+        apiItem.item_id ?? apiItem.itemCode ?? (apiItem.item as any)?.id ?? ""
+    ),
+    itemName: String(
+        apiItem.item_name ??
+            (apiItem.item as any)?.name ??
+            apiItem.itemName ??
+            ""
+    ),
+    uom: String(apiItem.uom_name ?? apiItem.uom ?? (apiItem.item as any)?.uom ?? "PCS"),
+    orderedQty: Number(apiItem.quantity ?? apiItem.quantity_ordered ?? 0),
+    dispatchedQty: Number(
+        apiItem.dispatch_qty ?? apiItem.dispatched_qty ?? apiItem.dispatchedQty ?? 0
+    ),
+    rate: Number(
+        apiItem.unit_price ?? apiItem.price_per_item ?? apiItem.rate ?? apiItem.price ?? 0
+    ),
+    price:
+        Number(apiItem.price ?? apiItem.amount ?? apiItem.price_per_item ?? 0) ||
+        Number(apiItem.quantity ?? apiItem.quantity_ordered ?? 0) *
+            Number(apiItem.unit_price ?? apiItem.rate ?? 0),
+    skuId:
+        apiItem.sku_id != null
+            ? Number(apiItem.sku_id)
+            : apiItem.skuId != null
+              ? Number(apiItem.skuId)
+              : undefined,
+    skuCode: String(apiItem.sku_code ?? apiItem.skuCode ?? ""),
+    skuName: String(apiItem.sku_name ?? apiItem.skuName ?? ""),
+});
+
+const buildSOApiItemPayload = (
+    item: SOItem,
+    formItems: { id: number; itemCode: string; name: string }[]
+) => {
+    const item_id =
+        Number(item.itemCode) ||
+        formItems.find((f) => f.name === item.itemName)?.id ||
+        0;
+    const payload: Record<string, number> = {
+        item_id,
+        quantity: Number(item.orderedQty || 0),
+        unit_price: Number(item.rate || 0),
+    };
+    if (item.skuId != null && item.skuId !== "" && Number.isFinite(Number(item.skuId))) {
+        payload.sku_id = Number(item.skuId);
+    }
+    return payload;
+};
 
 const getCurrencySymbol = (currency: string): string => {
     if (!currency) return "USD";
@@ -506,6 +573,7 @@ const SalesOrder = () => {
     const [isSODialogOpen, setIsSODialogOpen] = useState(false);
     const [activeSO, setActiveSO] = useState<SOData | null>(null);
     const [originalSO, setOriginalSO] = useState<SOData | null>(null);
+    const [skuOptionsByRow, setSkuOptionsByRow] = useState<Record<number, SkuDropdownRecord[]>>({});
     const [isSOEdit, setIsSOEdit] = useState(false);
     const [isDeleteAlertOpen, setIsDeleteAlertOpen] = useState(false);
     const [soToDelete, setSoToDelete] = useState<SOData | null>(null);
@@ -552,8 +620,29 @@ const SalesOrder = () => {
     useEffect(() => {
         if (!isSODialogOpen) {
             lastQuotationCustomerIdRef.current = null;
+            setSkuOptionsByRow({});
         }
     }, [isSODialogOpen]);
+
+    const loadSkuOptionsForRow = useCallback(
+        async (rowId: number, itemId: number, itemCode?: string) => {
+            try {
+                const res = await commonApi.getSkuDropdown({ item_id: itemId });
+                const records =
+                    res.isSuccessful && res.data != null
+                        ? parseSkuDropdownRecords(res.data)
+                        : [];
+                const options = mergeSkuDropdownWithMock(records, itemCode);
+                setSkuOptionsByRow((prev) => ({ ...prev, [rowId]: options }));
+                return options;
+            } catch {
+                const options = mergeSkuDropdownWithMock([], itemCode);
+                setSkuOptionsByRow((prev) => ({ ...prev, [rowId]: options }));
+                return options;
+            }
+        },
+        []
+    );
 
     // Helper to check if form is valid for submission/saving
     const isFormValid = () => {
@@ -589,7 +678,18 @@ const SalesOrder = () => {
         const hasInvalidItems = (activeSO.items || []).some(item => {
             const qty = parseFloat(item.orderedQty?.toString() || "0");
             const rate = parseFloat(item.rate?.toString() || "0");
-            return !item.itemName || isNaN(qty) || qty <= 0 || isNaN(rate) || rate <= 0;
+            const hasSku =
+                item.skuId != null &&
+                item.skuId !== "" &&
+                Number.isFinite(Number(item.skuId));
+            return (
+                !item.itemName ||
+                !hasSku ||
+                isNaN(qty) ||
+                qty <= 0 ||
+                isNaN(rate) ||
+                rate <= 0
+            );
         });
 
         return !hasInvalidItems;
@@ -701,7 +801,9 @@ const SalesOrder = () => {
                     id: item_id,
                     itemCode: item_code || String(item_id),
                     name: item_name,
-                    uom: base.uom || "PCS",
+                    uom: String(
+                        base.uom_name ?? raw.uom_name ?? base.uom ?? raw.uom ?? "PCS"
+                    ).trim() || "PCS",
                     rate: Number(base.rate || base.price || 100)
                 };
             }).filter(i => i.id && i.name);
@@ -791,18 +893,9 @@ const SalesOrder = () => {
     };
 
     const mapSOFromApi = (data: any, fallback?: Partial<SOData>): SOData => {
-        const items: SOItem[] = (data?.items || data?.order_items || []).map((apiItem: any, index: number) => ({
-            id: Number(apiItem?.id || Date.now() + index),
-            itemCode: String(apiItem?.item_id || apiItem?.itemCode || apiItem?.item?.id || apiItem?.item?.item_id || ""),
-            itemName: apiItem?.item_name || apiItem?.item?.name || apiItem?.itemName || apiItem?.item?.item_name || "",
-            uom: apiItem?.uom || apiItem?.item?.uom || "PCS",
-            orderedQty: Number(apiItem?.quantity || apiItem?.quantity_ordered || 0),
-            dispatchedQty: Number(
-                apiItem?.dispatch_qty ?? apiItem?.dispatched_qty ?? apiItem?.dispatchedQty ?? 0
-            ),
-            rate: Number(apiItem?.unit_price || apiItem?.price_per_item || apiItem?.rate || apiItem?.price || 0),
-            price: Number(apiItem?.price || apiItem?.amount || apiItem?.price_per_item || 0) || ((apiItem?.quantity || apiItem?.quantity_ordered || 0) * (Number(apiItem?.unit_price || apiItem?.price_per_item || apiItem?.rate || apiItem?.price || 0))),
-        }));
+        const items: SOItem[] = (data?.items || data?.order_items || []).map(
+            (apiItem: any, index: number) => mapApiSOItemToForm(apiItem, index)
+        );
 
         const terms: PaymentTerm[] = (data?.payment_terms || data?.terms || []).map((term: any, index: number) => {
             const rawType = normalizeText(term?.term_type_name || term?.term_type_code || term?.terms || "");
@@ -919,14 +1012,20 @@ const SalesOrder = () => {
             deliveryTime: d.expected_delivery_date || "",
             remarks: d.remarks || "",
             status: normalizeSOStatus(d.status_name || "Draft") as any,
-            items: (d.items || []).map((item: any) => ({
-                id: item.id,
-                itemCode: String(item.item_id || ""),
-                item: item.item_name || "",
-                qty: Number(item.quantity || 0),
-                rate: Number(item.unit_price || item.price_per_item || item.rate || item.price || 0),
-                amount: Number(item.price_per_item || item.price || item.amount || 0) || (Number(item.quantity || item.qty || 0) * Number(item.unit_price || item.price_per_item || item.rate || item.price || 0)),
-            })),
+            items: (d.items || []).map((item: any) => {
+                const mapped = mapApiSOItemToForm(item, 0);
+                return {
+                    id: mapped.id,
+                    itemCode: mapped.itemCode,
+                    item: mapped.itemName,
+                    skuCode: mapped.skuCode,
+                    skuName: mapped.skuName,
+                    uom: mapped.uom,
+                    qty: mapped.orderedQty,
+                    rate: mapped.rate,
+                    amount: mapped.price,
+                };
+            }),
             paymentTerms: (d.payment_terms || []).map((term: any) => ({
                 id: term.id,
                 terms: normalizeText(term.term_type_name || "").includes("DELIVERY") ? "Delivery" : normalizeText(term.term_type_name || "").includes("DAY") ? "Days" : "Advance",
@@ -972,6 +1071,16 @@ const SalesOrder = () => {
             }
         }
     }, [isSODialogOpen, activeSO?.customerName, formCustomers]);
+
+    useEffect(() => {
+        if (!isSODialogOpen || !activeSO || formItems.length === 0) return;
+        activeSO.items.forEach((item) => {
+            const item_id = Number(item.itemCode);
+            if (!item_id || skuOptionsByRow[item.id]?.length) return;
+            const master = formItems.find((m) => m.id === item_id);
+            void loadSkuOptionsForRow(item.id, item_id, master?.itemCode);
+        });
+    }, [isSODialogOpen, activeSO?.items, formItems, loadSkuOptionsForRow, skuOptionsByRow]);
 
     // Pagination calculations - server-side
     const totalPages = Math.ceil((totalRecords || 0) / itemsPerPage) || 1;
@@ -1168,18 +1277,11 @@ const SalesOrder = () => {
             // Auto-fill customer, contact, mobile number, addresses, delivery date, and items from quotation
             // Map quotation items to SO items with dispatchedQty = 0 (read-only)
             const itemsSource = quotation._items || quotation.items || [];
-            const soItems: SOItem[] = itemsSource.map((qItem: any, index: number) => {
-                return {
-                    id: Date.now() + index,
-                    itemCode: String(qItem.item_id || qItem.itemCode || ""),
-                    itemName: qItem.item_name || qItem.item || "Unknown Item",
-                    uom: qItem.uom || "PCS",
-                    orderedQty: Number(qItem.quantity || qItem.qty || 0),
-                    rate: Number(qItem.unit_price || qItem.rate || 0),
-                    price: Number(qItem.price_per_item || qItem.amount || (Number(qItem.quantity || qItem.qty) * Number(qItem.unit_price || qItem.rate))) || 0,
-                    dispatchedQty: 0
-                };
-            });
+            const soItems: SOItem[] = itemsSource.map((qItem: any, index: number) => ({
+                ...mapApiSOItemToForm(qItem, index),
+                id: Date.now() + index,
+                dispatchedQty: 0,
+            }));
 
             // Auto-set Customer Select dropdown to quotation's customer
             const finalCustomerName = quotation.customer_details?.name || quotation.customer_name || quotationRef.customerName || "";
@@ -1272,7 +1374,10 @@ const SalesOrder = () => {
             id: Date.now(),
             itemCode: "",
             itemName: "",
-            uom: "PCS",
+            skuId: undefined,
+            skuCode: "",
+            skuName: "",
+            uom: "",
             orderedQty: 0,
             rate: 0, // Changed: Use rate
             price: 0, // Auto-calculated
@@ -1281,10 +1386,34 @@ const SalesOrder = () => {
         setActiveSO({ ...activeSO, items: [...activeSO.items, newItem] });
     };
 
+    const handleSkuChange = (rowId: number, skuIdStr: string) => {
+        if (!activeSO) return;
+        const options = skuOptionsByRow[rowId] || [];
+        const sku = options.find((s) => String(s.id) === skuIdStr);
+        setActiveSO({
+            ...activeSO,
+            items: activeSO.items.map((item) =>
+                item.id !== rowId
+                    ? item
+                    : {
+                          ...item,
+                          skuId: sku?.id,
+                          skuCode: sku?.code ?? "",
+                          skuName: sku?.name ?? "",
+                      }
+            ),
+        });
+    };
+
     // Remove item from SO
     const handleRemoveItem = (itemId: number) => {
         if (!activeSO) return;
         setActiveSO({ ...activeSO, items: activeSO.items.filter(i => i.id !== itemId) });
+        setSkuOptionsByRow((prev) => {
+            const next = { ...prev };
+            delete next[itemId];
+            return next;
+        });
     };
 
     // New: Add payment term
@@ -1407,6 +1536,21 @@ const SalesOrder = () => {
             return;
         }
 
+        const missingSku = activeSO.items.filter(
+            (item) =>
+                item.skuId == null ||
+                item.skuId === "" ||
+                !Number.isFinite(Number(item.skuId))
+        );
+        if (missingSku.length > 0) {
+            toast({
+                title: "Please Check",
+                description: "Please select an SKU for each line item.",
+                variant: "destructive",
+            });
+            return;
+        }
+
         // Validation: Check if terms exist and validate
         if (activeSO.terms && activeSO.terms.length > 0) {
             // Validation: Total percentage must equal 100%
@@ -1463,6 +1607,26 @@ const SalesOrder = () => {
             return;
         }
 
+        const apiItemPayloads = (activeSO.items || []).map((item) =>
+            buildSOApiItemPayload(item, formItems)
+        );
+        if (apiItemPayloads.some((item) => !item.item_id)) {
+            toast({
+                title: "Please Check",
+                description: "One or more item IDs could not be resolved.",
+                variant: "destructive",
+            });
+            return;
+        }
+        if (apiItemPayloads.some((item) => !item.sku_id)) {
+            toast({
+                title: "Please Check",
+                description: "Please select an SKU for each line item.",
+                variant: "destructive",
+            });
+            return;
+        }
+
          const totals = calculateTotals(activeSO.items, activeSO.discountValue || 0, activeSO.discountType || "%", activeSO.taxValue || 0, activeSO.taxType || "%");
 
         const isExisting = salesOrders.some(so => so.id === activeSO.id);
@@ -1476,20 +1640,14 @@ const SalesOrder = () => {
 
         const updatedItems = currentItems
             .filter(curr => typeof curr.id === "number" && curr.id < 10000000000 && originalItems.some(orig => orig.id === curr.id))
-            .map((item: any) => ({
+            .map((item: SOItem) => ({
                 id: item.id,
-                item_id: Number(item?.itemCode || 0),
-                quantity: Number(item?.orderedQty || 0),
-                unit_price: Number(item?.rate || 0),
+                ...buildSOApiItemPayload(item, formItems),
             }));
 
         const addedItems = currentItems
             .filter(curr => !curr.id || typeof curr.id !== "number" || curr.id >= 10000000000 || !originalItems.some(orig => orig.id === curr.id))
-            .map((item: any) => ({
-                item_id: Number(item?.itemCode || 0),
-                quantity: Number(item?.orderedQty || 0),
-                unit_price: Number(item?.rate || 0),
-            }));
+            .map((item: SOItem) => buildSOApiItemPayload(item, formItems));
 
         const originalTerms = originalSO ? (originalSO.terms || []) : [];
         const currentTerms = activeSO.terms || [];
@@ -1556,10 +1714,8 @@ const SalesOrder = () => {
                 add: addedItems,
                 update: updatedItems,
                 delete: deletedItemIds
-            } : (activeSO.items || []).map((item: any) => ({
-                item_id: Number(item?.itemCode || 0),
-                quantity: Number(item?.orderedQty || 0),
-                unit_price: Number(item?.rate || 0),
+            } : (activeSO.items || []).map((item: SOItem) => ({
+                ...buildSOApiItemPayload(item, formItems),
                 price_per_item: Number(item?.price || 0),
             })),
             payment_terms: isExisting ? {
@@ -1872,6 +2028,8 @@ const SalesOrder = () => {
                                 <tr>
                                     <th width="50">#</th>
                                     <th>Item Name</th>
+                                    <th>SKU</th>
+                                    <th width="60">UOM</th>
                                     <th width="80" class="text-right">Qty</th>
                                     <th width="80" class="text-right">Unit Price</th>
                                     <th width="100" class="text-right">Amount</th>
@@ -1882,6 +2040,8 @@ const SalesOrder = () => {
                                     <tr>
                                         <td class="text-center">${index + 1}</td>
                                         <td class="font-bold">${item.itemName}</td>
+                                        <td>${formatSoItemSkuLabel(item)}</td>
+                                        <td>${item.uom || "—"}</td>
                                         <td class="text-right">${item.orderedQty}</td>
                                         <td class="text-right">${getCurrencySymbol(activeSO.currency || "USD")} ${Number(item.rate).toFixed(2)}</td>
                                         <td class="text-right font-bold" style="color: #1e40af;">${getCurrencySymbol(activeSO.currency || "USD")} ${Number(item.price).toFixed(2)}</td>
@@ -2067,6 +2227,7 @@ const SalesOrder = () => {
                                 <tr>
                                     <th width="50">#</th>
                                     <th>Item Name</th>
+                                    <th>SKU</th>
                                     <th width="60">UOM</th>
                                     <th width="80" class="text-right">Ordered</th>
                                     <th width="80" class="text-right">Dispatched</th>
@@ -2077,6 +2238,7 @@ const SalesOrder = () => {
                                     <tr>
                                         <td class="text-right">${index + 1}</td>
                                         <td class="font-bold">${item.itemName}</td>
+                                        <td>${formatSoItemSkuLabel(item)}</td>
                                         <td>${item.uom}</td>
                                         <td class="text-right">${item.orderedQty}</td>
                                         <td class="text-right font-bold" style="color: #1e40af;">${item.dispatchedQty}</td>
@@ -2561,12 +2723,14 @@ const SalesOrder = () => {
                             <table>
                                 <thead>
                                     <tr>
-                                        <th style="width: 8%;">#</th>
-                                        <th style="width: ${so.status === 'Dispatched' ? '32%' : '42%'};">Item</th>
-                                        <th class="text-right" style="width: 12%;">Qty</th>
-                                        <th class="text-right" style="width: ${so.status === 'Dispatched' ? '14%' : '18%'};">Unit Price</th>
-                                        <th class="text-right" style="width: ${so.status === 'Dispatched' ? '16%' : '20%'};">Price</th>
-                                        ${so.status === 'Dispatched' ? '<th class="text-right" style="width: 18%;">Dispatched Qty</th>' : ''}
+                                        <th style="width: 6%;">#</th>
+                                        <th style="width: ${so.status === 'Dispatched' ? '22%' : '26%'};">Item</th>
+                                        <th style="width: 18%;">SKU</th>
+                                        <th style="width: 8%;">UOM</th>
+                                        <th class="text-right" style="width: 10%;">Qty</th>
+                                        <th class="text-right" style="width: ${so.status === 'Dispatched' ? '12%' : '14%'};">Unit Price</th>
+                                        <th class="text-right" style="width: ${so.status === 'Dispatched' ? '12%' : '14%'};">Price</th>
+                                        ${so.status === 'Dispatched' ? '<th class="text-right" style="width: 10%;">Dispatched Qty</th>' : ''}
                                     </tr>
                                 </thead>
                                 <tbody>
@@ -2574,6 +2738,8 @@ const SalesOrder = () => {
                                         <tr>
                                             <td>${index + 1}</td>
                                             <td><strong>${item.itemName}</strong></td>
+                                            <td>${formatSoItemSkuLabel(item)}</td>
+                                            <td>${item.uom || "—"}</td>
                                             <td class="text-right">${item.orderedQty}</td>
                                             <td class="text-right">${getCurrencySymbol(so.currency)} ${Number(item.rate).toFixed(2)}</td>
                                             <td class="text-right"><strong>${getCurrencySymbol(so.currency)} ${Number(item.price).toFixed(2)}</strong></td>
@@ -2700,7 +2866,9 @@ const SalesOrder = () => {
                 items: (inv.items || []).map((item: any) => ({
                     id: Number(item.item_id || Math.random()),
                     itemName: item.item_name || "",
-                    uom: item.uom || "PCS",
+                    skuCode: item.sku_code || "",
+                    skuName: item.sku_name || "",
+                    uom: item.uom_name || item.uom || "PCS",
                     orderedQty: Number(item.ordered_qty || 0),
                     rate: Number(item.unit_price || 0),
                     price: Number(item.price_per_item || 0)
@@ -2882,7 +3050,7 @@ const SalesOrder = () => {
             {/* SO DIALOG - Modal with all required fields */}
             <Dialog open={isSODialogOpen} onOpenChange={setIsSODialogOpen}>
                 <DialogContent
-                    className="flex! min-h-0 w-[95%] max-h-[82vh] flex-col gap-0 overflow-hidden bg-white p-0 sm:max-w-3xl md:max-w-4xl lg:max-w-5xl xl:max-w-6xl"
+                    className="flex! min-h-0 w-[95%] max-h-[82vh] flex-col gap-0 overflow-hidden bg-white p-0 sm:max-w-4xl md:max-w-5xl lg:max-w-6xl xl:max-w-7xl"
                     onInteractOutside={(e) => e.preventDefault()}
                     onEscapeKeyDown={(e) => e.preventDefault()}
                 >
@@ -3304,17 +3472,24 @@ const SalesOrder = () => {
                             </div>
                             <div className="rounded-xl border shadow-sm overflow-hidden bg-white">
                                 <div className="overflow-x-auto">
-                                <Table className={cn("w-full table-fixed", activeSO?.status === "Dispatched" ? "min-w-[980px]" : "min-w-[880px]")}>
+                                <Table className={cn("w-full table-fixed", activeSO?.status === "Dispatched" ? "min-w-[1100px]" : "min-w-[1000px]")}>
                                     <colgroup>
-                                        <col className="w-[52%]" />
-                                        <col className="w-[12%]" />
-                                        <col className="w-[16%]" />
+                                        <col className="w-[24%]" />
+                                        <col className="w-[18%]" />
+                                        <col className="w-[8%]" />
+                                        <col className="w-[10%]" />
                                         <col className="w-[14%]" />
-                                        {(activeSO?.status === "Dispatched" || activeSO?.status === "Draft") && <col className="w-[6%]" />}
+                                        <col className="w-[12%]" />
+                                        {activeSO?.status === "Dispatched" && <col className="w-[10%]" />}
+                                        {activeSO?.status === "Draft" && <col className="w-[4%]" />}
                                     </colgroup>
                                     <TableHeader>
                                         <TableRow className="bg-muted/50">
-                                            <TableHead className="text-[10px] font-bold uppercase py-3 pl-6">Item Name</TableHead>
+                                            <TableHead className="text-[10px] font-bold uppercase py-3 pl-6">Item</TableHead>
+                                            <TableHead className="text-[10px] font-bold uppercase py-3">
+                                                SKU <span className="text-red-500">*</span>
+                                            </TableHead>
+                                            <TableHead className="text-[10px] font-bold uppercase py-3 text-center">UOM</TableHead>
                                             <TableHead className="text-[10px] font-bold uppercase py-3 text-center">Ordered Qty</TableHead>
                                             <TableHead className="text-[10px] font-bold uppercase py-3 text-center">Unit Price</TableHead>
                                             <TableHead className="text-[10px] font-bold uppercase py-3 text-center">Price</TableHead>
@@ -3331,7 +3506,13 @@ const SalesOrder = () => {
                                         {activeSO?.items.length === 0 ? (
                                             <TableRow>
                                                 <TableCell
-                                                    colSpan={activeSO?.status === "Dispatched" ? 6 : (activeSO?.status === "Draft" ? 6 : 5)}
+                                                    colSpan={
+                                                        activeSO?.status === "Dispatched"
+                                                            ? 8
+                                                            : activeSO?.status === "Draft"
+                                                              ? 8
+                                                              : 7
+                                                    }
                                                     className="text-center py-8 text-muted-foreground italic"
                                                 >
                                                     No items added yet
@@ -3344,6 +3525,11 @@ const SalesOrder = () => {
                                                 const rate = parseFloat(item.rate?.toString() || "0");
                                                 const isQtyInvalid = (item.orderedQty as any) !== "" && (isNaN(qty) || qty <= 0);
                                                 const isRateInvalid = (item.rate as any) !== "" && (isNaN(rate) || rate <= 0);
+                                                const hasSku =
+                                                    item.skuId != null &&
+                                                    item.skuId !== "" &&
+                                                    Number.isFinite(Number(item.skuId));
+                                                const isSkuInvalid = Boolean(item.itemName) && !hasSku;
 
                                                 return (
                                                     <TableRow key={item.id} className="hover:bg-muted/20 align-top">
@@ -3365,14 +3551,22 @@ const SalesOrder = () => {
                                                                             const updated = activeSO.items.map(i =>
                                                                                 i.id === item.id ? {
                                                                                     ...i,
-                                                                                    itemCode: selectedItem.itemCode,
+                                                                                    itemCode: String(selectedItem.id),
                                                                                     itemName: selectedItem.name,
-                                                                                    uom: selectedItem.uom,
+                                                                                    uom: selectedItem.uom || "PCS",
+                                                                                    skuId: undefined,
+                                                                                    skuCode: "",
+                                                                                    skuName: "",
                                                                                     rate: selectedItem.rate,
                                                                                     price: (Number(i.orderedQty) || 0) * (Number(selectedItem.rate) || 0)
                                                                                 } : i
                                                                             );
                                                                             setActiveSO({ ...activeSO, items: updated });
+                                                                            void loadSkuOptionsForRow(
+                                                                                item.id,
+                                                                                selectedItem.id,
+                                                                                selectedItem.itemCode
+                                                                            );
                                                                         }
                                                                     }}
                                                                     placeholder="Select Item"
@@ -3382,6 +3576,64 @@ const SalesOrder = () => {
                                                                 />
                                                             ) : (
                                                                 <div className="font-bold text-sm text-primary">{item.itemName}</div>
+                                                            )}
+                                                        </TableCell>
+                                                        <TableCell className="max-w-0 py-4 align-top">
+                                                            {activeSO.status === "Draft" ? (
+                                                                <div className="space-y-1">
+                                                                    <SearchableSelect
+                                                                        required
+                                                                        value={
+                                                                            item.skuId != null && item.skuId !== ""
+                                                                                ? String(item.skuId)
+                                                                                : ""
+                                                                        }
+                                                                        options={(skuOptionsByRow[item.id] || []).map((sku) => ({
+                                                                            label: sku.name
+                                                                                ? `${sku.code} — ${sku.name}`
+                                                                                : sku.code,
+                                                                            value: String(sku.id),
+                                                                            primaryText: sku.code,
+                                                                            secondaryText: sku.name,
+                                                                        }))}
+                                                                        onChange={(val) => handleSkuChange(item.id, String(val))}
+                                                                        placeholder={
+                                                                            !item.itemName
+                                                                                ? "Select item first"
+                                                                                : (skuOptionsByRow[item.id]?.length ?? 0) === 0
+                                                                                  ? "Loading SKU..."
+                                                                                  : "Select SKU *"
+                                                                        }
+                                                                        disabled={!item.itemName}
+                                                                        showSelectedTitle
+                                                                        compactStackedSelected
+                                                                        listClassName="max-h-[220px]"
+                                                                        className={cn(
+                                                                            isSkuInvalid && "border-red-500 focus-visible:ring-red-500"
+                                                                        )}
+                                                                        error={isSkuInvalid ? "SKU is required" : undefined}
+                                                                    />
+                                                                </div>
+                                                            ) : (
+                                                                <span
+                                                                    className="text-xs text-muted-foreground line-clamp-2"
+                                                                    title={formatSoItemSkuLabel(item)}
+                                                                >
+                                                                    {formatSoItemSkuLabel(item)}
+                                                                </span>
+                                                            )}
+                                                        </TableCell>
+                                                        <TableCell className="text-center align-top pt-4">
+                                                            {activeSO.status === "Draft" ? (
+                                                                <Input
+                                                                    type="text"
+                                                                    readOnly
+                                                                    className="h-9 w-full max-w-[88px] mx-auto bg-muted/40 text-center text-xs"
+                                                                    value={item.uom || "—"}
+                                                                    tabIndex={-1}
+                                                                />
+                                                            ) : (
+                                                                <span className="text-xs">{item.uom || "—"}</span>
                                                             )}
                                                         </TableCell>
                                                         <TableCell className="text-center align-top pt-4">
@@ -3919,6 +4171,12 @@ const SalesOrder = () => {
                                                     <th className="text-left text-xs font-bold text-slate-600 uppercase tracking-wide py-3 px-4 border-b-2 border-slate-200">
                                                         Item
                                                     </th>
+                                                    <th className="text-left text-xs font-bold text-slate-600 uppercase tracking-wide py-3 px-4 border-b-2 border-slate-200">
+                                                        SKU
+                                                    </th>
+                                                    <th className="text-center text-xs font-bold text-slate-600 uppercase tracking-wide py-3 px-4 border-b-2 border-slate-200">
+                                                        UOM
+                                                    </th>
                                                     <th className="text-right text-xs font-bold text-slate-600 uppercase tracking-wide py-3 px-4 border-b-2 border-slate-200">
                                                         Quantity
                                                     </th>
@@ -3935,6 +4193,12 @@ const SalesOrder = () => {
                                                     <tr key={item.id} className={index % 2 === 0 ? 'bg-white' : 'bg-slate-50'}>
                                                         <td className="text-sm text-slate-800 py-3 px-4 border-b border-slate-100">
                                                             {item.itemName}
+                                                        </td>
+                                                        <td className="text-sm text-slate-600 py-3 px-4 border-b border-slate-100">
+                                                            {formatSoItemSkuLabel(item)}
+                                                        </td>
+                                                        <td className="text-sm text-slate-800 text-center py-3 px-4 border-b border-slate-100">
+                                                            {item.uom || "—"}
                                                         </td>
                                                         <td className="text-sm text-slate-800 text-right py-3 px-4 border-b border-slate-100">
                                                             {item.orderedQty}
@@ -4170,6 +4434,12 @@ const SalesOrder = () => {
                                                     <th className="text-left text-xs font-bold text-slate-600 uppercase tracking-wide py-3 px-4 border-b-2 border-slate-200">
                                                         Item
                                                     </th>
+                                                    <th className="text-left text-xs font-bold text-slate-600 uppercase tracking-wide py-3 px-4 border-b-2 border-slate-200">
+                                                        SKU
+                                                    </th>
+                                                    <th className="text-center text-xs font-bold text-slate-600 uppercase tracking-wide py-3 px-4 border-b-2 border-slate-200">
+                                                        UOM
+                                                    </th>
                                                     <th className="text-right text-xs font-bold text-slate-600 uppercase tracking-wide py-3 px-4 border-b-2 border-slate-200">
                                                         Quantity
                                                     </th>
@@ -4186,6 +4456,12 @@ const SalesOrder = () => {
                                                     <tr key={item.id} className={index % 2 === 0 ? 'bg-white' : 'bg-slate-50'}>
                                                         <td className="text-sm text-slate-800 py-3 px-4 border-b border-slate-100">
                                                             {item.itemName}
+                                                        </td>
+                                                        <td className="text-sm text-slate-600 py-3 px-4 border-b border-slate-100">
+                                                            {formatSoItemSkuLabel(item)}
+                                                        </td>
+                                                        <td className="text-sm text-slate-800 text-center py-3 px-4 border-b border-slate-100">
+                                                            {item.uom || "—"}
                                                         </td>
                                                         <td className="text-sm text-slate-800 text-right py-3 px-4 border-b border-slate-100">
                                                             {item.orderedQty}
@@ -4433,6 +4709,12 @@ const SalesOrder = () => {
                                                     <th className="text-left text-xs font-bold text-slate-600 uppercase tracking-wide py-3 px-4 border-b-2 border-slate-200">
                                                         Item
                                                     </th>
+                                                    <th className="text-left text-xs font-bold text-slate-600 uppercase tracking-wide py-3 px-4 border-b-2 border-slate-200">
+                                                        SKU
+                                                    </th>
+                                                    <th className="text-center text-xs font-bold text-slate-600 uppercase tracking-wide py-3 px-4 border-b-2 border-slate-200">
+                                                        UOM
+                                                    </th>
                                                     <th className="text-right text-xs font-bold text-slate-600 uppercase tracking-wide py-3 px-4 border-b-2 border-slate-200">
                                                         Quantity
                                                     </th>
@@ -4452,6 +4734,12 @@ const SalesOrder = () => {
                                                     <tr key={item.id} className={index % 2 === 0 ? 'bg-white' : 'bg-slate-50'}>
                                                         <td className="text-sm text-slate-800 py-3 px-4 border-b border-slate-100">
                                                             {item.itemName}
+                                                        </td>
+                                                        <td className="text-sm text-slate-600 py-3 px-4 border-b border-slate-100">
+                                                            {formatSoItemSkuLabel(item)}
+                                                        </td>
+                                                        <td className="text-sm text-slate-800 text-center py-3 px-4 border-b border-slate-100">
+                                                            {item.uom || "—"}
                                                         </td>
                                                         <td className="text-sm text-slate-800 text-right py-3 px-4 border-b border-slate-100">
                                                             {item.orderedQty}
@@ -4712,6 +5000,12 @@ const SalesOrder = () => {
                                                     <th className="text-left text-xs font-bold text-slate-600 uppercase tracking-wide py-3 px-4 border-b-2 border-slate-200">
                                                         Item
                                                     </th>
+                                                    <th className="text-left text-xs font-bold text-slate-600 uppercase tracking-wide py-3 px-4 border-b-2 border-slate-200">
+                                                        SKU
+                                                    </th>
+                                                    <th className="text-center text-xs font-bold text-slate-600 uppercase tracking-wide py-3 px-4 border-b-2 border-slate-200">
+                                                        UOM
+                                                    </th>
                                                     <th className="text-right text-xs font-bold text-slate-600 uppercase tracking-wide py-3 px-4 border-b-2 border-slate-200">
                                                         Quantity
                                                     </th>
@@ -4731,6 +5025,12 @@ const SalesOrder = () => {
                                                     <tr key={item.id} className={index % 2 === 0 ? 'bg-white' : 'bg-slate-50'}>
                                                         <td className="text-sm text-slate-800 py-3 px-4 border-b border-slate-100">
                                                             {item.itemName}
+                                                        </td>
+                                                        <td className="text-sm text-slate-600 py-3 px-4 border-b border-slate-100">
+                                                            {formatSoItemSkuLabel(item)}
+                                                        </td>
+                                                        <td className="text-sm text-slate-800 text-center py-3 px-4 border-b border-slate-100">
+                                                            {item.uom || "—"}
                                                         </td>
                                                         <td className="text-sm text-slate-800 text-right py-3 px-4 border-b border-slate-100">
                                                             {item.orderedQty}
@@ -4991,6 +5291,12 @@ const SalesOrder = () => {
                                                     <th className="text-left text-xs font-bold text-slate-600 uppercase tracking-wide py-3 px-4 border-b-2 border-slate-200">
                                                         Item
                                                     </th>
+                                                    <th className="text-left text-xs font-bold text-slate-600 uppercase tracking-wide py-3 px-4 border-b-2 border-slate-200">
+                                                        SKU
+                                                    </th>
+                                                    <th className="text-center text-xs font-bold text-slate-600 uppercase tracking-wide py-3 px-4 border-b-2 border-slate-200">
+                                                        UOM
+                                                    </th>
                                                     <th className="text-right text-xs font-bold text-slate-600 uppercase tracking-wide py-3 px-4 border-b-2 border-slate-200">
                                                         Quantity
                                                     </th>
@@ -5007,6 +5313,12 @@ const SalesOrder = () => {
                                                     <tr key={item.id} className={index % 2 === 0 ? 'bg-white' : 'bg-slate-50'}>
                                                         <td className="text-sm text-slate-800 py-3 px-4 border-b border-slate-100">
                                                             {item.itemName}
+                                                        </td>
+                                                        <td className="text-sm text-slate-600 py-3 px-4 border-b border-slate-100">
+                                                            {formatSoItemSkuLabel(item)}
+                                                        </td>
+                                                        <td className="text-sm text-slate-800 text-center py-3 px-4 border-b border-slate-100">
+                                                            {item.uom || "—"}
                                                         </td>
                                                         <td className="text-sm text-slate-800 text-right py-3 px-4 border-b border-slate-100">
                                                             {item.orderedQty}
@@ -5208,6 +5520,7 @@ const SalesOrder = () => {
                                     <TableHeader>
                                         <TableRow className="bg-slate-50">
                                             <TableHead className="font-bold text-[10px] uppercase py-3">Item Name</TableHead>
+                                            <TableHead className="font-bold text-[10px] uppercase py-3">SKU</TableHead>
                                             <TableHead className="font-bold text-[10px] uppercase py-3 text-center">UOM</TableHead>
                                             <TableHead className="font-bold text-[10px] uppercase py-3 text-center">Ordered Qty</TableHead>
                                             <TableHead className="font-bold text-[10px] uppercase py-3 text-center">Dispatched Qty</TableHead>
@@ -5219,6 +5532,7 @@ const SalesOrder = () => {
                                         {dispatchedEditSO?.items.map((item) => (
                                             <TableRow key={item.id}>
                                                 <TableCell className="font-medium py-3">{item.itemName}</TableCell>
+                                                <TableCell className="text-xs text-muted-foreground py-3">{formatSoItemSkuLabel(item)}</TableCell>
                                                 <TableCell className="text-center text-xs uppercase py-3">{item.uom}</TableCell>
                                                 <TableCell className="text-center font-medium py-3">{item.orderedQty}</TableCell>
                                                 <TableCell className="text-center font-bold text-green-600 py-3">{item.dispatchedQty}</TableCell>

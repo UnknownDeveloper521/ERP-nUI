@@ -29,6 +29,8 @@ export interface InvoicePDFData {
     items: Array<{
         id: number;
         itemName: string;
+        skuCode?: string;
+        skuName?: string;
         uom: string;
         orderedQty: number;
         rate: number;
@@ -40,6 +42,17 @@ export interface InvoicePDFData {
     taxValue?: number;
     taxType?: "%" | "Amount";
 }
+
+export const formatInvoiceSkuLabel = (item: {
+    skuCode?: string;
+    skuName?: string;
+}): string => {
+    if (item.skuCode) {
+        return item.skuName ? `${item.skuCode} — ${item.skuName}` : item.skuCode;
+    }
+    if (item.skuName) return item.skuName;
+    return "—";
+};
 
 const calculateTotals = (
     items: InvoicePDFData['items'], 
@@ -210,6 +223,7 @@ export const generateInvoicePDFHTML = (invoice: InvoicePDFData): string => {
                             <tr>
                                 <th style="width: 40px;" class="text-center">#</th>
                                 <th>ITEM NAME</th>
+                                <th style="width: 22%;">SKU</th>
                                 <th style="width: 60px;" class="text-center">UOM</th>
                                 <th style="width: 60px;" class="text-center">QTY</th>
                                 <th style="width: 100px;" class="text-right">UNIT PRICE</th>
@@ -221,7 +235,8 @@ export const generateInvoicePDFHTML = (invoice: InvoicePDFData): string => {
                                 <tr>
                                     <td class="text-center">${index + 1}</td>
                                     <td class="font-bold">${item.itemName}</td>
-                                    <td class="text-center">${item.uom}</td>
+                                    <td>${formatInvoiceSkuLabel(item)}</td>
+                                    <td class="text-center">${item.uom || "—"}</td>
                                     <td class="text-center">${item.orderedQty}</td>
                                     <td class="text-right">${invoice.currencySymbol} ${item.rate.toFixed(2)}</td>
                                     <td class="text-right font-bold">${invoice.currencySymbol} ${item.price.toFixed(2)}</td>

@@ -66,7 +66,8 @@ import { AppListToolbar } from "@/components/shared/AppListToolbar";
 import { SearchableSelect } from "@/components/shared/SearchableSelect";
 import { DatePicker as SharedDatePicker } from "@/components/shared/DatePicker";
 import { useCommonStore } from "@/store/commonStore";
-import { commonApi, salesApi } from "@/lib/api";
+import { commonApi, salesApi, parseSkuDropdownRecords, type SkuDropdownRecord } from "@/lib/api";
+import { getBomMockSkusForItem, mergeSkuDropdownWithMock } from "@/lib/bomSkuMockData";
 import { useHasPermission } from "@/hooks/usePermissions";
 import Unauthorized from "@/pages/Unauthorized";
 import React from "react";
@@ -173,6 +174,60 @@ type QuotationItemMaster = {
     item_id: number;
     item_name: string;
     item_code?: string;
+    uom?: string;
+};
+
+const formatQuotationSkuLabel = (item: {
+    skuCode?: string;
+    skuName?: string;
+    itemCode?: string;
+}): string => {
+    if (item.skuCode) {
+        return item.skuName ? `${item.skuCode} — ${item.skuName}` : item.skuCode;
+    }
+    if (item.skuName) return item.skuName;
+    const mock = getBomMockSkusForItem(item.itemCode)[0];
+    if (mock) return mock.name ? `${mock.code} — ${mock.name}` : mock.code;
+    return "—";
+};
+
+const mapApiQuotationItemToForm = (apiItem: Record<string, unknown>): QuotationItem => ({
+    id: Number(apiItem.id),
+    itemCode: String(apiItem.item_id ?? ""),
+    item: String(apiItem.item_name ?? ""),
+    qty: Number(apiItem.quantity ?? 0),
+    rate: Number(apiItem.unit_price ?? 0),
+    amount:
+        Number(apiItem.price_per_item ?? 0) ||
+        Number(apiItem.quantity ?? 0) * Number(apiItem.unit_price ?? 0),
+    skuId:
+        apiItem.sku_id != null
+            ? Number(apiItem.sku_id)
+            : apiItem.skuId != null
+              ? Number(apiItem.skuId)
+              : undefined,
+    skuCode: String(apiItem.sku_code ?? apiItem.skuCode ?? ""),
+    skuName: String(apiItem.sku_name ?? apiItem.skuName ?? ""),
+    uom: String(apiItem.uom_name ?? apiItem.uom ?? ""),
+});
+
+const buildQuotationApiItemPayload = (
+    item: QuotationItem,
+    quotationItemsMaster: QuotationItemMaster[]
+) => {
+    const item_id =
+        parseNumericId(item.itemCode) ??
+        quotationItemsMaster.find((i) => i.item_name === item.item)?.item_id;
+    const payload: Record<string, number> = {
+        item_id: item_id as number,
+        quantity: typeof item.qty === "string" ? parseFloat(item.qty) || 1 : item.qty || 1,
+        unit_price: typeof item.rate === "string" ? parseFloat(item.rate) || 0 : item.rate || 0,
+    };
+    if (item.skuId != null && item.skuId !== "") {
+        const sku_id = Number(item.skuId);
+        if (Number.isFinite(sku_id)) payload.sku_id = sku_id;
+    }
+    return payload;
 };
 
 const normalizeCustomerRecord = (raw: any): QuotationCustomer | null => {
@@ -232,7 +287,10 @@ const normalizeItemRecord = (raw: any): QuotationItemMaster | null => {
     ).trim();
     if (!item_id || !item_name) return null;
     if (normalizeText(item_type_name) !== normalizeText("Finished Goods")) return null;
-    return { item_id, item_name, item_code: item_code || undefined };
+    const uom = String(
+        base.uom_name ?? raw.uom_name ?? base.uom ?? raw.uom ?? ""
+    ).trim();
+    return { item_id, item_name, item_code: item_code || undefined, uom: uom || undefined };
 };
 
 const extractItemRawRecords = (response: any): any[] => {
@@ -471,6 +529,7 @@ export default function Quotations() {
     const [customers, setCustomers] = useState<QuotationCustomer[]>([]);
     const [selectedCustomerId, setSelectedCustomerId] = useState<number | null>(null);
     const [quotationItemsMaster, setQuotationItemsMaster] = useState<QuotationItemMaster[]>([]);
+    const [skuOptionsByRow, setSkuOptionsByRow] = useState<Record<number, SkuDropdownRecord[]>>({});
 
     // Track original items & payment terms when editing (for computing delta payloads)
     const [originalItems, setOriginalItems] = useState<QuotationItem[]>([]);
@@ -531,7 +590,28 @@ export default function Quotations() {
         setOriginalItems([]);
         setOriginalPaymentTerms([]);
         setOriginalStatusCode(null);
+        setSkuOptionsByRow({});
     };
+
+    const loadSkuOptionsForRow = useCallback(
+        async (rowId: number, itemId: number, itemCode?: string) => {
+            try {
+                const res = await commonApi.getSkuDropdown({ item_id: itemId });
+                const records =
+                    res.isSuccessful && res.data != null
+                        ? parseSkuDropdownRecords(res.data)
+                        : [];
+                const options = mergeSkuDropdownWithMock(records, itemCode);
+                setSkuOptionsByRow((prev) => ({ ...prev, [rowId]: options }));
+                return options;
+            } catch {
+                const options = mergeSkuDropdownWithMock([], itemCode);
+                setSkuOptionsByRow((prev) => ({ ...prev, [rowId]: options }));
+                return options;
+            }
+        },
+        []
+    );
 
     const loadFormCustomers = async () => {
         try {
@@ -600,6 +680,22 @@ export default function Quotations() {
         }
     }, [isFormModalOpen, finishedGoodsItemTypeId]);
 
+    useEffect(() => {
+        if (!isFormModalOpen || quotationItemsMaster.length === 0) return;
+        (formData.items || []).forEach((item) => {
+            const item_id = parseNumericId(item.itemCode);
+            if (!item_id || skuOptionsByRow[item.id]?.length) return;
+            const master = quotationItemsMaster.find((m) => m.item_id === item_id);
+            void loadSkuOptionsForRow(item.id, item_id, master?.item_code);
+        });
+    }, [
+        isFormModalOpen,
+        formData.items,
+        quotationItemsMaster,
+        loadSkuOptionsForRow,
+        skuOptionsByRow,
+    ]);
+
     // Helper to check if form is valid for submission/saving
     const isFormValid = () => {
         const hasBasicFields = !!(
@@ -633,7 +729,18 @@ export default function Quotations() {
         const hasInvalidItems = (formData.items || []).some(item => {
             const qty = parseFloat(item.qty.toString());
             const rate = parseFloat(item.rate.toString());
-            return !item.item || isNaN(qty) || qty <= 0 || isNaN(rate) || rate <= 0;
+            const hasSku =
+                item.skuId != null &&
+                item.skuId !== "" &&
+                Number.isFinite(Number(item.skuId));
+            return (
+                !item.item ||
+                !hasSku ||
+                isNaN(qty) ||
+                qty <= 0 ||
+                isNaN(rate) ||
+                rate <= 0
+            );
         });
 
         return !hasInvalidItems;
@@ -677,6 +784,10 @@ export default function Quotations() {
             id: Date.now(),
             itemCode: "",
             item: "",
+            skuId: undefined,
+            skuCode: "",
+            skuName: "",
+            uom: "",
             qty: 1,
             rate: 0,
             amount: 0
@@ -686,6 +797,26 @@ export default function Quotations() {
 
     const handleRemoveItem = (id: number) => {
         setFormData({ ...formData, items: formData.items?.filter(item => item.id !== id) });
+        setSkuOptionsByRow((prev) => {
+            const next = { ...prev };
+            delete next[id];
+            return next;
+        });
+    };
+
+    const handleSkuChange = (rowId: number, skuIdStr: string) => {
+        const options = skuOptionsByRow[rowId] || [];
+        const sku = options.find((s) => String(s.id) === skuIdStr);
+        const updatedItems = (formData.items || []).map((item) => {
+            if (item.id !== rowId) return item;
+            return {
+                ...item,
+                skuId: sku?.id,
+                skuCode: sku?.code ?? "",
+                skuName: sku?.name ?? "",
+            };
+        });
+        setFormData({ ...formData, items: updatedItems });
     };
 
     const handleItemChange = (id: number, field: keyof QuotationItem, value: any) => {
@@ -693,11 +824,30 @@ export default function Quotations() {
             if (item.id === id) {
                 const updated = { ...item, [field]: value };
                 
-                // If item name is changed, also update itemCode
                 if (field === 'item') {
                     const selectedItem = quotationItemsMaster.find((i) => i.item_name === value);
                     if (selectedItem) {
                         updated.itemCode = String(selectedItem.item_id);
+                        updated.uom = selectedItem.uom || "";
+                        updated.skuId = undefined;
+                        updated.skuCode = "";
+                        updated.skuName = "";
+                        void loadSkuOptionsForRow(
+                            id,
+                            selectedItem.item_id,
+                            selectedItem.item_code
+                        );
+                    } else {
+                        updated.itemCode = "";
+                        updated.uom = "";
+                        updated.skuId = undefined;
+                        updated.skuCode = "";
+                        updated.skuName = "";
+                        setSkuOptionsByRow((prev) => {
+                            const next = { ...prev };
+                            delete next[id];
+                            return next;
+                        });
                     }
                 }
                 
@@ -907,14 +1057,9 @@ export default function Quotations() {
         const tax_rate = formData.taxType === "%" ? formData.taxValue || 0 : 0;
         const tax_amount = totals.taxAmount || 0;
 
-        const apiItems = (formData.items || []).map(item => {
-            const item_id = parseNumericId(item.itemCode) ?? quotationItemsMaster.find((i) => i.item_name === item.item)?.item_id;
-            return {
-                item_id,
-                quantity: typeof item.qty === 'string' ? parseFloat(item.qty) || 1 : item.qty || 1,
-                unit_price: typeof item.rate === 'string' ? parseFloat(item.rate) || 0 : item.rate || 0
-            };
-        });
+        const apiItems = (formData.items || []).map((item) =>
+            buildQuotationApiItemPayload(item, quotationItemsMaster)
+        );
 
         const apiPaymentTerms = (formData.paymentTerms || []).map(term => {
             const paymentTermRecords = paymentTermTypes.length > 0
@@ -941,6 +1086,14 @@ export default function Quotations() {
             toast({
                 title: "Item Mapping Missing",
                 description: "One or more item IDs could not be resolved.",
+                variant: "destructive"
+            });
+            return;
+        }
+        if (apiItems.some((item) => !item.sku_id)) {
+            toast({
+                title: "SKU Required",
+                description: "Please select an SKU for each line item.",
                 variant: "destructive"
             });
             return;
@@ -980,11 +1133,7 @@ export default function Quotations() {
                 const itemsToDelete: any[] = [];
 
                 (formData.items || []).forEach(item => {
-                    const apiItem = {
-                        item_id: parseNumericId(item.itemCode) ?? quotationItemsMaster.find((i) => i.item_name === item.item)?.item_id,
-                        quantity: typeof item.qty === 'string' ? parseFloat(item.qty) || 1 : item.qty || 1,
-                        unit_price: typeof item.rate === 'string' ? parseFloat(item.rate) || 0 : item.rate || 0
-                    };
+                    const apiItem = buildQuotationApiItemPayload(item, quotationItemsMaster);
                     const isOriginal = originalItems.find(oi => oi.id === item.id);
                     if (isOriginal) {
                         itemsToUpdate.push({ id: isOriginal.id, ...apiItem });
@@ -1240,14 +1389,9 @@ export default function Quotations() {
         const tax_rate = formData.taxType === "%" ? formData.taxValue || 0 : 0;
         const tax_amount = totals.taxAmount || 0;
 
-        const apiItems = (formData.items || []).map(item => {
-            const item_id = parseNumericId(item.itemCode) ?? quotationItemsMaster.find((i) => i.item_name === item.item)?.item_id;
-            return {
-                item_id,
-                quantity: typeof item.qty === 'string' ? parseFloat(item.qty) || 1 : item.qty || 1,
-                unit_price: typeof item.rate === 'string' ? parseFloat(item.rate) || 0 : item.rate || 0
-            };
-        });
+        const apiItems = (formData.items || []).map((item) =>
+            buildQuotationApiItemPayload(item, quotationItemsMaster)
+        );
 
         const apiPaymentTerms = (formData.paymentTerms || []).map(term => {
             const paymentTermRecords = paymentTermTypes.length > 0
@@ -1267,6 +1411,14 @@ export default function Quotations() {
             toast({
                 title: "Item Mapping Missing",
                 description: "One or more item IDs could not be resolved.",
+                variant: "destructive"
+            });
+            return;
+        }
+        if (apiItems.some((item) => !item.sku_id)) {
+            toast({
+                title: "SKU Required",
+                description: "Please select an SKU for each line item.",
                 variant: "destructive"
             });
             return;
@@ -1306,11 +1458,7 @@ export default function Quotations() {
                 const itemsToDelete: any[] = [];
 
                 (formData.items || []).forEach(item => {
-                    const apiItem = {
-                        item_id: parseNumericId(item.itemCode) ?? quotationItemsMaster.find((i) => i.item_name === item.item)?.item_id,
-                        quantity: typeof item.qty === 'string' ? parseFloat(item.qty) || 1 : item.qty || 1,
-                        unit_price: typeof item.rate === 'string' ? parseFloat(item.rate) || 0 : item.rate || 0
-                    };
+                    const apiItem = buildQuotationApiItemPayload(item, quotationItemsMaster);
                     const isOriginal = originalItems.find(oi => oi.id === item.id);
                     if (isOriginal) {
                         itemsToUpdate.push({ id: isOriginal.id, ...apiItem });
@@ -1459,14 +1607,9 @@ export default function Quotations() {
             if (res.isSuccessful && res.data) {
                 const d = res.data;
 
-                const mappedItems: QuotationItem[] = (d.items || []).map((apiItem: any) => ({
-                    id: apiItem.id,
-                    itemCode: String(apiItem.item_id),
-                    item: apiItem.item_name || "",
-                    qty: apiItem.quantity || 0,
-                    rate: apiItem.unit_price || 0,
-                    amount: apiItem.price_per_item || ((apiItem.quantity || 0) * (apiItem.unit_price || 0)),
-                }));
+                const mappedItems: QuotationItem[] = (d.items || []).map((apiItem: any) =>
+                    mapApiQuotationItemToForm(apiItem)
+                );
 
                 const mappedPaymentTerms: PaymentTerm[] = (d.payment_terms || []).map((apiTerm: any) => {
                     let termName: "Advance" | "Delivery" | "Days" = "Advance";
@@ -1554,14 +1697,9 @@ export default function Quotations() {
                 setSelectedCustomerId(d.customer_id || null);
 
                 // Map items from API response to form format (with server-side IDs)
-                const mappedItems: QuotationItem[] = (d.items || []).map((apiItem: any) => ({
-                    id: apiItem.id,
-                    itemCode: String(apiItem.item_id),
-                    item: apiItem.item_name || "",
-                    qty: apiItem.quantity || 0,
-                    rate: apiItem.unit_price || 0,
-                    amount: apiItem.price_per_item || ((apiItem.quantity || 0) * (apiItem.unit_price || 0)),
-                }));
+                const mappedItems: QuotationItem[] = (d.items || []).map((apiItem: any) =>
+                    mapApiQuotationItemToForm(apiItem)
+                );
 
                 // Map payment terms from API response to form format (with server-side IDs)
                 const mappedPaymentTerms: PaymentTerm[] = (d.payment_terms || []).map((apiTerm: any) => {
@@ -1960,7 +2098,7 @@ export default function Quotations() {
             {/* New/Edit Quotation Form Modal - layout only - match SO */}
             <Dialog open={isFormModalOpen} onOpenChange={setIsFormModalOpen}>
                 <DialogContent
-                    className="flex! min-h-0 w-[95%] max-h-[82vh] flex-col gap-0 overflow-hidden bg-white p-0 sm:max-w-3xl md:max-w-4xl lg:max-w-5xl xl:max-w-6xl"
+                    className="flex! min-h-0 w-[95%] max-h-[82vh] flex-col gap-0 overflow-hidden bg-white p-0 sm:max-w-4xl md:max-w-5xl lg:max-w-6xl xl:max-w-7xl"
                     onInteractOutside={(e) => e.preventDefault()}
                     onEscapeKeyDown={(e) => e.preventDefault()}
                 >
@@ -2264,17 +2402,23 @@ export default function Quotations() {
                             </div>
                             <div className="rounded-xl border shadow-sm overflow-hidden bg-white">
                                 <div className="overflow-x-auto">
-                                <Table className="w-full min-w-[860px] table-fixed">
+                                <Table className="w-full min-w-[980px] table-fixed">
                                     <colgroup>
-                                        <col className="w-[52%]" />
-                                        <col className="w-[12%]" />
-                                        <col className="w-[16%]" />
+                                        <col className="w-[28%]" />
+                                        <col className="w-[22%]" />
+                                        <col className="w-[10%]" />
+                                        <col className="w-[10%]" />
                                         <col className="w-[14%]" />
-                                        <col className="w-[6%]" />
+                                        <col className="w-[12%]" />
+                                        <col className="w-[4%]" />
                                     </colgroup>
                                     <TableHeader>
                                         <TableRow className="bg-muted/50">
                                             <TableHead className="text-[10px] font-bold uppercase py-3 pl-6">Item</TableHead>
+                                            <TableHead className="text-[10px] font-bold uppercase py-3">
+                                                SKU <span className="text-red-500">*</span>
+                                            </TableHead>
+                                            <TableHead className="text-[10px] font-bold uppercase py-3 text-center">UOM</TableHead>
                                             <TableHead className="text-[10px] font-bold uppercase py-3 text-center">Qty</TableHead>
                                             <TableHead className="text-[10px] font-bold uppercase py-3 text-center">Unit Price</TableHead>
                                             <TableHead className="text-[10px] font-bold uppercase py-3 text-center">Price</TableHead>
@@ -2284,7 +2428,7 @@ export default function Quotations() {
                                     <TableBody>
                                         {formData.items?.length === 0 ? (
                                             <TableRow>
-                                                <TableCell colSpan={5} className="text-center py-8 text-muted-foreground italic">
+                                                <TableCell colSpan={7} className="text-center py-8 text-muted-foreground italic">
                                                     No items added yet
                                                 </TableCell>
                                             </TableRow>
@@ -2295,6 +2439,11 @@ export default function Quotations() {
                                                 const rate = parseFloat(item.rate.toString());
                                                 const isQtyInvalid = item.qty !== "" && (isNaN(qty) || qty <= 0);
                                                 const isRateInvalid = item.rate !== "" && (isNaN(rate) || rate <= 0);
+                                                const hasSku =
+                                                    item.skuId != null &&
+                                                    item.skuId !== "" &&
+                                                    Number.isFinite(Number(item.skuId));
+                                                const isSkuInvalid = Boolean(item.item) && !hasSku;
 
                                                 return (
                                                     <TableRow key={item.id} className="hover:bg-muted/20 align-top">
@@ -2313,6 +2462,51 @@ export default function Quotations() {
                                                                 showSelectedTitle
                                                                 compactStackedSelected
                                                                 listClassName="max-h-[220px]"
+                                                            />
+                                                        </TableCell>
+                                                        <TableCell className="max-w-0 py-4 align-top">
+                                                            <div className="space-y-1">
+                                                                <SearchableSelect
+                                                                    required
+                                                                    value={
+                                                                        item.skuId != null && item.skuId !== ""
+                                                                            ? String(item.skuId)
+                                                                            : ""
+                                                                    }
+                                                                    options={(skuOptionsByRow[item.id] || []).map((sku) => ({
+                                                                        label: sku.name
+                                                                            ? `${sku.code} — ${sku.name}`
+                                                                            : sku.code,
+                                                                        value: String(sku.id),
+                                                                        primaryText: sku.code,
+                                                                        secondaryText: sku.name,
+                                                                    }))}
+                                                                    onChange={(val) => handleSkuChange(item.id, String(val))}
+                                                                    placeholder={
+                                                                        !item.item
+                                                                            ? "Select item first"
+                                                                            : (skuOptionsByRow[item.id]?.length ?? 0) === 0
+                                                                              ? "Loading SKU..."
+                                                                              : "Select SKU *"
+                                                                    }
+                                                                    disabled={!item.item}
+                                                                    showSelectedTitle
+                                                                    compactStackedSelected
+                                                                    listClassName="max-h-[220px]"
+                                                                    className={cn(
+                                                                        isSkuInvalid && "border-red-500 focus-visible:ring-red-500"
+                                                                    )}
+                                                                    error={isSkuInvalid ? "SKU is required" : undefined}
+                                                                />
+                                                            </div>
+                                                        </TableCell>
+                                                        <TableCell className="text-center align-top pt-4">
+                                                            <Input
+                                                                type="text"
+                                                                readOnly
+                                                                className="h-9 w-full max-w-[88px] mx-auto bg-muted/40 text-center text-xs"
+                                                                value={item.uom || "—"}
+                                                                tabIndex={-1}
                                                             />
                                                         </TableCell>
                                                         <TableCell className="text-center align-top pt-4">
@@ -2715,6 +2909,12 @@ export default function Quotations() {
                                                     <th className="text-left text-xs font-bold text-gray-700 uppercase tracking-wide py-3 px-4 border-b-2 border-gray-300">
                                                         Item
                                                     </th>
+                                                    <th className="text-left text-xs font-bold text-gray-700 uppercase tracking-wide py-3 px-4 border-b-2 border-gray-300">
+                                                        SKU
+                                                    </th>
+                                                    <th className="text-center text-xs font-bold text-gray-700 uppercase tracking-wide py-3 px-4 border-b-2 border-gray-300">
+                                                        UOM
+                                                    </th>
                                                     <th className="text-right text-xs font-bold text-gray-700 uppercase tracking-wide py-3 px-4 border-b-2 border-gray-300">
                                                         Quantity
                                                     </th>
@@ -2731,6 +2931,12 @@ export default function Quotations() {
                                                     <tr key={item.id} className="border-b border-gray-200">
                                                         <td className="text-sm text-gray-900 py-3 px-4">
                                                             {item.item}
+                                                        </td>
+                                                        <td className="text-sm text-gray-600 py-3 px-4">
+                                                            {formatQuotationSkuLabel(item)}
+                                                        </td>
+                                                        <td className="text-sm text-gray-900 text-center py-3 px-4">
+                                                            {item.uom || "—"}
                                                         </td>
                                                         <td className="text-sm text-gray-900 text-right py-3 px-4">
                                                             {item.qty}

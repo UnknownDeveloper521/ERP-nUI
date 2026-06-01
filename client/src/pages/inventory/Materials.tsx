@@ -68,6 +68,7 @@ import {
     getFirstAssignedMatch,
     prioritizeByAssigned,
 } from "@/utils/assignedDropdown";
+import { getBomMockSkusForItem } from "@/lib/bomSkuMockData";
 
 /** Green styling for successful actions; keep errors as destructive. */
 const crudSuccessToast = {
@@ -88,6 +89,20 @@ const formatDate = (date: Date | string): string => {
 };
 
 /** Resolve PRODUCTION_MR_STATUS row for "Requested to Warehouse" (by label or code, not by hardcoded id). */
+const formatMrItemSkuLabel = (item: {
+    skuCode?: string;
+    skuName?: string;
+    itemCode?: string;
+}): string => {
+    if (item.skuCode) {
+        return item.skuName ? `${item.skuCode} — ${item.skuName}` : item.skuCode;
+    }
+    if (item.skuName) return item.skuName;
+    const mock = getBomMockSkusForItem(item.itemCode)[0];
+    if (mock) return mock.name ? `${mock.code} — ${mock.name}` : mock.code;
+    return "—";
+};
+
 function getRequestedToWarehouseStatusId(mrStatuses: any[]): string | null {
     for (const s of mrStatuses) {
         const label = (s.value_name || s.name || "")?.toString().trim();
@@ -417,15 +432,17 @@ export default function Materials() {
                 requestedBy: d.requested_by_name?.trim() || d.requested_by,
                 status: d.status_name as MRStatus,
                 items: (d.items || []).map(
-                    (it) =>
+                    (it: Record<string, unknown>) =>
                         ({
                             id: it.id ?? it.item_id,
-                            itemCode: it.item_code,
-                            itemName: it.item_name,
-                            uom: it.uom,
-                            availableQty: it.available_qty,
-                            requiredQty: it.required_qty,
-                            issuedQty: it.issued_qty,
+                            itemCode: String(it.item_code ?? ""),
+                            itemName: String(it.item_name ?? ""),
+                            uom: String(it.uom ?? ""),
+                            skuCode: String(it.sku_code ?? it.skuCode ?? ""),
+                            skuName: String(it.sku_name ?? it.skuName ?? ""),
+                            availableQty: Number(it.available_qty ?? 0),
+                            requiredQty: Number(it.required_qty ?? 0),
+                            issuedQty: Number(it.issued_qty ?? 0),
                         }) as MRItem,
                 ),
             });
@@ -740,19 +757,22 @@ export default function Materials() {
                                                     "max-h-[min(45vh,360px)] overflow-y-auto custom-scrollbar",
                                             )}
                                         >
-                                            <Table className="w-full min-w-[560px]">
+                                            <Table className="w-full min-w-[720px]">
                                                 <TableHeader>
                                                     <TableRow className="bg-muted/30 hover:bg-muted/30">
                                                         <TableHead className="py-2 text-[10px] font-bold uppercase tracking-wider">
-                                                            Item Name
+                                                            Item
                                                         </TableHead>
                                                         <TableHead className="py-2 text-[10px] font-bold uppercase tracking-wider">
-                                                            Code
+                                                            SKU
                                                         </TableHead>
-                                                        <TableHead className="py-2 text-right text-[10px] font-bold uppercase tracking-wider">
+                                                        <TableHead className="py-2 text-center text-[10px] font-bold uppercase tracking-wider">
+                                                            UOM
+                                                        </TableHead>
+                                                        <TableHead className="py-2 text-center text-[10px] font-bold uppercase tracking-wider">
                                                             Req Qty
                                                         </TableHead>
-                                                        <TableHead className="py-2 text-right text-[10px] font-bold uppercase tracking-wider text-primary">
+                                                        <TableHead className="py-2 text-center text-[10px] font-bold uppercase tracking-wider text-primary">
                                                             Avail Qty
                                                         </TableHead>
                                                         <TableHead className="w-24 py-2 text-right text-[10px] font-bold uppercase tracking-wider">
@@ -766,15 +786,30 @@ export default function Materials() {
                                                             key={item.id}
                                                             className="border-b transition-colors last:border-0 hover:bg-muted/10"
                                                         >
-                                                            <TableCell className="py-2 text-xs font-medium">{item.itemName}</TableCell>
-                                                            <TableCell className="py-2 font-mono text-[10px] text-muted-foreground">
-                                                                {item.itemCode}
+                                                            <TableCell className="max-w-0 py-2 align-top">
+                                                                <p className="m-0 text-xs font-medium leading-snug wrap-break-word">
+                                                                    {item.itemName}
+                                                                </p>
+                                                                <p className="m-0 mt-0.5 font-mono text-[10px] leading-snug break-all text-muted-foreground">
+                                                                    {item.itemCode || "—"}
+                                                                </p>
                                                             </TableCell>
-                                                            <TableCell className="whitespace-nowrap py-2 text-right text-xs">
-                                                                {item.requiredQty} {item.uom}
+                                                            <TableCell className="max-w-0 py-2 align-top text-xs text-muted-foreground">
+                                                                <span
+                                                                    className="line-clamp-2"
+                                                                    title={formatMrItemSkuLabel(item)}
+                                                                >
+                                                                    {formatMrItemSkuLabel(item)}
+                                                                </span>
                                                             </TableCell>
-                                                            <TableCell className="whitespace-nowrap py-2 text-right text-xs font-medium text-primary">
-                                                                {item.availableQty} {item.uom}
+                                                            <TableCell className="whitespace-nowrap py-2 text-center text-xs">
+                                                                {item.uom || "—"}
+                                                            </TableCell>
+                                                            <TableCell className="whitespace-nowrap py-2 text-center text-xs tabular-nums">
+                                                                {item.requiredQty}
+                                                            </TableCell>
+                                                            <TableCell className="whitespace-nowrap py-2 text-center text-xs font-medium tabular-nums text-primary">
+                                                                {item.availableQty}
                                                             </TableCell>
                                                             <TableCell className="py-1.5 text-right">
                                                                 <Input

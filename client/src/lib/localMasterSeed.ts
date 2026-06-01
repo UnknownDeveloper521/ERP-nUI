@@ -11,8 +11,16 @@ import {
   setGsv7DemoVisible,
 } from "@/lib/gsv7OperationsMockData";
 import { gsv7TreeToTopLevelComponents, buildGsv7NestedBomTree } from "@/lib/gsv7BomTreeBuilder";
+import {
+  BATCH_STORAGE_KEY,
+  MR_STORAGE_KEY,
+  MATERIAL_RELEASE_STORAGE_KEY,
+  buildLocalBatchSeed,
+  buildLocalMaterialReleaseSeed,
+  buildLocalMrSeed,
+} from "@/lib/localProductionSeed";
 
-export const LOCAL_MASTER_SEED_VERSION = "gsv7-v2";
+export const LOCAL_MASTER_SEED_VERSION = "gsv7-v3";
 export const LOCAL_MASTER_SEED_FLAG = "master-erp-local-seed-version";
 
 export const ITEMS_STORAGE_KEY = "master-erp-local-items";
@@ -422,6 +430,9 @@ export function seedLocalMasterData(options?: { force?: boolean }) {
   const skuOperations = buildLocalSkuOperationSeed(fgItemId);
   const boms = buildLocalBomSeed(fgItemId);
   const productionPlans = buildLocalProductionPlanSeed(fgItemId);
+  const materialRequests = buildLocalMrSeed();
+  const batches = buildLocalBatchSeed();
+  const materialReleases = buildLocalMaterialReleaseSeed();
 
   localStorage.setItem(ITEMS_STORAGE_KEY, JSON.stringify(items));
   localStorage.setItem(OPERATIONS_STORAGE_KEY, JSON.stringify(operations));
@@ -429,6 +440,9 @@ export function seedLocalMasterData(options?: { force?: boolean }) {
   localStorage.setItem(SKU_OPERATION_STORAGE_KEY, JSON.stringify(skuOperations));
   localStorage.setItem(BOM_STORAGE_KEY, JSON.stringify(boms));
   localStorage.setItem(PRODUCTION_PLAN_STORAGE_KEY, JSON.stringify(productionPlans));
+  localStorage.setItem(MR_STORAGE_KEY, JSON.stringify(materialRequests));
+  localStorage.setItem(BATCH_STORAGE_KEY, JSON.stringify(batches));
+  localStorage.setItem(MATERIAL_RELEASE_STORAGE_KEY, JSON.stringify(materialReleases));
 
   localStorage.removeItem(GSV7_FLOW_STORAGE_FLAG);
   seedGsv7DemoFlowMapping();
@@ -438,7 +452,8 @@ export function seedLocalMasterData(options?: { force?: boolean }) {
 
   return {
     seeded: true,
-    message: "Seeded GSV7 demo data for items, SKUs, operations, SKU mappings, BOMs, and production plans.",
+    message:
+      "Seeded GSV7 demo data for masters, production plans, material requests, batches, and material releases.",
     counts: {
       items: items.length,
       skus: skus.length,
@@ -446,6 +461,9 @@ export function seedLocalMasterData(options?: { force?: boolean }) {
       skuOperations: skuOperations.length,
       boms: boms.length,
       productionPlans: productionPlans.length,
+      materialRequests: materialRequests.length,
+      batches: batches.length,
+      materialReleases: materialReleases.length,
     },
   };
 }

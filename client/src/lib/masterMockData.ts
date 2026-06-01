@@ -97,23 +97,17 @@ export const mockRawMaterials: Material[] = [
 ];
 
 export const mockSemiFinishedGoods: Material[] = [
-    { id: "sfg-1", name: "Purified Lead", type: "SFG" },
-    { id: "sfg-2", name: "Battery Cases", type: "SFG" },
-    { id: "sfg-3", name: "Battery Lids", type: "SFG" },
-    { id: "sfg-4", name: "Separators", type: "SFG" },
-    { id: "sfg-5", name: "Terminals", type: "SFG" },
-    { id: "sfg-6", name: "Connectors", type: "SFG" },
+    { id: "SFG-LEAD-INGOT", name: "Purified Lead (Lead Ingots)", type: "SFG" },
+    { id: "SFG-GRID-CAST", name: "Cast Grid", type: "SFG" },
+    { id: "SFG-GRID-POS-DRY", name: "Dried Grid Positive", type: "SFG" },
+    { id: "SFG-GRID-NEG-DRY", name: "Dried Grid Negative", type: "SFG" },
+    { id: "SFG-PLASTIC-CASE", name: "Plastic Case", type: "SFG" },
+    { id: "SFG-TERMINAL", name: "Terminals", type: "SFG" },
+    { id: "SFG-CONNECTOR", name: "Connectors", type: "SFG" },
 ];
 
 export const mockFinishedGoods: Material[] = [
-    { id: "fg-1", name: "GSV 7", type: "FG" },
-    { id: "fg-2", name: "GSV 8", type: "FG" },
-    { id: "fg-3", name: "GSMX 2.5", type: "FG" },
-    { id: "fg-4", name: "GSMx 6.5", type: "FG" },
-    { id: "fg-5", name: "SMF 20", type: "FG" },
-    { id: "fg-6", name: "SMF 40", type: "FG" },
-    { id: "fg-7", name: "MF N 40", type: "FG" },
-    { id: "fg-8", name: "MF NS 60", type: "FG" },
+    { id: "FG-GSV7", name: "GSV7 Battery", type: "FG" },
 ];
 
 export const mockConsumables: Material[] = [

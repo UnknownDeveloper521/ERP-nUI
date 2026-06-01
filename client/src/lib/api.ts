@@ -27,6 +27,18 @@ import {
   mockOperationsApi,
   mockProductionPlanApi,
 } from './localMasterMockApi';
+import {
+  mockGetBatchWithItems,
+  mockGetMRForBatch,
+  mockGetOperationWithWorkCenter,
+  mockGetProductionPlansDropdown,
+  mockGetWarehouses,
+  mockGetWorkCenters,
+  mockProductionFlowApi,
+} from './localProductionMockApi';
+import { mockSalesApi, mockGetCustomerWithDetails, mockGetQuotationWithDetails } from './mockSalesApi';
+import { mockSalesOrdersApi } from './mockSalesOrdersApi';
+import { mockInvoicingApi } from './mockInvoicingApi';
 
 export {
   fetchSkuDropdown,
@@ -40,6 +52,46 @@ export {
   type SkuOperationDetailRecord,
   type SkuOperationDetailOperation,
 };
+
+export type BOMComponentRecord = {
+  id?: string | number;
+  bom_component_id?: string | number;
+  output_component: {
+    id: number | string;
+    code: string;
+    name: string;
+    item_type?: string;
+    uom?: string;
+  };
+  input_components: Array<{
+    item_id: number | string;
+    item_code: string;
+    item_name: string;
+    item_type?: string;
+    uom?: string;
+    uom_id?: number;
+    uom_name?: string;
+    quantity: number;
+  }>;
+};
+
+export function parseBomComponentsRecords(res: unknown): BOMComponentRecord[] {
+  if (!res || typeof res !== "object") return [];
+  const root = res as { data?: { records?: unknown[] } | unknown[] };
+  if (Array.isArray(root.data?.records)) return root.data.records as BOMComponentRecord[];
+  if (Array.isArray(root.data)) return root.data as BOMComponentRecord[];
+  return [];
+}
+
+export function getBomComponentOptionValue(record: BOMComponentRecord): string {
+  return String(
+    record.bom_component_id ??
+      record.id ??
+      record.output_component?.id ??
+      record.output_component?.code ??
+      "",
+  );
+}
 
 // Generic fetch wrapper
 export async function apiRequest<T>(
@@ -1079,9 +1131,13 @@ export const commonApi = {
   // Get active bin types for dropdowns
   getBinTypes: () => apiRequest<any>('/common/getbintypes?status=1'),
   // Get active warehouses for dropdowns
-  getWarehouses: () => apiRequest<any>('/common/getwarehouses?status=1'),
+  getWarehouses: () =>
+    HAS_BACKEND_API ? apiRequest<any>('/common/getwarehouses?status=1') : mockGetWarehouses(),
   // Get sales order items for dispatch dropdown
-  getSalesOrderItems: (id: number) => apiRequest<any>(`/common/getsalesorderitems?id=${id}`),
+  getSalesOrderItems: (id: number) =>
+    HAS_BACKEND_API
+      ? apiRequest<any>(`/common/getsalesorderitems?id=${id}`)
+      : mockSalesOrdersApi.getSalesOrderItems(id),
   // Get item types for dropdowns
   getItemTypes: () =>
     HAS_BACKEND_API ? apiRequest<any>('/common/getitemtypes?status=1') : mockGetItemTypes(),
@@ -1105,6 +1161,7 @@ export const commonApi = {
   getEmployeesWithDetail: () => apiRequest<any>('/common/getemployeeswithdetail'),
   // Get customers with details for quotation form dropdown
   getCustomerWithDetails: (params?: { customer_id?: number; search?: string; status?: number }) => {
+    if (!HAS_BACKEND_API) return mockGetCustomerWithDetails(params);
     const query = new URLSearchParams();
     if (params?.customer_id !== undefined) query.append('customer_id', String(params.customer_id));
     if (params?.search) query.append('search', params.search);
@@ -1114,6 +1171,7 @@ export const commonApi = {
   },
   // Get quotation details for quotation reference dropdown (supports customer filter)
   getQuotationWithDetails: (params?: { customer_id?: number; quotation_id?: number; search?: string; status?: number }) => {
+    if (!HAS_BACKEND_API) return mockGetQuotationWithDetails(params);
     const query = new URLSearchParams();
     if (params?.customer_id !== undefined) query.append('customer_id', String(params.customer_id));
     if (params?.quotation_id !== undefined && !isNaN(Number(params.quotation_id))) {
@@ -1125,12 +1183,14 @@ export const commonApi = {
     return apiRequest<any>(`/common/getquotationwithdetails${qs ? `?${qs}` : ''}`);
   },
   // Get active work centers for dropdowns
-  getWorkCenters: () => apiRequest<any>('/common/getworkcenters?status=1'),
+  getWorkCenters: () =>
+    HAS_BACKEND_API ? apiRequest<any>('/common/getworkcenters?status=1') : mockGetWorkCenters(),
   // Get operations for dropdowns
   getOperations: () =>
     HAS_BACKEND_API ? apiRequest<any>('/common/getoperations') : mockGetOperationsDropdown(),
   // Get MR for batch creation
   getMRForBatch: (params?: { shift_id?: number | string }) => {
+    if (!HAS_BACKEND_API) return mockGetMRForBatch(params);
     const query = new URLSearchParams();
     if (params?.shift_id) query.append('shift_id', String(params.shift_id));
     const qs = query.toString();
@@ -1271,12 +1331,17 @@ export const commonApi = {
   getAssignedWorkCenters: () => apiRequest<any>('/common/getassignedworkcenter'),
   /** Operations allowed for a work center (create flow, material release, etc.) */
   getOperationWithWorkCenter: (work_center_id: number) =>
-    apiRequest<any>(`/common/getoperationwithworkcenter?work_center_id=${work_center_id}`),
+    HAS_BACKEND_API
+      ? apiRequest<any>(`/common/getoperationwithworkcenter?work_center_id=${work_center_id}`)
+      : mockGetOperationWithWorkCenter(work_center_id),
   /** Batches with line items for an operation (material release eligible batches) */
   getBatchWithItems: (params: { operation_id: number }) =>
-    apiRequest<any>(`/common/getbatchwithitems?operation_id=${params.operation_id}`),
+    HAS_BACKEND_API
+      ? apiRequest<any>(`/common/getbatchwithitems?operation_id=${params.operation_id}`)
+      : mockGetBatchWithItems(params),
   // Get production plans for dropdowns
   getProductionPlans: (params?: { operation_id?: number | string; shift_id?: number | string; status_id?: number | string; search?: string }) => {
+    if (!HAS_BACKEND_API) return mockGetProductionPlansDropdown(params);
     const query = new URLSearchParams();
     if (params?.operation_id) query.append('operation_id', String(params.operation_id));
     if (params?.shift_id) query.append('shift_id', String(params.shift_id));
@@ -1640,6 +1705,7 @@ export const suppliersApi = {
 
 export const salesOrdersApi = {
   getSOList: (params: { search?: string; date?: string; status_id?: number | string; page?: number; limit?: number } = {}) => {
+    if (!HAS_BACKEND_API) return mockSalesOrdersApi.getSOList(params);
     const query = new URLSearchParams();
     if (params.search && params.search.trim()) {
       query.set('search', params.search.trim());
@@ -1681,31 +1747,41 @@ export const salesOrdersApi = {
       isSuccessful: boolean;
     }>(`/sales/so/getsoslist${qs ? `?${qs}` : ''}`);
   },
-  getSOById: (id: number) => apiRequest<{
-    data: any;
-    message: string;
-    showMessage: boolean;
-    isSuccessful: boolean;
-  }>(`/sales/so/getsobyid/${id}`),
-  saveAsDraftSO: (data: any) => apiRequest<{
+  getSOById: (id: number) => {
+    if (!HAS_BACKEND_API) return mockSalesOrdersApi.getSOById(id);
+    return apiRequest<{
+      data: any;
+      message: string;
+      showMessage: boolean;
+      isSuccessful: boolean;
+    }>(`/sales/so/getsobyid/${id}`);
+  },
+  saveAsDraftSO: (data: any) => {
+    if (!HAS_BACKEND_API) return mockSalesOrdersApi.saveAsDraftSO(data);
+    return apiRequest<{
     data: any;
     message: string;
     showMessage: boolean;
     isSuccessful: boolean;
   }>('/sales/so/saveasdraftso', {
-    method: 'POST',
-    body: JSON.stringify(data),
-  }),
-  submitSO: (data: any) => apiRequest<{
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
+  },
+  submitSO: (data: any) => {
+    if (!HAS_BACKEND_API) return mockSalesOrdersApi.submitSO(data);
+    return apiRequest<{
     data: { id: number; sales_order_code: string } | null;
     message: string;
     showMessage: boolean;
     isSuccessful: boolean;
   }>('/sales/so/submitso', {
-    method: 'POST',
-    body: JSON.stringify(data),
-  }),
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
+  },
   updateSO: (data: any) => {
+    if (!HAS_BACKEND_API) return mockSalesOrdersApi.updateSO(data);
     const { id, ...restData } = data;
     return apiRequest<{
       message: string;
@@ -1716,13 +1792,16 @@ export const salesOrdersApi = {
       body: JSON.stringify(restData), // or data, if the backend also expects it in the body
     });
   },
-  deleteSO: (id: number) => apiRequest<{
-    message: string;
-    showMessage: boolean;
-    isSuccessful: boolean;
-  }>(`/sales/so/deleteso/${id}`, {
-    method: 'DELETE',
-  }),
+  deleteSO: (id: number) => {
+    if (!HAS_BACKEND_API) return mockSalesOrdersApi.deleteSO(id);
+    return apiRequest<{
+      message: string;
+      showMessage: boolean;
+      isSuccessful: boolean;
+    }>(`/sales/so/deleteso/${id}`, {
+      method: 'DELETE',
+    });
+  },
   getAll: () => apiRequest<any[]>('/sales-orders'),
   getOne: (id: string) => apiRequest<any>(`/sales-orders/${id}`),
   create: (data: any) => apiRequest<any>('/sales-orders', {
@@ -1744,6 +1823,7 @@ export const salesOrdersApi = {
 
 export const invoicingApi = {
   getInvoicesList: (params: { search?: string; date?: string; status_id?: number | string; page?: number; limit?: number } = {}) => {
+    if (!HAS_BACKEND_API) return mockInvoicingApi.getInvoicesList(params);
     const query = new URLSearchParams();
     if (params.search?.trim()) query.set('search', params.search.trim());
     if (params.date) query.set('date', params.date);
@@ -1778,30 +1858,40 @@ export const invoicingApi = {
       isSuccessful: boolean;
     }>(`/accounting/invoices/getinvoiceslist${qs ? `?${qs}` : ''}`);
   },
-  getInvoiceById: (id: number) => apiRequest<{
-    data: any;
-    message: string;
-    showMessage: boolean;
-    isSuccessful: boolean;
-  }>(`/accounting/invoices/getinvoicebyid?id=${id}`),
-  updateInvoice: (id: number, data: { status_code?: string; [key: string]: any }) => apiRequest<{
+  getInvoiceById: (id: number) => {
+    if (!HAS_BACKEND_API) return mockInvoicingApi.getInvoiceById(id);
+    return apiRequest<{
+      data: any;
+      message: string;
+      showMessage: boolean;
+      isSuccessful: boolean;
+    }>(`/accounting/invoices/getinvoicebyid?id=${id}`);
+  },
+  updateInvoice: (id: number, data: { status_code?: string; [key: string]: any }) => {
+    if (!HAS_BACKEND_API) return mockInvoicingApi.updateInvoice(id, data);
+    return apiRequest<{
     message: string;
     showMessage: boolean;
     isSuccessful: boolean;
   }>(`/accounting/invoices/updateinvoice?id=${id}`, {
-    method: 'PATCH',
-    body: JSON.stringify(data),
-  }),
-  cancelInvoice: (invoice_id: number) => apiRequest<{
+      method: 'PATCH',
+      body: JSON.stringify(data),
+    });
+  },
+  cancelInvoice: (invoice_id: number) => {
+    if (!HAS_BACKEND_API) return mockInvoicingApi.cancelInvoice(invoice_id);
+    return apiRequest<{
     data: any;
     message: string;
     showMessage: boolean;
     isSuccessful: boolean;
   }>(`/accounting/invoices/cancleledSo`, {
-    method: 'PATCH',
-    body: JSON.stringify({ invoice_id }),
-  }),
+      method: 'PATCH',
+      body: JSON.stringify({ invoice_id }),
+    });
+  },
   getPendingPaymentsList: (params: { search?: string; due_date?: string; status_id?: number; page?: number; limit?: number }) => {
+    if (!HAS_BACKEND_API) return mockInvoicingApi.getPendingPaymentsList(params);
     const query = new URLSearchParams();
     if (params.search) query.append('search', params.search);
     if (params.due_date) query.append('due_date', params.due_date);
@@ -1818,20 +1908,26 @@ export const invoicingApi = {
       isSuccessful: boolean;
     }>(`/accounting/pending-payments/getpendingpaymentslist?${query.toString()}`);
   },
-  getPendingPaymentById: (id: number) => apiRequest<{
-    data: any;
-    message: string;
-    showMessage: boolean;
-    isSuccessful: boolean;
-  }>(`/accounting/pending-payments/getpendingpaymentbyid?id=${id}&t=${Date.now()}`),
-  updatePendingPayment: (id: number, data: any) => apiRequest<{
+  getPendingPaymentById: (id: number) => {
+    if (!HAS_BACKEND_API) return mockInvoicingApi.getPendingPaymentById(id);
+    return apiRequest<{
+      data: any;
+      message: string;
+      showMessage: boolean;
+      isSuccessful: boolean;
+    }>(`/accounting/pending-payments/getpendingpaymentbyid?id=${id}&t=${Date.now()}`);
+  },
+  updatePendingPayment: (id: number, data: any) => {
+    if (!HAS_BACKEND_API) return mockInvoicingApi.updatePendingPayment(id, data);
+    return apiRequest<{
     message: string;
     showMessage: boolean;
     isSuccessful: boolean;
   }>(`/accounting/pending-payments/updatependingpayment?id=${id}`, {
-    method: 'POST',
-    body: JSON.stringify(data),
-  }),
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
+  },
 };
 
 // ==================== SALES FOLLOW-UP API ====================
@@ -3434,6 +3530,7 @@ export const productionApi = {
     }
     if (params.request_date) query.set('request_date', params.request_date);
 
+    if (!HAS_BACKEND_API) return mockProductionFlowApi.getMyRequestList(params);
     return apiRequest<any>(`/production/myrequest/getmyrequestlist?${query.toString()}`);
   },
   createMyRequest: (data: {
@@ -3445,11 +3542,16 @@ export const productionApi = {
     shift_id: number;
     production_plan_id: number;
     items: { item_id: number; required_qty: number }[];
-  }) => apiRequest<CreateMyRequestResponse>('/production/myrequest/createmyrequest', {
-    method: 'POST',
-    body: JSON.stringify(data),
-  }),
-  getMyRequestById: (id: number) => apiRequest<{
+  }) => {
+    if (!HAS_BACKEND_API) return mockProductionFlowApi.createMyRequest(data);
+    return apiRequest<CreateMyRequestResponse>('/production/myrequest/createmyrequest', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
+  },
+  getMyRequestById: (id: number) => {
+    if (!HAS_BACKEND_API) return mockProductionFlowApi.getMyRequestById(id);
+    return apiRequest<{
     data: {
       mr_code: string;
       request_date: string;
@@ -3483,7 +3585,8 @@ export const productionApi = {
     };
     message: string;
     isSuccessful: boolean;
-  }>(`/production/myrequest/getmyrequestbyid/${id}`),
+  }>(`/production/myrequest/getmyrequestbyid/${id}`);
+  },
   updateMyRequest: (id: number, data: {
     request_date: string;
     required_by_date: string;
@@ -3493,15 +3596,20 @@ export const productionApi = {
     shift_id: number;
     production_plan_id: number;
     items: { id?: number; item_id: number; required_qty: number }[];
-  }) => apiRequest<CreateMyRequestResponse>(`/production/myrequest/updatemyrequest/${id}`, {
-    method: 'PATCH',
-    body: JSON.stringify(data),
-  }),
-  receiveMaterials: (requestId: number, data: { items: { id: number; received_qty: number }[] }) =>
-    apiRequest<CreateMyRequestResponse>(`/production/myrequest/receivematerials/${requestId}`, {
+  }) => {
+    if (!HAS_BACKEND_API) return mockProductionFlowApi.updateMyRequest(id, data);
+    return apiRequest<CreateMyRequestResponse>(`/production/myrequest/updatemyrequest/${id}`, {
       method: 'PATCH',
       body: JSON.stringify(data),
-    }),
+    });
+  },
+  receiveMaterials: (requestId: number, data: { items: { id: number; received_qty: number }[] }) => {
+    if (!HAS_BACKEND_API) return mockProductionFlowApi.receiveMaterials(requestId, data);
+    return apiRequest<CreateMyRequestResponse>(`/production/myrequest/receivematerials/${requestId}`, {
+      method: 'PATCH',
+      body: JSON.stringify(data),
+    });
+  },
   getBatchList: (params: {
     page: number;
     limit: number;
@@ -3526,6 +3634,7 @@ export const productionApi = {
       query.set('status_id', String(params.status_id));
     }
 
+    if (!HAS_BACKEND_API) return mockProductionFlowApi.getBatchList(params);
     return apiRequest<BatchListResponse>(`/production/batchtracking/getbatchtrackinglist?${query.toString()}`);
   },
   getBatchQCList: (params: {
@@ -3549,15 +3658,20 @@ export const productionApi = {
     if (params.status_id != null && params.status_id !== '' && params.status_id !== 'all' && params.status_id !== 'All') {
       query.set('status_id', String(params.status_id));
     }
+    if (!HAS_BACKEND_API) return mockProductionFlowApi.getBatchQCList(params);
     return apiRequest<BatchQCListResponse>(`/production/batchqc/getbatchlist?${query.toString()}`);
   },
-  getBatchQCById: (id: number) =>
-    apiRequest<BatchQCDetailResponse>(`/production/batchqc/getbatchqcbyid/${id}`),
-  verifyBatchQC: (id: number, data?: BatchQcVerifyRequest) =>
-    apiRequest<BatchQcVerifyResponse>(`/production/batchqc/verifyqc/${id}`, {
+  getBatchQCById: (id: number) => {
+    if (!HAS_BACKEND_API) return mockProductionFlowApi.getBatchQCById(id);
+    return apiRequest<BatchQCDetailResponse>(`/production/batchqc/getbatchqcbyid/${id}`);
+  },
+  verifyBatchQC: (id: number, data?: BatchQcVerifyRequest) => {
+    if (!HAS_BACKEND_API) return mockProductionFlowApi.verifyBatchQC(id, data);
+    return apiRequest<BatchQcVerifyResponse>(`/production/batchqc/verifyqc/${id}`, {
       method: "PATCH",
       body: data != null ? JSON.stringify(data) : JSON.stringify({}),
-    }),
+    });
+  },
   getMaterialReleaseList: (params: {
     page: number;
     limit: number;
@@ -3581,37 +3695,54 @@ export const productionApi = {
     if (params.shift_id != null && params.shift_id !== "" && params.shift_id !== "all" && params.shift_id !== "All") {
       q.set("shift_id", String(params.shift_id));
     }
+    if (!HAS_BACKEND_API) return mockProductionFlowApi.getMaterialReleaseList(params);
     return apiRequest<MaterialReleaseListResponse>(`/production/materialrelease/getmaterialreleaselist?${q.toString()}`);
   },
-  createMaterialRelease: (data: CreateMaterialReleaseRequest) =>
-    apiRequest<CreateMaterialReleaseResponse>('/production/materialrelease/creatematerialrelease', {
+  createMaterialRelease: (data: CreateMaterialReleaseRequest) => {
+    if (!HAS_BACKEND_API) return mockProductionFlowApi.createMaterialRelease(data);
+    return apiRequest<CreateMaterialReleaseResponse>('/production/materialrelease/creatematerialrelease', {
       method: 'POST',
       body: JSON.stringify(data),
-    }),
-  importMaterialReleaseSerials: (formData: FormData) =>
-    apiFormDataRequest<ImportMaterialReleaseSerialsResponse>('/production/materialrelease/importserials', formData),
-  getMaterialReleaseById: (id: number) =>
-    apiRequest<{
+    });
+  },
+  importMaterialReleaseSerials: (formData: FormData) => {
+    if (!HAS_BACKEND_API) return mockProductionFlowApi.importMaterialReleaseSerials(formData);
+    return apiFormDataRequest<ImportMaterialReleaseSerialsResponse>('/production/materialrelease/importserials', formData);
+  },
+  getMaterialReleaseById: (id: number) => {
+    if (!HAS_BACKEND_API) return mockProductionFlowApi.getMaterialReleaseById(id);
+    return apiRequest<{
       data?: Record<string, any>;
       message: string;
       showMessage: boolean;
       isSuccessful: boolean;
-    }>(`/production/materialrelease/getmaterialreleasebyid/${id}`),
-  createBatch: (data: BatchCreateRequest) => apiRequest<BatchCreateResponse>('/production/batchtracking/createbatch', {
-    method: 'POST',
-    body: JSON.stringify(data),
-  }),
-  createBulkBatch: (data: BatchBulkCreateRequest) =>
-    apiRequest<BatchBulkCreateResponse>('/production/batchtracking/createbulkbatch', {
+    }>(`/production/materialrelease/getmaterialreleasebyid/${id}`);
+  },
+  createBatch: (data: BatchCreateRequest) => {
+    if (!HAS_BACKEND_API) return mockProductionFlowApi.createBatch(data);
+    return apiRequest<BatchCreateResponse>('/production/batchtracking/createbatch', {
       method: 'POST',
       body: JSON.stringify(data),
-    }),
-  getBatchById: (id: number) => apiRequest<any>(`/production/batchtracking/getbatchbyid/${id}`),
-  updateBatch: (id: number, data: BatchUpdateRequest) =>
-    apiRequest<BatchUpdateResponse>(`/production/batchtracking/updatebatch/${id}`, {
+    });
+  },
+  createBulkBatch: (data: BatchBulkCreateRequest) => {
+    if (!HAS_BACKEND_API) return mockProductionFlowApi.createBulkBatch(data);
+    return apiRequest<BatchBulkCreateResponse>('/production/batchtracking/createbulkbatch', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
+  },
+  getBatchById: (id: number) => {
+    if (!HAS_BACKEND_API) return mockProductionFlowApi.getBatchById(id);
+    return apiRequest<any>(`/production/batchtracking/getbatchbyid/${id}`);
+  },
+  updateBatch: (id: number, data: BatchUpdateRequest) => {
+    if (!HAS_BACKEND_API) return mockProductionFlowApi.updateBatch(id, data);
+    return apiRequest<BatchUpdateResponse>(`/production/batchtracking/updatebatch/${id}`, {
       method: 'PATCH',
       body: JSON.stringify(data),
-    }),
+    });
+  },
   getBOMList: (params: {
     search?: string;
     item_type_id?: number | string;
@@ -3763,9 +3894,12 @@ export interface SalesQuotationListResponse {
 }
 
 export const salesApi = {
-  getQuotationById: (id: number) =>
-    apiRequest<any>(`/sales/quotation/getquotationbyid/${id}`),
+  getQuotationById: (id: number) => {
+    if (!HAS_BACKEND_API) return mockSalesApi.getQuotationById(id);
+    return apiRequest<any>(`/sales/quotation/getquotationbyid/${id}`);
+  },
   getQuotationList: (params: { search?: string; date?: string; status_id?: number | string; page?: number; limit?: number } = {}) => {
+    if (!HAS_BACKEND_API) return mockSalesApi.getQuotationList(params);
     const query = new URLSearchParams();
     if (params.search) query.set('search', params.search);
     if (params.date) query.set('date', params.date);
@@ -3779,29 +3913,37 @@ export const salesApi = {
     const qs = query.toString();
     return apiRequest<SalesQuotationListResponse>(`/sales/quotation/getquotationlist${qs ? `?${qs}` : ''}`);
   },
-  saveDraft: (data: any) =>
-    apiRequest<any>('/sales/quotation/savedraft', {
+  saveDraft: (data: any) => {
+    if (!HAS_BACKEND_API) return mockSalesApi.saveDraft(data);
+    return apiRequest<any>('/sales/quotation/savedraft', {
       method: 'POST',
       body: JSON.stringify(data),
-    }),
-  submitQuotation: (data: any) =>
-    apiRequest<any>('/sales/quotation/submitquotation', {
+    });
+  },
+  submitQuotation: (data: any) => {
+    if (!HAS_BACKEND_API) return mockSalesApi.submitQuotation(data);
+    return apiRequest<any>('/sales/quotation/submitquotation', {
       method: 'POST',
       body: JSON.stringify(data),
-    }),
-  updateQuotation: (id: number, data: any) =>
-    apiRequest<any>(
+    });
+  },
+  updateQuotation: (id: number, data: any) => {
+    if (!HAS_BACKEND_API) return mockSalesApi.updateQuotation(id, data);
+    return apiRequest<any>(
       `/sales/quotation/updatequotation/${id}`,
       {
         method: 'PATCH',
         body: JSON.stringify(data),
       }
-    ),
-  deleteQuotation: (id: number) =>
-    apiRequest<any>(
+    );
+  },
+  deleteQuotation: (id: number) => {
+    if (!HAS_BACKEND_API) return mockSalesApi.deleteQuotation(id);
+    return apiRequest<any>(
       `/sales/quotation/deletequotation/${id}`,
       { method: 'DELETE' }
-    ),
+    );
+  },
 };
 // ==================== SERVICE CENTER API ====================
 

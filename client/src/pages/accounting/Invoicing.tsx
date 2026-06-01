@@ -9,7 +9,7 @@ import { useDebounce } from "@/hooks/useDebounce";
 import { useLocation } from "wouter";
 import { format } from "date-fns";
 import { Card, CardContent } from "@/components/ui/card";
-import { generateInvoicePDFHTML } from "@/lib/invoicePDFTemplate";
+import { generateInvoicePDFHTML, formatInvoiceSkuLabel } from "@/lib/invoicePDFTemplate";
 import { Search, ChevronLeft, ChevronRight, Calendar as CalendarIcon, Trash2, Plus, Download, X, Loader2 } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
@@ -235,6 +235,8 @@ const getInvoicePendingFromSalesOrders = (): InvoiceData[] => {
                         id: i.id,
                         itemCode: i.itemCode,
                         itemName: i.itemName,
+                        skuCode: i.skuCode,
+                        skuName: i.skuName,
                         uom: i.uom,
                         orderedQty: i.orderedQty,
                         rate: i.rate,
@@ -304,7 +306,9 @@ const mapApiResponseToInvoice = (apiData: any): any => {
         items: (d.items || []).map((item: any, idx: number) => ({
             id: idx + 1,
             itemName: item.item_name,
-            uom: item.uom,
+            skuCode: item.sku_code || "",
+            skuName: item.sku_name || "",
+            uom: item.uom_name || item.uom || "PCS",
             orderedQty: item.ordered_qty || 0,
             rate: item.unit_price || 0,
             price: item.price_per_item || 0
@@ -1072,6 +1076,7 @@ const Invoicing = () => {
                                             <tr className="bg-slate-50 border-b border-slate-200">
                                                 <th className="px-3 py-2 text-center text-[9px] font-bold text-slate-600 border-r border-slate-200" style={{ width: '40px' }}>#</th>
                                                 <th className="px-3 py-2 text-left text-[9px] font-bold text-slate-600 border-r border-slate-200">ITEM NAME</th>
+                                                <th className="px-3 py-2 text-left text-[9px] font-bold text-slate-600 border-r border-slate-200">SKU</th>
                                                 <th className="px-3 py-2 text-center text-[9px] font-bold text-slate-600 border-r border-slate-200" style={{ width: '60px' }}>UOM</th>
                                                 <th className="px-3 py-2 text-center text-[9px] font-bold text-slate-600 border-r border-slate-200" style={{ width: '60px' }}>QTY</th>
                                                 <th className="px-3 py-2 text-right text-[9px] font-bold text-slate-600 border-r border-slate-200" style={{ width: '100px' }}>UNIT PRICE</th>
@@ -1083,7 +1088,8 @@ const Invoicing = () => {
                                                 <tr key={item.id} className="border-b border-slate-200 last:border-b-0">
                                                     <td className="px-3 py-3 text-center text-xs text-slate-600 border-r border-slate-200">{index + 1}</td>
                                                     <td className="px-3 py-3 text-left text-xs font-bold text-slate-900 border-r border-slate-200">{item.itemName}</td>
-                                                    <td className="px-3 py-3 text-center text-xs text-slate-600 border-r border-slate-200">{item.uom}</td>
+                                                    <td className="px-3 py-3 text-left text-xs text-slate-600 border-r border-slate-200">{formatInvoiceSkuLabel(item)}</td>
+                                                    <td className="px-3 py-3 text-center text-xs text-slate-600 border-r border-slate-200">{item.uom || "—"}</td>
                                                     <td className="px-3 py-3 text-center text-xs font-medium text-slate-900 border-r border-slate-200">{item.orderedQty}</td>
                                                     <td className="px-3 py-3 text-right text-xs text-slate-900 border-r border-slate-200">
                                                         <div className="flex items-center justify-end gap-1">
@@ -1273,17 +1279,21 @@ const Invoicing = () => {
                         {/* Invoice Items Table - Read-only */}
                         <div className="space-y-2">
                             <Label className="text-sm font-bold">Invoice Items</Label>
-                            <div className="rounded-xl border shadow-sm overflow-hidden bg-white">
-                                <Table className="table-fixed">
+                            <div className="rounded-xl border shadow-sm overflow-hidden bg-white overflow-x-auto">
+                                <Table className="table-fixed min-w-[720px]">
                                     <colgroup>
-                                        <col className="w-[52%]" />
+                                        <col className="w-[28%]" />
+                                        <col className="w-[20%]" />
+                                        <col className="w-[10%]" />
+                                        <col className="w-[12%]" />
                                         <col className="w-[14%]" />
                                         <col className="w-[16%]" />
-                                        <col className="w-[18%]" />
                                     </colgroup>
                                     <TableHeader>
                                         <TableRow className="bg-muted/50 text-[10px] uppercase font-bold text-muted-foreground whitespace-nowrap">
                                             <TableHead className="py-2 pl-6">Item Name</TableHead>
+                                            <TableHead className="py-2">SKU</TableHead>
+                                            <TableHead className="py-2 text-center">UOM</TableHead>
                                             <TableHead className="py-2 text-center">Ordered Qty</TableHead>
                                             <TableHead className="py-2 text-center">Unit Price</TableHead>
                                             <TableHead className="py-2 text-right pr-6">Price</TableHead>
@@ -1297,6 +1307,10 @@ const Invoicing = () => {
                                                         {item.itemName}
                                                     </div>
                                                 </TableCell>
+                                                <TableCell className="py-3 text-xs text-muted-foreground whitespace-normal wrap-break-word">
+                                                    {formatInvoiceSkuLabel(item)}
+                                                </TableCell>
+                                                <TableCell className="py-3 text-center text-xs">{item.uom || "—"}</TableCell>
                                                 <TableCell className="py-3 text-center font-medium tabular-nums">{item.orderedQty}</TableCell>
                                                 <TableCell className="py-3 text-center tabular-nums">{activeInvoice.currencySymbol} {item.rate.toFixed(2)}</TableCell>
                                                 <TableCell className="py-3 text-right pr-6 font-bold text-slate-900 tabular-nums">

@@ -71,6 +71,7 @@ import {
   getFirstAssignedMatch,
   prioritizeByAssigned,
 } from "@/utils/assignedDropdown";
+import { getBomMockSkusForItem } from "@/lib/bomSkuMockData";
 
 /** Green styling for successful actions; keep errors as destructive. */
 const crudSuccessToast = {
@@ -103,6 +104,20 @@ const getCurrentDateForInput = (): string => {
 const parseDateString = (dateString: string): Date => {
   const [year, month, day] = dateString.split('-').map(Number);
   return new Date(year, month - 1, day);
+};
+
+const formatMrItemSkuLabel = (item: {
+  skuCode?: string;
+  skuName?: string;
+  itemCode?: string;
+}): string => {
+  if (item.skuCode) {
+    return item.skuName ? `${item.skuCode} — ${item.skuName}` : item.skuCode;
+  }
+  if (item.skuName) return item.skuName;
+  const mock = getBomMockSkusForItem(item.itemCode)[0];
+  if (mock) return mock.name ? `${mock.code} — ${mock.name}` : mock.code;
+  return "—";
 };
 
 const resolveOperationCode = (
@@ -297,6 +312,8 @@ export default function MyRequest() {
           warehouse.warehouse_id,
           warehouse.warehouse_name,
         ),
+        sku_code: comp.sku_code || "",
+        sku_name: comp.sku_name || "",
         item: {
           id: comp.item_id,
           name: comp.item_name || "",
@@ -500,15 +517,19 @@ export default function MyRequest() {
           shift_id: r.shift_id,
           operation: r.operation_name,
           operation_id: r.operation_id,
-          workCenter: r.work_center_name,
-          work_center_id: r.work_center_id,
+          productionPlan:
+            r.production_plan_code ||
+            r.plan_code ||
+            r.production_plan_name ||
+            "",
+          productionPlanId: r.production_plan_id,
           warehouse: r.warehouse_name,
           warehouse_id: r.warehouse_id,
+          work_center_id: r.work_center_id,
           status: r.status_name,
           status_id: r.status_id,
           requestedBy: r.requested_by_name || "System",
           requiredByDate: r.required_by_date || r.request_date,
-          productionPlanId: r.production_plan_id,
           items: r.items || []
         }));
 
@@ -622,6 +643,8 @@ export default function MyRequest() {
           item_id: out.item_id,
           itemCode: out.item?.code || "",
           itemName: out.item?.name || "",
+          skuCode: out.sku_code || "",
+          skuName: out.sku_name || "",
           uom: out.item?.uom || "",
           warehouse_id: warehouseId != null ? String(warehouseId) : "",
           warehouse_name: warehouseName,
@@ -801,6 +824,8 @@ export default function MyRequest() {
             item_id: item.item_id,
             itemCode: item.item_code,
             itemName: item.item_name,
+            skuCode: item.sku_code || "",
+            skuName: item.sku_name || "",
             uom: item.uom,
             requiredQty: item.required_qty,
             issuedQty: item.issued_qty,
@@ -976,6 +1001,8 @@ export default function MyRequest() {
             id: item.item_id, // Map item_id to id for form logic
             itemCode: item.item_code,
             itemName: item.item_name,
+            skuCode: item.sku_code || "",
+            skuName: item.sku_name || "",
             uom: item.uom,
             warehouse_id:
               item.warehouse_id != null
@@ -1186,7 +1213,7 @@ export default function MyRequest() {
                   <TableHead className="font-semibold text-xs uppercase tracking-wider">Date</TableHead>
                   <TableHead className="font-semibold text-xs uppercase tracking-wider">Shift</TableHead>
                   <TableHead className="font-semibold text-xs uppercase tracking-wider">Operation</TableHead>
-                  <TableHead className="font-semibold text-xs uppercase tracking-wider">Work Center</TableHead>
+                  <TableHead className="font-semibold text-xs uppercase tracking-wider">Production Plan</TableHead>
                   <TableHead className="font-semibold text-xs uppercase tracking-wider">Warehouse</TableHead>
                   <TableHead className="font-semibold text-xs uppercase tracking-wider">Status</TableHead>
                   <TableHead className="text-center font-bold text-[11px] tracking-wider py-4">Actions</TableHead>
@@ -1215,7 +1242,7 @@ export default function MyRequest() {
                       <TableCell>{formatDate(request.date)}</TableCell>
                       <TableCell>{request.shift}</TableCell>
                       <TableCell>{request.operation}</TableCell>
-                      <TableCell>{request.workCenter}</TableCell>
+                      <TableCell>{request.productionPlan || "—"}</TableCell>
                       <TableCell>{request.warehouse}</TableCell>
                       <TableCell>
                         <Badge
@@ -1516,6 +1543,24 @@ export default function MyRequest() {
                   </div>
                   <div className="min-w-0 md:col-span-2">
                     <SharedSearchableSelect
+                      label="Production Plan *"
+                      placeholder="Select Production Plan"
+                      value={formData.production_plan_id?.toString() || ""}
+                      options={activePlans.map(p => ({
+                        value: p.id.toString(),
+                        label: p.code,
+                      }))}
+                      onChange={(val) => setFormData({ ...formData, production_plan_id: val })}
+                      selectedTruncate="end"
+                      showSelectedTitle
+                      lightSelectedText
+                      className="h-9"
+                      popoverCollisionBoundary={formDialogEl}
+                      popoverCollisionPadding={8}
+                    />
+                  </div>
+                  <div className="min-w-0 md:col-span-2">
+                    <SharedSearchableSelect
                       label="Operation *"
                       value={formData.operation_id}
                       options={operationSelectOptions}
@@ -1552,24 +1597,6 @@ export default function MyRequest() {
                       popoverCollisionPadding={8}
                     />
                   </div>
-                  <div className="min-w-0 md:col-span-2">
-                    <SharedSearchableSelect
-                      label="Production Plan *"
-                      placeholder="Select Production Plan"
-                      value={formData.production_plan_id?.toString() || ""}
-                      options={activePlans.map(p => ({
-                        value: p.id.toString(),
-                        label: p.code,
-                      }))}
-                      onChange={(val) => setFormData({ ...formData, production_plan_id: val })}
-                      selectedTruncate="end"
-                      showSelectedTitle
-                      lightSelectedText
-                      className="h-9"
-                      popoverCollisionBoundary={formDialogEl}
-                      popoverCollisionPadding={8}
-                    />
-                  </div>
                 </div>
               </div>
 
@@ -1584,14 +1611,15 @@ export default function MyRequest() {
                   )}
                 >
                   <div className="overflow-x-auto">
-                    <Table className="w-full min-w-[860px] table-fixed">
+                    <Table className="w-full min-w-[960px] table-fixed">
                       <colgroup>
-                        <col className="w-[14%]" />
-                        <col className="w-[26%]" />
-                        <col className="w-[10%]" />
-                        <col className="w-[18%]" />
-                        <col className="w-[10%]" />
+                        <col className="w-[12%]" />
                         <col className="w-[22%]" />
+                        <col className="w-[16%]" />
+                        <col className="w-[8%]" />
+                        <col className="w-[14%]" />
+                        <col className="w-[8%]" />
+                        <col className="w-[20%]" />
                       </colgroup>
                       <TableHeader>
                         <TableRow className="bg-muted/50 hover:bg-muted/50">
@@ -1600,6 +1628,9 @@ export default function MyRequest() {
                           </TableHead>
                           <TableHead className="py-3 text-[10px] font-bold uppercase tracking-wider">
                             Item Name
+                          </TableHead>
+                          <TableHead className="py-3 text-[10px] font-bold uppercase tracking-wider">
+                            SKU
                           </TableHead>
                           <TableHead className="py-3 text-center text-[10px] font-bold uppercase tracking-wider">
                             UOM
@@ -1618,7 +1649,7 @@ export default function MyRequest() {
                       <TableBody>
                         {formData.items?.length === 0 ? (
                           <TableRow>
-                            <TableCell colSpan={6} className="h-24 text-center text-sm text-muted-foreground">
+                            <TableCell colSpan={7} className="h-24 text-center text-sm text-muted-foreground">
                               Select an operation to load materials
                             </TableCell>
                           </TableRow>
@@ -1634,6 +1665,11 @@ export default function MyRequest() {
                                 <p className="m-0 text-sm font-medium leading-snug wrap-break-word text-slate-900">
                                   {item.itemName}
                                 </p>
+                              </TableCell>
+                              <TableCell className="max-w-0 overflow-hidden align-top py-3 text-xs text-muted-foreground">
+                                <span className="line-clamp-2" title={formatMrItemSkuLabel(item)}>
+                                  {formatMrItemSkuLabel(item)}
+                                </span>
                               </TableCell>
                               <TableCell className="align-top py-3 text-center text-xs whitespace-nowrap">
                                 {item.uom}

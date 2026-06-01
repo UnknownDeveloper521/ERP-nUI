@@ -29,6 +29,9 @@ export interface QuotationPDFData {
         id: number;
         itemCode?: string;
         item: string;
+        skuCode?: string;
+        skuName?: string;
+        uom?: string;
         qty: number | string;
         rate: number | string;
         amount: number;
@@ -415,23 +418,32 @@ export const generateQuotationPDFHTML = (quotation: QuotationPDFData): string =>
                 <table>
                     <thead>
                         <tr>
-                            <th style="width: 8%;">#</th>
-                            <th style="width: 42%;">Item</th>
-                            <th class="text-right" style="width: 12%;">Qty</th>
-                            <th class="text-right" style="width: 18%;">Rate</th>
-                            <th class="text-right" style="width: 20%;">Price</th>
+                            <th style="width: 6%;">#</th>
+                            <th style="width: 30%;">Item</th>
+                            <th style="width: 22%;">SKU</th>
+                            <th style="width: 10%;">UOM</th>
+                            <th class="text-right" style="width: 10%;">Qty</th>
+                            <th class="text-right" style="width: 11%;">Rate</th>
+                            <th class="text-right" style="width: 11%;">Price</th>
                         </tr>
                     </thead>
                     <tbody>
-                        ${quotation.items.map((item, index) => `
+                        ${quotation.items.map((item, index) => {
+                            const skuLabel = item.skuCode
+                                ? (item.skuName ? `${item.skuCode} — ${item.skuName}` : item.skuCode)
+                                : '—';
+                            return `
                             <tr>
                                 <td>${index + 1}</td>
                                 <td><strong>${item.item}</strong></td>
+                                <td>${skuLabel}</td>
+                                <td>${item.uom || '—'}</td>
                                 <td class="text-right">${item.qty || 0}</td>
                                 <td class="text-right">${quotation.currencySymbol || ''} ${(Number(item.rate) || 0).toFixed(2)}</td>
                                 <td class="text-right"><strong>${quotation.currencySymbol || ''} ${(Number(item.amount) || 0).toFixed(2)}</strong></td>
                             </tr>
-                        `).join('')}
+                        `;
+                        }).join('')}
                     </tbody>
                 </table>
 

@@ -12,7 +12,7 @@ import {
 export { GSV7_ITEM_ID_BASE, getGsv7ItemIdByCode } from "@/lib/gsv7OperationsMockData";
 
 /** When true, BOM create dialog SFG/FG dropdown uses GSV7 mock catalog only (not API getbomcomponents). */
-export const BOM_SFG_FG_MOCK_DROPDOWN_ONLY = true;
+export const BOM_SFG_FG_MOCK_DROPDOWN_ONLY = false;
 
 function normalizeCode(code: string) {
     return String(code ?? "")
